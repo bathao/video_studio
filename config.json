@@ -1,0 +1,17 @@
+{
+  "videos_dir": "videos",
+  "projects_dir": "projects",
+  "output_dir": "output",
+  "temp_dir": "temp",
+  "assets_dir": "assets",
+  "ffmpeg_path": "ffmpeg",
+  "ffprobe_path": "ffprobe",
+  "encoder": "h264_nvenc",
+  "preset": "p6",
+  "tune": "hq",
+  "rc": "vbr",
+  "cq": 21,
+  "use_hwaccel": true,
+  "host": "127.0.0.1",
+  "port": 8765
+}

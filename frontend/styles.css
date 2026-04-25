@@ -1,0 +1,56 @@
+/* Tailwind utility shorthands used throughout the UI. */
+.panel {
+  @apply bg-ink-900 border border-ink-700 rounded-lg p-4;
+}
+.panel-h {
+  @apply text-sm font-semibold uppercase tracking-wider text-slate-300 mb-2;
+}
+.lbl {
+  @apply flex flex-col text-xs text-slate-400 gap-1;
+}
+.ipt {
+  @apply bg-ink-800 border border-ink-600 rounded-md px-2 py-1.5 text-sm text-slate-100 outline-none focus:border-accent-500;
+}
+.btn-primary {
+  @apply bg-accent-500 hover:bg-accent-400 active:bg-accent-500 text-ink-950 font-semibold px-3 py-1.5 rounded-md text-sm disabled:opacity-50 disabled:cursor-not-allowed;
+}
+.btn-secondary {
+  @apply bg-ink-700 hover:bg-ink-600 active:bg-ink-700 text-slate-100 px-3 py-1.5 rounded-md text-sm border border-ink-600 disabled:opacity-50;
+}
+.btn-ctl {
+  @apply bg-ink-700 hover:bg-ink-600 px-3 py-1.5 rounded-md text-sm border border-ink-600;
+}
+.btn-score {
+  @apply bg-accent-500/20 border border-accent-500 hover:bg-accent-500/30 text-accent-400 font-bold px-2 py-2 rounded-md text-base;
+}
+kbd {
+  @apply bg-ink-700 border border-ink-600 rounded px-1.5 py-0.5 font-mono text-xs;
+}
+input[type="range"] {
+  @apply accent-accent-500;
+}
+.list-row {
+  @apply flex items-center gap-2 bg-ink-800 hover:bg-ink-700 px-2 py-1.5 rounded-md text-xs border border-ink-700;
+}
+
+/* Tailwind CDN renders @apply at runtime via JIT plugin, but to be safe
+   for older CDN builds we replicate the @apply rules above as plain CSS. */
+
+.panel { background:#0e1116; border:1px solid #1c222d; border-radius:8px; padding:1rem; }
+.panel-h { font-size:0.78rem; font-weight:600; text-transform:uppercase; letter-spacing:0.06em; color:#cbd5e1; margin-bottom:0.5rem; }
+.lbl { display:flex; flex-direction:column; font-size:0.7rem; color:#94a3b8; gap:0.25rem; }
+.ipt { background:#141821; border:1px solid #2a3140; border-radius:6px; padding:0.4rem 0.5rem; font-size:0.85rem; color:#e2e8f0; outline:none; }
+.ipt:focus { border-color:#1ea7e6; }
+.btn-primary { background:#1ea7e6; color:#0a0c10; font-weight:600; padding:0.4rem 0.75rem; border-radius:6px; font-size:0.85rem; }
+.btn-primary:hover { background:#4ac8ff; }
+.btn-primary:disabled { opacity:0.5; cursor:not-allowed; }
+.btn-secondary { background:#1c222d; color:#e2e8f0; padding:0.4rem 0.75rem; border-radius:6px; font-size:0.85rem; border:1px solid #2a3140; }
+.btn-secondary:hover { background:#2a3140; }
+.btn-ctl { background:#1c222d; padding:0.4rem 0.75rem; border-radius:6px; font-size:0.85rem; border:1px solid #2a3140; }
+.btn-ctl:hover { background:#2a3140; }
+.btn-score { background:rgba(74,200,255,0.15); border:1px solid #1ea7e6; color:#4ac8ff; font-weight:700; padding:0.5rem; border-radius:6px; font-size:1rem; }
+.btn-score:hover { background:rgba(74,200,255,0.25); }
+kbd { background:#1c222d; border:1px solid #2a3140; border-radius:4px; padding:0.05rem 0.35rem; font-family:ui-monospace, monospace; font-size:0.7rem; }
+.list-row { display:flex; align-items:center; gap:0.4rem; background:#141821; padding:0.4rem 0.5rem; border-radius:6px; font-size:0.7rem; border:1px solid #1c222d; }
+.list-row:hover { background:#1c222d; }
+input[type="range"] { accent-color:#1ea7e6; }

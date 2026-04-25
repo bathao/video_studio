@@ -1,0 +1,97 @@
+# Progress Status
+
+Last update: 2026-04-25
+
+## Module map
+
+| Module | Status | File |
+|---|---|---|
+| Backend skeleton (FastAPI) | ✅ done | [backend/server.py](../backend/server.py) |
+| Config loader | ✅ done | [backend/config.py](../backend/config.py) |
+| Pydantic models | ✅ done | [backend/models.py](../backend/models.py) |
+| FFmpeg / FFprobe wrapper | ✅ done | [backend/ffmpeg_runner.py](../backend/ffmpeg_runner.py) |
+| ASS scoreboard generator | ✅ done | [backend/ass_builder.py](../backend/ass_builder.py) |
+| Render orchestrator | ✅ done | [backend/renderer.py](../backend/renderer.py) |
+| Frontend HTML + Tailwind | ✅ done | [frontend/index.html](../frontend/index.html) |
+| Frontend logic (player + state) | ✅ done | [frontend/app.js](../frontend/app.js) |
+| Frontend styles | ✅ done | [frontend/styles.css](../frontend/styles.css) |
+| Run launcher (Windows) | ✅ done | [run.bat](../run.bat) |
+| Virtual environment | ✅ done | `venv/` |
+
+## Feature status
+
+### Setup & project management
+- ✅ Tournament + player names
+- ✅ Source video dropdown (auto-scan `videos/`)
+- ✅ Save / Load project to `projects/<name>.json`
+- ✅ Project list modal
+
+### Video playback
+- ✅ Range-aware streaming with 32 MiB chunk cap (works on 10–15 GB files)
+- ✅ Play / pause, skip ±5/10/20 s, scrubber
+- ✅ Speed presets 0.25× / 0.5× / 1× / 1.5× / 2×
+- ✅ HUD time + duration
+
+### Keyboard shortcuts
+| Key | Action | Status |
+|---|---|---|
+| Space | play / pause | ✅ |
+| ←/→ | seek 5s (Shift = 1s) | ✅ |
+| A / D | P1 / P2 score | ✅ |
+| H | mark highlight start/end | ✅ |
+| S | toggle slow-mo on most-recent highlight | ✅ |
+| T / Y | mark trim start / end | ✅ |
+| Ctrl+Z | undo (100-deep stack) | ✅ |
+
+### Referee logic
+- ✅ Point-by-point scoring
+- ✅ Auto set win at 11 + 2-point lead
+- ✅ Auto reset of point counter on set win
+- ✅ Score event timestamped to source video time
+- ✅ Undo restores prior state including pending highlight start
+
+### Highlight & trim lists
+- ✅ Add highlight by `H` key (start / end)
+- ✅ Add highlight manually (start / end via prompt)
+- ✅ Per-highlight slow-mo checkbox
+- ✅ Edit start/end inline; jump-to-start; delete
+- ✅ Trim segments (T/Y or manual)
+
+### Render pipeline
+- ✅ Intro (3 s title card via `lavfi color` + `drawtext`)
+- ✅ Highlight reel (per-clip ffmpeg with input seeking + 2× slow-mo on tail)
+- ✅ Main match (multi-input ffmpeg with input seeking, scoreboard burned via `ass=`)
+- ✅ Final concat (concat demuxer, no re-encode)
+- ✅ NVENC h264 (configurable to hevc / av1)
+- ✅ NVDEC via `-hwaccel cuda`
+- ✅ Per-stage progress reporting via `-progress pipe:1`
+- ✅ Score-event timestamp remap (source-time → trimmed-output-time)
+- ✅ Silent-audio injection when source has no audio track
+
+### Scoreboard graphics
+- ✅ Bottom-right corner, two-row layout
+- ✅ Tournament tag above the panel (right-aligned, single-line)
+- ✅ Player names + set count + points per row
+- ✅ ▶ marker on the player who most recently scored
+- ✅ Gold highlight on the active player's points; white on the other
+- ✅ Vietnamese diacritics (UTF-8 .ass + Arial fallback via libass + DirectWrite)
+
+### Output & file management
+- ✅ Output saved to `output/<name>.mp4`
+- ✅ Inline browser playback at `/api/output/<name>`
+- ✅ "Show in folder" → `explorer /select,<path>`
+- ✅ "Open output folder" → opens `output/`
+- ✅ List of past outputs at `/api/outputs`
+
+### Polish & robustness
+- ✅ Path-traversal protection (`_resolve_inside`)
+- ✅ Safe project name regex
+- ✅ FFmpeg error captured and surfaced to UI (last 2KB of stderr)
+- ✅ Toast notifications
+- ✅ `.gitignore` for venv / temp / outputs
+- ✅ README in English with full workflow
+- ✅ Docs index (this folder)
+
+## Known gaps
+
+See [TODO.md](TODO.md) and [ROADMAP.md](ROADMAP.md) for what's left.

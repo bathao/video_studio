@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <title>Pingpong Studio</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            ink: { 950: '#0a0c10', 900: '#0e1116', 800: '#141821', 700: '#1c222d', 600: '#2a3140', 500: '#3a4356' },
+            accent: { 400: '#4ac8ff', 500: '#1ea7e6' },
+            warn: { 400: '#ffd24a' },
+            danger: { 500: '#ff5d6c' },
+          },
+        },
+      },
+    };
+  </script>
+</head>
+<body class="bg-ink-950 text-slate-100 min-h-screen font-sans select-none">
+  <div class="max-w-[1600px] mx-auto p-4 grid grid-cols-12 gap-4">
+
+    <!-- header -->
+    <header class="col-span-12 flex items-center justify-between bg-ink-900 rounded-lg px-5 py-3 border border-ink-700">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-md bg-accent-500/20 border border-accent-500 flex items-center justify-center text-accent-400 font-bold">PP</div>
+        <h1 class="text-xl font-semibold">Pingpong Studio</h1>
+        <span class="text-xs text-slate-400" id="health-line">checking…</span>
+      </div>
+      <div class="flex gap-2">
+        <button id="btn-save" class="btn-secondary">Save Project</button>
+        <button id="btn-load" class="btn-secondary">Load Project</button>
+        <button id="btn-render" class="btn-primary">Render</button>
+      </div>
+    </header>
+
+    <!-- left column: setup + score + render -->
+    <aside class="col-span-3 flex flex-col gap-4">
+      <!-- setup -->
+      <section class="panel">
+        <h2 class="panel-h">Setup</h2>
+        <div class="grid grid-cols-1 gap-2">
+          <label class="lbl">Project name
+            <input id="in-project" class="ipt" placeholder="match_2026_04_25" value="match_001" />
+          </label>
+          <label class="lbl">Tournament
+            <input id="in-tournament" class="ipt" placeholder="Spring Open 2026" />
+          </label>
+          <label class="lbl">Player 1 (Left, key A)
+            <input id="in-p1" class="ipt" placeholder="Player 1" value="Player 1" />
+          </label>
+          <label class="lbl">Player 2 (Right, key D)
+            <input id="in-p2" class="ipt" placeholder="Player 2" value="Player 2" />
+          </label>
+          <label class="lbl">Source video
+            <select id="in-video" class="ipt">
+              <option value="">— select —</option>
+            </select>
+          </label>
+          <button id="btn-refresh-videos" class="btn-secondary text-xs">Refresh video list</button>
+        </div>
+      </section>
+
+      <!-- score panel -->
+      <section class="panel">
+        <h2 class="panel-h">Live Score</h2>
+        <div class="grid grid-cols-2 gap-3 text-center">
+          <div class="bg-ink-800 rounded-md p-3 border border-ink-700">
+            <div class="text-xs uppercase tracking-wider text-slate-400" id="lbl-p1">P1</div>
+            <div class="flex justify-center items-baseline gap-1">
+              <div class="text-5xl font-bold text-accent-400" id="score-p1">0</div>
+              <div class="text-xs text-slate-400">pts</div>
+            </div>
+            <div class="text-warn-400 text-sm mt-1">Sets: <span id="set-p1">0</span></div>
+          </div>
+          <div class="bg-ink-800 rounded-md p-3 border border-ink-700">
+            <div class="text-xs uppercase tracking-wider text-slate-400" id="lbl-p2">P2</div>
+            <div class="flex justify-center items-baseline gap-1">
+              <div class="text-5xl font-bold text-accent-400" id="score-p2">0</div>
+              <div class="text-xs text-slate-400">pts</div>
+            </div>
+            <div class="text-warn-400 text-sm mt-1">Sets: <span id="set-p2">0</span></div>
+          </div>
+        </div>
+        <div class="grid grid-cols-3 gap-2 mt-3">
+          <button id="btn-p1" class="btn-score" title="A">+ P1</button>
+          <button id="btn-undo" class="btn-secondary" title="Ctrl+Z">Undo</button>
+          <button id="btn-p2" class="btn-score" title="D">+ P2</button>
+        </div>
+        <p class="text-xs text-slate-400 mt-2">Auto rule: 11pts, lead by 2. Set won → score resets to 0-0.</p>
+      </section>
+
+      <!-- render panel -->
+      <section class="panel">
+        <h2 class="panel-h">Render</h2>
+        <div class="space-y-2 text-sm">
+          <label class="flex items-center gap-2"><input type="checkbox" id="opt-intro" checked> Intro (3s title card)</label>
+          <label class="flex items-center gap-2"><input type="checkbox" id="opt-hl" checked> Highlight reel</label>
+          <label class="flex items-center gap-2"><input type="checkbox" id="opt-main" checked> Main match + scoreboard</label>
+          <label class="lbl mt-1">Output filename
+            <input id="in-output" class="ipt" placeholder="auto" />
+          </label>
+        </div>
+        <div id="render-status" class="hidden mt-3 space-y-1">
+          <div class="flex justify-between text-xs"><span id="rs-stage">…</span><span id="rs-pct">0%</span></div>
+          <div class="w-full bg-ink-700 rounded-full h-2 overflow-hidden">
+            <div id="rs-bar" class="h-full bg-accent-500 transition-all" style="width:0%"></div>
+          </div>
+          <div class="text-xs text-slate-400 break-all" id="rs-msg"></div>
+          <div id="rs-output" class="hidden mt-2 space-y-1">
+            <div class="text-xs text-slate-400">Saved to:</div>
+            <div class="text-xs font-mono text-slate-200 break-all bg-ink-800 border border-ink-700 rounded px-2 py-1" id="rs-output-path"></div>
+            <div class="flex gap-2">
+              <a id="rs-output-link" class="btn-secondary text-xs flex-1 text-center" href="#" target="_blank">▶ Play in browser</a>
+              <button id="rs-output-reveal" class="btn-secondary text-xs flex-1">📂 Show in folder</button>
+            </div>
+          </div>
+        </div>
+        <button id="btn-open-output" class="btn-secondary text-xs mt-2 w-full">Open output folder</button>
+      </section>
+    </aside>
+
+    <!-- center column: player + keyboard -->
+    <main class="col-span-6 flex flex-col gap-4">
+      <section class="panel p-0 overflow-hidden">
+        <div class="relative bg-black aspect-video">
+          <video id="player" class="w-full h-full" preload="metadata" playsinline></video>
+          <div class="absolute top-2 left-2 px-2 py-1 rounded bg-black/60 text-xs font-mono" id="hud-time">0:00.00 / 0:00.00</div>
+          <div id="hud-hl" class="absolute top-2 right-2 px-2 py-1 rounded bg-danger-500 text-xs font-bold hidden">● HIGHLIGHT</div>
+        </div>
+        <div class="px-3 py-2 flex items-center gap-1 flex-wrap text-sm">
+          <button class="btn-ctl" data-skip="-10">-10s</button>
+          <button class="btn-ctl" data-skip="-5">-5s</button>
+          <button id="btn-play" class="btn-primary px-4">Play</button>
+          <button class="btn-ctl" data-skip="5">+5s</button>
+          <button class="btn-ctl" data-skip="10">+10s</button>
+          <button class="btn-ctl" data-skip="20">+20s</button>
+          <span class="ml-auto flex items-center gap-2 text-xs text-slate-400">
+            <span>speed</span>
+            <select id="in-rate" class="ipt py-0.5 text-xs w-20">
+              <option value="0.25">0.25x</option>
+              <option value="0.5">0.5x</option>
+              <option value="1" selected>1x</option>
+              <option value="1.5">1.5x</option>
+              <option value="2">2x</option>
+            </select>
+          </span>
+          <button id="btn-mark-hl" class="btn-secondary" title="H">Highlight start/end</button>
+          <button id="btn-trim-start" class="btn-secondary">Trim start</button>
+          <button id="btn-trim-end" class="btn-secondary">Trim end</button>
+        </div>
+        <div class="px-3 pb-3">
+          <input id="seek" type="range" min="0" max="0" step="0.05" value="0" class="w-full" />
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel-h">Keyboard</h2>
+        <div class="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
+          <div><kbd>Space</kbd> Play / Pause</div>
+          <div><kbd>←</kbd> / <kbd>→</kbd> Seek 5s</div>
+          <div><kbd>Shift</kbd>+<kbd>←/→</kbd> Seek 1s</div>
+          <div><kbd>A</kbd> P1 scores</div>
+          <div><kbd>D</kbd> P2 scores</div>
+          <div><kbd>H</kbd> Mark highlight start/end</div>
+          <div><kbd>S</kbd> Toggle slow-mo on last highlight</div>
+          <div><kbd>Ctrl</kbd>+<kbd>Z</kbd> Undo last action</div>
+          <div><kbd>T</kbd> / <kbd>Y</kbd> Trim start/end</div>
+        </div>
+      </section>
+    </main>
+
+    <!-- right column: highlights + trims + score events -->
+    <aside class="col-span-3 flex flex-col gap-4">
+      <section class="panel">
+        <div class="flex items-center justify-between">
+          <h2 class="panel-h !mb-0">Highlights <span class="text-slate-500 text-xs" id="hl-count">(0)</span></h2>
+          <button id="btn-add-hl-manual" class="btn-secondary text-xs">Add manual</button>
+        </div>
+        <ul id="hl-list" class="mt-2 space-y-1 max-h-72 overflow-y-auto"></ul>
+      </section>
+      <section class="panel">
+        <div class="flex items-center justify-between">
+          <h2 class="panel-h !mb-0">Trim <span class="text-slate-500 text-xs" id="tr-count">(0)</span></h2>
+          <button id="btn-add-tr-manual" class="btn-secondary text-xs">Add manual</button>
+        </div>
+        <ul id="tr-list" class="mt-2 space-y-1 max-h-48 overflow-y-auto"></ul>
+      </section>
+      <section class="panel">
+        <h2 class="panel-h">Score events <span class="text-slate-500 text-xs" id="ev-count">(0)</span></h2>
+        <ul id="ev-list" class="mt-2 space-y-1 max-h-72 overflow-y-auto text-xs font-mono"></ul>
+      </section>
+    </aside>
+  </div>
+
+  <!-- floating toast -->
+  <div id="toast" class="fixed bottom-4 right-4 hidden bg-ink-800 border border-ink-600 px-4 py-2 rounded-md shadow-lg text-sm"></div>
+
+  <!-- load project modal -->
+  <div id="modal-load" class="fixed inset-0 bg-black/70 hidden items-center justify-center">
+    <div class="bg-ink-900 border border-ink-700 rounded-lg p-5 w-96 max-h-[70vh] flex flex-col">
+      <h3 class="text-lg font-semibold mb-3">Load Project</h3>
+      <ul id="proj-list" class="flex-1 overflow-y-auto space-y-1"></ul>
+      <button id="btn-close-load" class="btn-secondary mt-3">Close</button>
+    </div>
+  </div>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>
