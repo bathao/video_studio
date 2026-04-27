@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from .ass_builder import ScoreFrame, build_scoreboard_ass
+from .ass_builder import ScoreFrame, build_intro_ass, build_scoreboard_ass
 from .config import config
 from .ffmpeg_runner import (
     FFmpegError,
@@ -162,25 +162,30 @@ def render_intro(
     p2: str,
     on_progress: Callable[[float, str], None],
 ) -> None:
+    """
+    3-second title card. Uses libass instead of drawtext so Vietnamese
+    diacritics render correctly and we get fade / slide animations for
+    free.
+    """
     duration = 3.0
-    title = (tournament or "Table Tennis Match").replace(":", " ").replace("'", " ")
-    matchup = f"{p1 or 'Player 1'}  vs  {p2 or 'Player 2'}".replace(":", " ").replace("'", " ")
 
-    fontsize_title = max(48, int(height * 0.07))
-    fontsize_match = max(36, int(height * 0.05))
-
-    vfilter = (
-        f"drawtext=text='{title}':fontcolor=white:fontsize={fontsize_title}:"
-        f"x=(w-text_w)/2:y=(h-text_h)/2-80:borderw=2:bordercolor=black,"
-        f"drawtext=text='{matchup}':fontcolor=0xFFD24A:fontsize={fontsize_match}:"
-        f"x=(w-text_w)/2:y=(h-text_h)/2+40:borderw=2:bordercolor=black,"
-        f"format=yuv420p"
+    # Generate the intro .ass next to the intro mp4 in the same job dir.
+    ass_path = out_path.with_suffix(".intro.ass")
+    build_intro_ass(
+        output_path=ass_path,
+        video_w=width,
+        video_h=height,
+        duration=duration,
+        tournament=tournament,
+        p1_name=p1,
+        p2_name=p2,
     )
 
+    ass_arg = escape_ffmpeg_filter_path(ass_path)
     args = [
         "-f", "lavfi", "-i", f"color=c=0x101418:s={width}x{height}:r={fps}:d={duration}",
         "-f", "lavfi", "-i", f"anullsrc=r={TARGET_AUDIO_RATE}:cl=stereo",
-        "-vf", vfilter,
+        "-vf", f"ass='{ass_arg}',format=yuv420p",
         "-t", f"{duration}",
         *_nvenc_args(),
         *_aac_args(),
