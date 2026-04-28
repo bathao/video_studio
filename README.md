@@ -1,4 +1,4 @@
-# Pingpong Studio
+# Table Tennis Studio
 
 Local web app to edit fixed-tripod table-tennis footage: mark points with
 keyboard shortcuts, capture highlights, and render a final video that

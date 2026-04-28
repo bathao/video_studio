@@ -106,7 +106,8 @@ C_GOLD_BRIGHT = _ass_rgb(255, 195,  60)   # brighter gold for emphasis
 C_SEP         = _ass_rgb( 75,  75,  75)   # divider lines
 C_BG_HEADER   = _ass_rgb( 35,  35,  35)   # near-black header strip
 C_BG_ROWS     = _ass_rgb( 18,  18,  18)   # near-black player rows
-C_ACCENT_P1   = _ass_rgb(210, 100,  30)   # warm orange (player A)
+C_ACCENT_HDR  = _ass_rgb(180, 140,  40)   # gold accent for tournament header
+C_ACCENT_P1   = _ass_rgb(165, 100, 220)   # purple (player A)
 C_ACCENT_P2   = _ass_rgb( 50, 140, 220)   # sky blue (player B)
 C_GP_RED      = _ass_rgb(255,  85,  85)   # game-point flag red
 C_MP_RED      = _ass_rgb(255,  40,  40)   # match-point flag (deeper red)
@@ -182,12 +183,17 @@ def build_scoreboard_ass(
     # Wider columns so the panel feels broadcast-sized, not minimap-sized.
     PAD_X      = int(20 * scale)
     NAME_COL   = int(360 * scale)
-    SETS_COL   = int(80  * scale)
-    PTS_COL    = int(100 * scale)
-    BAR_W      = PAD_X + NAME_COL + SETS_COL + PTS_COL + PAD_X
-    ROW_H      = int(64 * scale)
-    HEADER_PAD = int(11 * scale)
-    HEADER_H   = (int(30 * scale) + HEADER_PAD * 2) if tournament.strip() else 0
+    # Sets and points share the same column width — number cells should
+    # match visually (only colour distinguishes them).
+    SETS_COL   = int(72  * scale)
+    PTS_COL    = int(72  * scale)
+    # No trailing PAD_X: the panel's right edge ends flush with the
+    # right edge of the points cell so there's no "dead" strip after
+    # the last column.
+    BAR_W      = PAD_X + NAME_COL + SETS_COL + PTS_COL
+    ROW_H      = int(52 * scale)
+    HEADER_PAD = int(10 * scale)
+    HEADER_H   = (int(28 * scale) + HEADER_PAD * 2) if tournament.strip() else 0
     MARGIN     = int(30 * scale)
     ACCENT_W   = max(5, int(6 * scale))
     GOLD_LINE  = max(3, int(4 * scale))
@@ -195,12 +201,12 @@ def build_scoreboard_ass(
     SEP_MID    = max(2, int(3 * scale))   # divider between the two player rows
     GAP_ROWS   = 2
 
-    fs_header = max(20, int(28 * scale))
-    fs_name   = max(20, int(28 * scale))
+    fs_header = max(18, int(26 * scale))
+    fs_name   = max(18, int(26 * scale))
     # Set count and points use the same size so neither visually dominates;
     # colour alone carries the hierarchy (grey sets vs. white points).
-    fs_sets   = max(24, int(36 * scale))
-    fs_pts    = max(24, int(36 * scale))
+    fs_sets   = max(22, int(30 * scale))
+    fs_pts    = max(22, int(30 * scale))
     # Broadcast overlay sizes (set transition cards, game-point flag).
     fs_recap_lbl   = max(28, int(40  * scale))
     fs_recap_score = max(80, int(140 * scale))
@@ -230,6 +236,29 @@ def build_scoreboard_ass(
     p1_safe = _ass_escape(_trim_name(p1_name))
     p2_safe = _ass_escape(_trim_name(p2_name))
 
+    # Walk events to recover the per-set final scores and the moment the
+    # match ended (when one player reaches sets_to_win). The main
+    # scoreboard stays visible until that moment; after it, the final
+    # scoreboard takes the centre of the screen for the rest of the video.
+    sets_to_win = (best_of + 1) // 2
+    set_history: list[tuple[int, int, int]] = []  # (p1_final, p2_final, won_by)
+    match_end_t: float | None = None
+    for i in range(1, len(events)):
+        prev = events[i - 1]
+        cur = events[i]
+        if cur.p1_set > prev.p1_set:
+            won_by = 1
+        elif cur.p2_set > prev.p2_set:
+            won_by = 2
+        else:
+            continue
+        p1f, p2f = _set_final_score(prev.p1_score, prev.p2_score, won_by)
+        set_history.append((p1f, p2f, won_by))
+        if match_end_t is None and max(cur.p1_set, cur.p2_set) >= sets_to_win:
+            match_end_t = cur.timestamp
+
+    scoreboard_end_t = match_end_t if match_end_t is not None else end_ts
+
     lines: list[str] = [_ass_header(
         video_w, video_h, fs_header, fs_name, fs_sets, fs_pts,
         fs_recap_lbl, fs_recap_score, fs_transition, fs_gp,
@@ -237,7 +266,7 @@ def build_scoreboard_ass(
     )]
 
     def add_static(payload: str, layer: int = 0) -> None:
-        lines.append(f"Dialogue: {layer},{_fmt_time(0)},{_fmt_time(end_ts)},Box,,0,0,0,,{payload}")
+        lines.append(f"Dialogue: {layer},{_fmt_time(0)},{_fmt_time(scoreboard_end_t)},Box,,0,0,0,,{payload}")
 
     # ------------------------------------------------------------------ static layer
     # Header strip — a darker, more opaque slab that visually anchors the
@@ -248,6 +277,9 @@ def build_scoreboard_ass(
         add_static(_rect(x1, y1, BAR_W, GOLD_LINE, C_GOLD, alpha_hex="00"))
         # Solid divider under the header.
         add_static(_rect(x1, hdr_y2 - SEP_COL, BAR_W, SEP_COL, C_GOLD, alpha_hex="40"))
+        # Header left accent bar — same idiom as the player rows below
+        # so the panel reads as one consistent broadcast graphic.
+        add_static(_rect(x1, y1 + GOLD_LINE, ACCENT_W, HEADER_H - GOLD_LINE, C_ACCENT_HDR, alpha_hex="00"))
 
     # Player rows background.
     add_static(_rect(x1, hdr_y2, BAR_W, ROW_H * 2 + GAP_ROWS, C_BG_ROWS, alpha_hex="0C"))
@@ -260,6 +292,8 @@ def build_scoreboard_ass(
     add_static(_rect(x1, mid_y, BAR_W, SEP_MID, C_SEP, alpha_hex="00"))
 
     # Vertical column dividers — fully opaque so cells read clearly.
+    # The panel's right edge itself (x2) closes the points cell, so we
+    # only need dividers between cells, not after the last one.
     div_y_top = hdr_y2 + 6
     div_h     = ROW_H * 2 + GAP_ROWS - 12
     add_static(_rect(col_sets_x, div_y_top, SEP_COL, div_h, C_SEP, alpha_hex="00"))
@@ -273,18 +307,18 @@ def build_scoreboard_ass(
         tag = _ass_escape(_trim_title(tournament))
         clip = f"\\clip({x1},{y1 + GOLD_LINE},{x2 - PAD_X // 2},{hdr_y2})"
         lines.append(
-            f"Dialogue: 1,{_fmt_time(0)},{_fmt_time(end_ts)},Header,,0,0,0,,"
+            f"Dialogue: 1,{_fmt_time(0)},{_fmt_time(scoreboard_end_t)},Header,,0,0,0,,"
             f"{{\\an4\\pos({x1 + PAD_X},{y1 + HEADER_H // 2 + GOLD_LINE // 2})\\q2{clip}}}{tag}"
         )
 
-    # Player names (static, full duration).
+    # Player names (static, until match end).
     name_x = x1 + PAD_X + ACCENT_W + 6
     lines.append(
-        f"Dialogue: 1,{_fmt_time(0)},{_fmt_time(end_ts)},Name,,0,0,0,,"
+        f"Dialogue: 1,{_fmt_time(0)},{_fmt_time(scoreboard_end_t)},Name,,0,0,0,,"
         f"{{\\an4\\pos({name_x},{row1_cy})\\q2}}{p1_safe}"
     )
     lines.append(
-        f"Dialogue: 1,{_fmt_time(0)},{_fmt_time(end_ts)},Name,,0,0,0,,"
+        f"Dialogue: 1,{_fmt_time(0)},{_fmt_time(scoreboard_end_t)},Name,,0,0,0,,"
         f"{{\\an4\\pos({name_x},{row2_cy})\\q2}}{p2_safe}"
     )
 
@@ -298,6 +332,7 @@ def build_scoreboard_ass(
     for i, ev in enumerate(events):
         start = max(0.0, ev.timestamp)
         end = events[i + 1].timestamp if i + 1 < len(events) else end_ts
+        end = min(end, scoreboard_end_t)
         if end <= start:
             continue
 
@@ -354,6 +389,10 @@ def build_scoreboard_ass(
             won_by = 2
         else:
             continue
+        # Skip recap + transition for the match-ending set: the final
+        # scoreboard takes the centre of the screen at that moment.
+        if max(cur.p1_set, cur.p2_set) >= sets_to_win:
+            continue
         p1_final, p2_final = _set_final_score(prev.p1_score, prev.p2_score, won_by)
 
         ended_set_n = cur.p1_set + cur.p2_set     # the set that just ended
@@ -405,12 +444,10 @@ def build_scoreboard_ass(
             out.append(f"\\t({t0},{t_mid},\\1a&H78&)\\t({t_mid},{t_end},\\1a&H00&)")
         return "".join(out)
 
-    # Sets needed to win the match: 2 for BO3, 3 for BO5, 4 for BO7.
-    sets_to_win = (best_of + 1) // 2
-
     for i, ev in enumerate(events):
         start = max(0.0, ev.timestamp)
         end = events[i + 1].timestamp if i + 1 < len(events) else end_ts
+        end = min(end, scoreboard_end_t)
         if end <= start:
             continue
 
@@ -443,124 +480,148 @@ def build_scoreboard_ass(
             f"{{\\an3\\pos({flag_x},{flag_y}){pulse}}}{text}"
         )
 
-    # ------------------------------------------------------------------ final score card
-    # Collect every set's final score by scanning the events for
-    # transitions. Each transition recovers the winning point from the
-    # previous event (where we have the pre-win score).
-    set_history: list[tuple[int, int, int]] = []  # (p1_final, p2_final, won_by)
-    for i in range(1, len(events)):
-        prev = events[i - 1]
-        cur = events[i]
-        if cur.p1_set > prev.p1_set:
-            won_by = 1
-        elif cur.p2_set > prev.p2_set:
-            won_by = 2
-        else:
-            continue
-        p1f, p2f = _set_final_score(prev.p1_score, prev.p2_score, won_by)
-        set_history.append((p1f, p2f, won_by))
+    # ------------------------------------------------------------------ final scoreboard
+    # Centred broadcast-style panel that REPLACES the main scoreboard
+    # from the moment the match-winning point is scored until the end
+    # of the video. Same visual idiom as the main panel (header strip
+    # + accent bars + dividers), but the columns are:
+    #   name | total sets | per-set points (one column per played set)
+    if match_end_t is not None and set_history:
+        last_ev = events[-1]
+        final_p1_sets = last_ev.p1_set
+        final_p2_sets = last_ev.p2_set
+        n_sets = len(set_history)
 
-    last_ev = events[-1]
-    final_p1_sets = last_ev.p1_set
-    final_p2_sets = last_ev.p2_set
-    FINAL_CARD_DUR = 5.5
-    # Default: last 5.5s of the main clip. But if the last set's recap +
-    # transition cards would overlap with the final card, push the final
-    # card start to right after them so the screen stays clean.
-    last_set_overlay_end = last_ev.timestamp + RECAP_DUR + TRANS_DUR + 0.5
-    final_start = max(0.0, total_duration - FINAL_CARD_DUR)
-    final_start = max(final_start, last_set_overlay_end)
-    final_end   = total_duration + 0.5
+        # Geometry — matches the main panel's idiom but wider to fit
+        # one column per set.
+        F_PAD_X      = int(24 * scale)
+        F_NAME_COL   = int(360 * scale)
+        F_TOTAL_COL  = int(100 * scale)
+        F_SET_COL    = int(96  * scale)
+        # No trailing PAD_X: panel ends flush with the last set column.
+        F_BAR_W      = F_PAD_X + F_NAME_COL + F_TOTAL_COL + n_sets * F_SET_COL
+        F_ROW_H      = int(72 * scale)
+        F_HEADER_PAD = int(12 * scale)
+        F_HEADER_H   = int(36 * scale) + F_HEADER_PAD * 2 if tournament.strip() else 0
+        F_ACCENT_W   = max(6, int(7 * scale))
+        F_GOLD_LINE  = max(4, int(5 * scale))
+        F_SEP_COL    = max(2, int(2 * scale))
+        F_SEP_MID    = max(3, int(3 * scale))
+        F_GAP_ROWS   = 2
 
-    if set_history and final_end - final_start >= 1.5:
+        F_total_h = F_HEADER_H + F_ROW_H * 2 + F_GAP_ROWS
+        F_x1 = (video_w - F_BAR_W) // 2
+        F_y1 = (video_h - F_total_h) // 2
+        F_x2 = F_x1 + F_BAR_W
+        F_y2 = F_y1 + F_total_h
+        F_hdr_y2 = F_y1 + F_HEADER_H
+        F_mid_y  = F_hdr_y2 + F_ROW_H
+        F_row1_cy = F_hdr_y2 + F_ROW_H // 2
+        F_row2_cy = F_mid_y + F_GAP_ROWS + F_ROW_H // 2
 
-        # Layout positions, all centred horizontally.
-        title_y    = cy - int(220 * scale)
-        top_line_y = cy - int(150 * scale)
-        row_y      = cy - int(20  * scale)
-        set_row_y  = cy + int(120 * scale)
-        bot_line_y = cy + int(220 * scale)
+        # Column centres
+        F_name_x = F_x1 + F_PAD_X + F_ACCENT_W + 8
+        F_total_cx = F_x1 + F_PAD_X + F_NAME_COL + F_TOTAL_COL // 2
+        F_set_cxs = [
+            F_x1 + F_PAD_X + F_NAME_COL + F_TOTAL_COL + i * F_SET_COL + F_SET_COL // 2
+            for i in range(n_sets)
+        ]
+        # Vertical column-divider X positions (between cells only; the
+        # panel's right edge itself closes the rightmost cell).
+        F_div_xs = [F_x1 + F_PAD_X + F_NAME_COL]  # name | total
+        F_div_xs += [
+            F_x1 + F_PAD_X + F_NAME_COL + F_TOTAL_COL + i * F_SET_COL
+            for i in range(n_sets)
+        ]  # total | s1, s1 | s2, ..., last_set
 
-        accent_w   = int(820 * scale)
-        accent_h   = max(3, int(3 * scale))
-        accent_x   = cx - accent_w // 2
+        F_start = match_end_t
+        F_end   = end_ts
+        fade = "\\fad(500,300)"
 
-        gold_bgr = C_GOLD.strip("&H&")
-        fade = "\\fad(500,400)"
+        gold_bgr   = C_GOLD.strip("&H&")
+        bg_h_bgr   = C_BG_HEADER.strip("&H&")
+        bg_r_bgr   = C_BG_ROWS.strip("&H&")
+        sep_bgr    = C_SEP.strip("&H&")
+        a_hdr_bgr  = C_ACCENT_HDR.strip("&H&")
+        a_p1_bgr   = C_ACCENT_P1.strip("&H&")
+        a_p2_bgr   = C_ACCENT_P2.strip("&H&")
 
-        # --- Title "FINAL SCORE" ---
-        lines.append(
-            f"Dialogue: 6,{_fmt_time(final_start)},{_fmt_time(final_end)},FinalTitle,,0,0,0,,"
-            f"{{\\an5\\pos({cx},{title_y}){fade}}}FINAL SCORE"
-        )
-
-        # --- Top + bottom gold accent lines, brackets the card ---
-        for y_pos in (top_line_y, bot_line_y):
-            lines.append(
-                f"Dialogue: 6,{_fmt_time(final_start)},{_fmt_time(final_end)},Box,,0,0,0,,"
-                f"{{\\an7\\pos({accent_x},{y_pos})\\bord0\\shad0{fade}"
-                f"\\1c&H{gold_bgr}&\\1a&H00&\\p1}}"
-                f"m 0 0 l {accent_w} 0 l {accent_w} {accent_h} l 0 {accent_h}{{\\p0}}"
+        def fbox(x: int, y: int, w: int, h: int, color_bgr: str, alpha: str = "00", layer: int = 6) -> str:
+            return (
+                f"Dialogue: {layer},{_fmt_time(F_start)},{_fmt_time(F_end)},Box,,0,0,0,,"
+                f"{{\\an7\\pos({x},{y}){fade}\\bord0\\shad0"
+                f"\\1c&H{color_bgr}&\\1a&H{alpha}&\\p1}}"
+                f"m 0 0 l {w} 0 l {w} {h} l 0 {h}{{\\p0}}"
             )
 
-        # --- Player row: P1 NAME    final_sets - final_sets    P2 NAME ---
-        # Three Dialogues so each component anchors independently:
-        # P1 right-aligned at left of score, score centred, P2 left-aligned.
-        score_text   = f"{final_p1_sets}  -  {final_p2_sets}"
-        score_half   = int(120 * scale)
-        gap          = int(40  * scale)
-        p1_name_x    = cx - score_half - gap
-        p2_name_x    = cx + score_half + gap
+        # Header strip
+        if F_HEADER_H > 0:
+            lines.append(fbox(F_x1, F_y1, F_BAR_W, F_HEADER_H, bg_h_bgr, alpha="08"))
+            lines.append(fbox(F_x1, F_y1, F_BAR_W, F_GOLD_LINE, gold_bgr))
+            lines.append(fbox(F_x1, F_hdr_y2 - F_SEP_COL, F_BAR_W, F_SEP_COL, gold_bgr, alpha="40"))
+            # Header left accent bar — matches the player rows.
+            lines.append(fbox(F_x1, F_y1 + F_GOLD_LINE, F_ACCENT_W, F_HEADER_H - F_GOLD_LINE, a_hdr_bgr))
 
-        # Highlight the winning side in gold.
-        if final_p1_sets > final_p2_sets:
-            p1_color = C_GOLD_BRIGHT
-            p2_color = C_WHITE
-        elif final_p2_sets > final_p1_sets:
-            p1_color = C_WHITE
-            p2_color = C_GOLD_BRIGHT
-        else:
-            p1_color = C_WHITE
-            p2_color = C_WHITE
+        # Player rows background
+        lines.append(fbox(F_x1, F_hdr_y2, F_BAR_W, F_ROW_H * 2 + F_GAP_ROWS, bg_r_bgr, alpha="0C"))
 
-        lines.append(
-            f"Dialogue: 6,{_fmt_time(final_start)},{_fmt_time(final_end)},FinalRow,,0,0,0,,"
-            f"{{\\an6\\pos({p1_name_x},{row_y}){fade}\\c{p1_color}}}{p1_safe}"
-        )
-        lines.append(
-            f"Dialogue: 6,{_fmt_time(final_start)},{_fmt_time(final_end)},FinalRow,,0,0,0,,"
-            f"{{\\an5\\pos({cx},{row_y}){fade}}}{score_text}"
-        )
-        lines.append(
-            f"Dialogue: 6,{_fmt_time(final_start)},{_fmt_time(final_end)},FinalRow,,0,0,0,,"
-            f"{{\\an4\\pos({p2_name_x},{row_y}){fade}\\c{p2_color}}}{p2_safe}"
-        )
+        # Left-edge accent bars
+        lines.append(fbox(F_x1, F_hdr_y2,                  F_ACCENT_W, F_ROW_H, a_p1_bgr))
+        lines.append(fbox(F_x1, F_mid_y + F_GAP_ROWS,      F_ACCENT_W, F_ROW_H, a_p2_bgr))
 
-        # --- Set-by-set breakdown row: "11-8   9-11   11-9   8-11   11-7" ---
-        # Each set's winning side highlighted gold; loser dim grey;
-        # separator " - " stays neutral grey.
-        score_parts: list[str] = []
-        for p1_s, p2_s, w in set_history:
-            if w == 1:
-                score_parts.append(
-                    f"{{\\c{C_GOLD_BRIGHT}}}{p1_s}"
-                    f"{{\\c{C_GREY}}}-"
-                    f"{{\\c{C_WHITE}}}{p2_s}{{\\r}}"
-                )
-            else:
-                score_parts.append(
-                    f"{{\\c{C_WHITE}}}{p1_s}"
-                    f"{{\\c{C_GREY}}}-"
-                    f"{{\\c{C_GOLD_BRIGHT}}}{p2_s}{{\\r}}"
-                )
-        # Use a middle-dot separator so adjacent set scores read clearly.
-        set_line_text = (
-            f"  {{\\c{C_GOLD}}}·{{\\r}}  ".join(score_parts)
-        )
-        lines.append(
-            f"Dialogue: 6,{_fmt_time(final_start)},{_fmt_time(final_end)},FinalSetsRow,,0,0,0,,"
-            f"{{\\an5\\pos({cx},{set_row_y}){fade}}}{set_line_text}"
-        )
+        # Mid divider
+        lines.append(fbox(F_x1, F_mid_y, F_BAR_W, F_SEP_MID, sep_bgr))
+
+        # Vertical column dividers
+        F_div_y_top = F_hdr_y2 + 8
+        F_div_h     = F_ROW_H * 2 + F_GAP_ROWS - 16
+        for dx in F_div_xs:
+            lines.append(fbox(dx, F_div_y_top, F_SEP_COL, F_div_h, sep_bgr))
+
+        # Header text — tournament name, left-aligned
+        if tournament.strip():
+            tag = _ass_escape(_trim_title(tournament))
+            clip = f"\\clip({F_x1},{F_y1 + F_GOLD_LINE},{F_x2 - F_PAD_X // 2},{F_hdr_y2})"
+            lines.append(
+                f"Dialogue: 7,{_fmt_time(F_start)},{_fmt_time(F_end)},Header,,0,0,0,,"
+                f"{{\\an4\\pos({F_x1 + F_PAD_X},{F_y1 + F_HEADER_H // 2 + F_GOLD_LINE // 2})"
+                f"\\q2{clip}{fade}}}{tag}"
+            )
+
+        # Player names
+        for cy_row, name in ((F_row1_cy, p1_safe), (F_row2_cy, p2_safe)):
+            lines.append(
+                f"Dialogue: 7,{_fmt_time(F_start)},{_fmt_time(F_end)},Name,,0,0,0,,"
+                f"{{\\an4\\pos({F_name_x},{cy_row})\\q2{fade}}}{name}"
+            )
+
+        # Total sets — bold red, deliberately the most prominent number on
+        # the panel: it's the headline outcome of the match.
+        # Per-set columns to the right still use winner-gold / loser-white.
+        fs_total_boost = max(28, int(40 * scale))  # ~1.3x bigger than fs_pts
+        for cy_row, total in (
+            (F_row1_cy, final_p1_sets),
+            (F_row2_cy, final_p2_sets),
+        ):
+            lines.append(
+                f"Dialogue: 7,{_fmt_time(F_start)},{_fmt_time(F_end)},PtsNum,,0,0,0,,"
+                f"{{\\an5\\pos({F_total_cx},{cy_row}){fade}"
+                f"\\c{C_MP_RED}\\fs{fs_total_boost}\\b1\\bord3}}{total}"
+            )
+
+        # Per-set point columns — winner of each set highlighted gold
+        for i, (p1_s, p2_s, w) in enumerate(set_history):
+            cx_set = F_set_cxs[i]
+            p1_c = C_GOLD_BRIGHT if w == 1 else C_WHITE
+            p2_c = C_GOLD_BRIGHT if w == 2 else C_WHITE
+            lines.append(
+                f"Dialogue: 7,{_fmt_time(F_start)},{_fmt_time(F_end)},PtsNum,,0,0,0,,"
+                f"{{\\an5\\pos({cx_set},{F_row1_cy}){fade}\\c{p1_c}}}{p1_s}"
+            )
+            lines.append(
+                f"Dialogue: 7,{_fmt_time(F_start)},{_fmt_time(F_end)},PtsNum,,0,0,0,,"
+                f"{{\\an5\\pos({cx_set},{F_row2_cy}){fade}\\c{p2_c}}}{p2_s}"
+            )
 
     output_path.write_text("\n".join(lines), encoding="utf-8")
     return output_path
@@ -743,6 +804,69 @@ def build_full_match_badge_ass(
     lines.append(
         f"Dialogue: 1,0:00:00.00,{end_time},BadgeText,,0,0,0,,"
         f"{{\\an4{text_move}{fade}}}FULL MATCH"
+    )
+
+    output_path.write_text("\n".join(lines), encoding="utf-8")
+    return output_path
+
+
+# ---------------------------------------------------------------------------
+# Highlight → Main transition (0.8 s bridge)
+# ---------------------------------------------------------------------------
+
+def build_transition_ass(
+    *,
+    output_path: Path,
+    video_w: int,
+    video_h: int,
+    duration: float = 0.8,
+) -> Path:
+    """
+    Short bridge clip rendered between the highlight reel and the main
+    match. A gold accent line sweeps across the centre of a dark frame
+    so the cut between segments has a visual beat instead of an
+    abrupt jump.
+    """
+    scale = max(0.6, video_h / 1080.0)
+    cy = video_h // 2
+    line_w = int(video_w * 0.55)
+    line_h = max(4, int(6 * scale))
+    move_dur_ms = int(duration * 1000 * 0.8)  # sweep finishes before fade-out
+    fade_in = 150
+    fade_out = 200
+    gold_bgr = C_GOLD.strip("&H&")
+
+    end_time = _fmt_time(duration)
+
+    header = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: {video_w}
+PlayResY: {video_h}
+WrapStyle: 2
+ScaledBorderAndShadow: yes
+YCbCr Matrix: TV.709
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Box, Arial, 1, &H00FFFFFF, &H000000FF, &H00000000, &H80000000, 0, 0, 0, 0, 100, 100, 0, 0, 1, 0, 0, 7, 0, 0, 0, 1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+
+    lines: list[str] = [header]
+
+    # Gold sweep line — moves from off-screen left to off-screen right
+    # across the middle of the frame.
+    x_start = -line_w
+    x_end   = video_w + line_w
+    lines.append(
+        f"Dialogue: 0,0:00:00.00,{end_time},Box,,0,0,0,,"
+        f"{{\\an5\\move({x_start},{cy},{x_end},{cy},0,{move_dur_ms})"
+        f"\\fad({fade_in},{fade_out})\\bord0\\shad0"
+        f"\\1c&H{gold_bgr}&\\1a&H00&\\p1}}"
+        f"m {-line_w // 2} 0 l {line_w // 2} 0 l {line_w // 2} {line_h} l {-line_w // 2} {line_h}"
+        f"{{\\p0}}"
     )
 
     output_path.write_text("\n".join(lines), encoding="utf-8")

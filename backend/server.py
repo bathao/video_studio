@@ -41,7 +41,7 @@ async def _lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Pingpong Studio", lifespan=_lifespan)
+app = FastAPI(title="Table Tennis Studio", lifespan=_lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

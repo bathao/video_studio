@@ -32,6 +32,7 @@ from .ass_builder import (
     build_highlight_badge_ass,
     build_intro_ass,
     build_scoreboard_ass,
+    build_transition_ass,
 )
 from .config import config
 from .ffmpeg_runner import (
@@ -155,6 +156,49 @@ def _hwaccel_input_args() -> list[str]:
     if config.use_hwaccel:
         return ["-hwaccel", "cuda"]
     return []
+
+
+def render_transition(
+    *,
+    out_path: Path,
+    width: int,
+    height: int,
+    fps: float,
+    on_progress: Callable[[float, str], None],
+) -> float:
+    """
+    Render a 0.8 s bridge clip with a gold sweep line, used between
+    the highlight reel and the main match so the boundary doesn't feel
+    like a hard cut. Returns the clip duration.
+    """
+    duration = 0.8
+
+    ass_path = out_path.with_suffix(".transition.ass")
+    build_transition_ass(
+        output_path=ass_path,
+        video_w=width,
+        video_h=height,
+        duration=duration,
+    )
+
+    ass_arg = escape_ffmpeg_filter_path(ass_path)
+    args = [
+        "-f", "lavfi", "-i", f"color=c=0x101418:s={width}x{height}:r={fps}:d={duration}",
+        "-f", "lavfi", "-i", f"anullsrc=r={TARGET_AUDIO_RATE}:cl=stereo",
+        "-vf", f"ass='{ass_arg}',format=yuv420p",
+        "-t", f"{duration}",
+        *_nvenc_args(),
+        *_aac_args(),
+        "-shortest",
+        str(out_path),
+    ]
+    run_ffmpeg_with_progress(
+        args,
+        expected_out_seconds=duration,
+        on_progress=on_progress,
+        log_prefix="transition: ",
+    )
+    return duration
 
 
 def render_intro(
@@ -621,6 +665,28 @@ def run_render(plan: RenderPlan) -> None:
             if written:
                 parts.append(hi_path)
             completed_weight += weight_lookup["highlight"]
+
+        # Bridge clip between highlight reel and main match: gives the
+        # cut a short visual beat so it doesn't feel like a hard jump.
+        # Only render when both segments are present (otherwise nothing
+        # to bridge).
+        wants_bridge = (
+            plan.include_highlights
+            and plan.project.highlights
+            and plan.include_main
+            and parts  # highlight render actually appended a part
+            and parts[-1].name.startswith("highlight")
+        )
+        if wants_bridge:
+            tr_path = job_dir / "transition.mp4"
+            render_transition(
+                out_path=tr_path,
+                width=width,
+                height=height,
+                fps=fps,
+                on_progress=lambda f, m: None,  # quick clip, no progress reporting
+            )
+            parts.append(tr_path)
 
         if plan.include_main:
             ass_path = job_dir / "scoreboard.ass"

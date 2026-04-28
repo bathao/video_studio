@@ -1,4 +1,4 @@
-/* Pingpong Studio — frontend logic.
+/* Table Tennis Studio — frontend logic.
  *
  * State model:
  *
