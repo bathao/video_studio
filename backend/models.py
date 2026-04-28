@@ -9,6 +9,10 @@ class ProjectInfo(BaseModel):
     p1: str = "Player 1"
     p2: str = "Player 2"
     video_file: str = ""
+    # Best-of N format: 3, 5, or 7 sets. Lets the renderer distinguish
+    # GAME POINT (next point wins this set) from MATCH POINT (next point
+    # wins the entire match).
+    best_of: int = 5
 
 
 class TrimSegment(BaseModel):
@@ -25,6 +29,13 @@ class Highlight(BaseModel):
 
 class ScoreEvent(BaseModel):
     timestamp: float
+    # `who` is the canonical action — which player scored at this
+    # timestamp (1 or 2). The score / set fields are a derived cache,
+    # recomputed by the frontend whenever events change so they always
+    # reflect a chronological replay of all actions.
+    # `who = 0` means "unknown" (legacy projects pre-v0.2) and the
+    # frontend will derive it on load.
+    who: int = 0
     p1_score: int = 0
     p2_score: int = 0
     p1_set: int = 0

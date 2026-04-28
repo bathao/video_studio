@@ -26,7 +26,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from .ass_builder import ScoreFrame, build_intro_ass, build_scoreboard_ass
+from .ass_builder import (
+    ScoreFrame,
+    build_full_match_badge_ass,
+    build_highlight_badge_ass,
+    build_intro_ass,
+    build_scoreboard_ass,
+)
 from .config import config
 from .ffmpeg_runner import (
     FFmpegError,
@@ -209,6 +215,7 @@ def _render_one_highlight(
     height: int,
     fps: float,
     has_audio: bool,
+    badge_ass: Optional[Path],
     on_progress: Callable[[float, str], None],
 ) -> float:
     """
@@ -221,6 +228,11 @@ def _render_one_highlight(
     """
     duration = h.end - h.start
     apply_slowmo = h.slow_mo and duration > SLOWMO_TAIL_SECONDS + 0.2
+
+    # We'll emit the concat output to [vc] (or [vout] when there's no
+    # badge), then optionally chain an `ass=` burn for the HIGHLIGHT
+    # badge. The final video label is always [vout].
+    vc_label = "vc" if badge_ass else "vout"
 
     if apply_slowmo:
         head_dur = duration - SLOWMO_TAIL_SECONDS
@@ -238,15 +250,15 @@ def _render_one_highlight(
                 f"asetpts=PTS-STARTPTS,atempo=0.5,"
                 f"aformat=sample_rates={TARGET_AUDIO_RATE}:channel_layouts=stereo[at]",
             ]
-            concat = "[vh][ah][vt][at]concat=n=2:v=1:a=1[vout][aout]"
+            concat = f"[vh][ah][vt][at]concat=n=2:v=1:a=1[{vc_label}][aout]"
         else:
             a_filter_parts = []
-            concat = "[vh][vt]concat=n=2:v=1:a=0[vout]"
+            concat = f"[vh][vt]concat=n=2:v=1:a=0[{vc_label}]"
         filter_complex = ";".join(v_filter_parts + a_filter_parts + [concat])
         out_duration = head_dur + (SLOWMO_TAIL_SECONDS * 2.0)
     else:
         v_filter = (
-            f"[0:v]setpts=PTS-STARTPTS,scale={width}:{height},fps={fps}[vout]"
+            f"[0:v]setpts=PTS-STARTPTS,scale={width}:{height},fps={fps}[{vc_label}]"
         )
         if has_audio:
             a_filter = (
@@ -257,6 +269,11 @@ def _render_one_highlight(
         else:
             filter_complex = v_filter
         out_duration = duration
+
+    # Burn the HIGHLIGHT badge on top of the concat output.
+    if badge_ass:
+        badge_arg = escape_ffmpeg_filter_path(badge_ass)
+        filter_complex += f";[vc]ass='{badge_arg}'[vout]"
 
     # Both `-ss` and `-t` placed BEFORE `-i` are input-side. `-ss` is a
     # fast keyframe seek; `-t` limits how much of the source we demux.
@@ -309,6 +326,19 @@ def render_highlight_clip(
     if not valid:
         return None
 
+    # Build one HIGHLIGHT badge .ass and reuse it for every clip. Each
+    # clip restarts the .ass timeline at 0, so the same file works for
+    # any clip duration (we just need the .ass to outlast the longest).
+    longest = max((h.end - h.start) for h in valid)
+    badge_dur = longest * 2.0 + 5.0  # generous slack for slow-mo expansion
+    badge_path = job_dir / "highlight_badge.ass"
+    build_highlight_badge_ass(
+        output_path=badge_path,
+        video_w=width,
+        video_h=height,
+        duration=badge_dur,
+    )
+
     parts: list[Path] = []
     total = 0.0
     n = len(valid)
@@ -328,6 +358,7 @@ def render_highlight_clip(
             height=height,
             fps=fps,
             has_audio=has_audio,
+            badge_ass=badge_path,
             on_progress=make_cb(i),
         )
         parts.append(part_path)
@@ -343,6 +374,7 @@ def render_main_with_scoreboard(
     src: Path,
     out_path: Path,
     ass_path: Path,
+    full_match_badge_ass: Optional[Path],
     kept: list[tuple[float, float]],
     width: int,
     height: int,
@@ -401,8 +433,15 @@ def render_main_with_scoreboard(
     else:
         concat_filter = "".join(concat_inputs) + f"concat=n={n}:v=1:a=0[vc]"
 
+    # Burn the scoreboard, then optionally chain the FULL MATCH badge as
+    # a second `ass=` filter so both overlays composite onto the same
+    # output stream.
     ass_arg = escape_ffmpeg_filter_path(ass_path)
-    burn_filter = f"[vc]ass='{ass_arg}'[vout]"
+    if full_match_badge_ass:
+        badge_arg = escape_ffmpeg_filter_path(full_match_badge_ass)
+        burn_filter = f"[vc]ass='{ass_arg}'[vbb];[vbb]ass='{badge_arg}'[vout]"
+    else:
+        burn_filter = f"[vc]ass='{ass_arg}'[vout]"
     filter_complex = ";".join(v_parts + a_parts + [concat_filter, burn_filter])
 
     args += [
@@ -596,12 +635,23 @@ def run_render(plan: RenderPlan) -> None:
                 p1_name=plan.project.info.p1,
                 p2_name=plan.project.info.p2,
                 score_events=remapped_events,
+                best_of=plan.project.info.best_of,
+            )
+            # FULL MATCH badge: shown for the first 15 seconds of the
+            # main render so the viewer knows the highlight reel is over.
+            fm_badge_path = job_dir / "full_match_badge.ass"
+            build_full_match_badge_ass(
+                output_path=fm_badge_path,
+                video_w=width,
+                video_h=height,
+                show_seconds=15.0,
             )
             main_path = job_dir / "main.mp4"
             render_main_with_scoreboard(
                 src=src,
                 out_path=main_path,
                 ass_path=ass_path,
+                full_match_badge_ass=fm_badge_path,
                 kept=kept,
                 width=width,
                 height=height,

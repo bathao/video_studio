@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
@@ -23,7 +25,23 @@ FRONTEND_DIR = ROOT_DIR / "frontend"
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts"}
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._\- ]+$")
 
-app = FastAPI(title="Pingpong Studio")
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Install asyncio exception handler at server start to swallow benign
+    Windows-only ConnectionResetError noise from cancelled HTTP streams."""
+    import asyncio
+    import sys
+    if sys.platform == "win32":
+        def _handler(loop, context):
+            exc = context.get("exception")
+            if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)):
+                return
+            loop.default_exception_handler(context)
+        asyncio.get_running_loop().set_exception_handler(_handler)
+    yield
+
+
+app = FastAPI(title="Pingpong Studio", lifespan=_lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -33,6 +51,20 @@ app.add_middleware(
 
 # Serve assets and frontend
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+
+
+@app.middleware("http")
+async def no_cache_static(request: Request, call_next):
+    """Disable caching for /static/* and the index page so the browser
+    never serves a stale app.js after a code change. The cost (always
+    refetching ~30 KB of HTML/JS/CSS on each load) is negligible on
+    localhost."""
+    response = await call_next(request)
+    if request.url.path.startswith("/static/") or request.url.path == "/":
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 
 # In-memory job registry. Renders are short-running and local-only,
@@ -60,8 +92,19 @@ def _resolve_inside(base: Path, name: str) -> Path:
 
 
 @app.get("/")
-def index() -> FileResponse:
-    return FileResponse(str(FRONTEND_DIR / "index.html"))
+def index() -> Response:
+    """
+    Serve index.html with a cache-busting `?v=<mtime>` appended to every
+    /static/*.js and /static/*.css reference. The browser treats a new
+    URL as a fresh resource and won't reuse a cached copy from before a
+    code change.
+    """
+    html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
+    js_v  = int((FRONTEND_DIR / "app.js").stat().st_mtime)
+    css_v = int((FRONTEND_DIR / "styles.css").stat().st_mtime)
+    html = html.replace("/static/app.js", f"/static/app.js?v={js_v}")
+    html = html.replace("/static/styles.css", f"/static/styles.css?v={css_v}")
+    return Response(content=html, media_type="text/html; charset=utf-8")
 
 
 @app.get("/api/health")

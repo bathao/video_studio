@@ -24,7 +24,7 @@ const fmt = (s) => {
 };
 
 const project = {
-  info: { tournament: '', p1: 'Player 1', p2: 'Player 2', video_file: '' },
+  info: { tournament: '', p1: 'Player 1', p2: 'Player 2', video_file: '', best_of: 5 },
   trim_segments: [],
   highlights: [],
   score_events: [],
@@ -56,6 +56,9 @@ function undo() {
   Object.assign(project, snap.project);
   Object.assign(live, snap.live);
   pendingHighlightStart = snap.pendingHighlightStart;
+  // After restoring the events array, refresh live state from the
+  // current playback position so the panel matches what's on screen.
+  syncLiveFromTime(player.currentTime);
   syncAllUI();
   toast('Undo');
 }
@@ -120,7 +123,13 @@ function updateHud() {
   $('btn-play').textContent = player.paused ? 'Play' : 'Pause';
 }
 
-player.addEventListener('timeupdate', updateHud);
+player.addEventListener('timeupdate', () => {
+  updateHud();
+  // Live panel reflects the score AT the current playback position,
+  // so scrubbing the timeline shows you "what was the score here?".
+  syncLiveFromTime(player.currentTime);
+  syncScore();
+});
 player.addEventListener('durationchange', updateHud);
 player.addEventListener('play', updateHud);
 player.addEventListener('pause', updateHud);
@@ -139,19 +148,89 @@ $('in-rate').addEventListener('change', (e) => {
 });
 
 // ---------- score logic ----------------------------------------------------
+//
+// Events are ACTIONS, not absolute states. Each event records who scored
+// (`who`) at a specific video timestamp. The p1_score / p2_score / set
+// fields are a derived cache, recomputed by replaying all actions in
+// chronological order. This way, scoring at any playback position
+// (including after seeking back) inserts at the right place in time
+// and every later event's score gets recomputed automatically.
 
 const POINTS_TO_WIN = 11;
 const MIN_LEAD = 2;
 
-function pushScoreEvent() {
-  project.score_events.push({
-    timestamp: player.currentTime,
-    p1_score: live.p1,
-    p2_score: live.p2,
-    p1_set: live.p1_set,
-    p2_set: live.p2_set,
-  });
-  syncEvents();
+/**
+ * Sort events by timestamp and replay all actions to fill in the
+ * derived score / set fields. Mutates the input array.
+ */
+function recomputeAllEvents() {
+  project.score_events.sort((a, b) => a.timestamp - b.timestamp);
+  let p1 = 0, p2 = 0, p1Set = 0, p2Set = 0;
+  for (const ev of project.score_events) {
+    if (ev.who === 1) p1 += 1;
+    else if (ev.who === 2) p2 += 1;
+    // (who === 0 is a legacy / placeholder and counts as no-op)
+
+    const max = Math.max(p1, p2);
+    const lead = Math.abs(p1 - p2);
+    if (max >= POINTS_TO_WIN && lead >= MIN_LEAD) {
+      if (p1 > p2) p1Set += 1;
+      else p2Set += 1;
+      p1 = 0;
+      p2 = 0;
+    }
+    ev.p1_score = p1;
+    ev.p2_score = p2;
+    ev.p1_set = p1Set;
+    ev.p2_set = p2Set;
+  }
+}
+
+/**
+ * Update the live score panel to reflect the score state at time `t`
+ * — i.e. the latest event with timestamp ≤ t. Lets the operator scrub
+ * the timeline and see "what was the score here?" without pressing
+ * anything.
+ */
+function syncLiveFromTime(t) {
+  let latest = null;
+  for (const ev of project.score_events) {
+    if (ev.timestamp <= t) latest = ev;
+    else break;  // events are sorted, can stop early
+  }
+  if (latest) {
+    live.p1 = latest.p1_score;
+    live.p2 = latest.p2_score;
+    live.p1_set = latest.p1_set;
+    live.p2_set = latest.p2_set;
+  } else {
+    live.p1 = live.p2 = live.p1_set = live.p2_set = 0;
+  }
+}
+
+/**
+ * Migrate legacy projects (pre-action schema) by deriving the `who`
+ * field from the score diff with the previous event. Assumes events
+ * are already in press-order (which is how legacy projects stored them).
+ */
+function migrateLegacyEvents() {
+  let p1 = 0, p2 = 0, p1Set = 0, p2Set = 0;
+  let dirty = false;
+  for (const ev of project.score_events) {
+    if (ev.who === undefined || ev.who === 0) {
+      if (ev.p1_score > p1)        ev.who = 1;
+      else if (ev.p2_score > p2)   ev.who = 2;
+      else if (ev.p1_set > p1Set)  ev.who = 1;
+      else if (ev.p2_set > p2Set)  ev.who = 2;
+      else                         ev.who = 0;
+      dirty = true;
+    }
+    p1 = ev.p1_score;
+    p2 = ev.p2_score;
+    p1Set = ev.p1_set;
+    p2Set = ev.p2_set;
+  }
+  if (dirty) recomputeAllEvents();
 }
 
 function scorePoint(who) {
@@ -160,21 +239,37 @@ function scorePoint(who) {
     return;
   }
   snapshot();
-  if (who === 1) live.p1 += 1;
-  else live.p2 += 1;
-
-  // Did this point win the set?
-  const max = Math.max(live.p1, live.p2);
-  const lead = Math.abs(live.p1 - live.p2);
-  if (max >= POINTS_TO_WIN && lead >= MIN_LEAD) {
-    if (live.p1 > live.p2) live.p1_set += 1;
-    else live.p2_set += 1;
-    live.p1 = 0;
-    live.p2 = 0;
-    toast(`Set won! ${live.p1_set}-${live.p2_set}`);
-  }
-  pushScoreEvent();
+  // Insert action at current playback time.
+  project.score_events.push({
+    timestamp: player.currentTime,
+    who,
+    p1_score: 0,
+    p2_score: 0,
+    p1_set: 0,
+    p2_set: 0,
+  });
+  recomputeAllEvents();
+  syncLiveFromTime(player.currentTime);
+  syncEvents();
   syncScore();
+
+  // Toast on set win — detect by checking if the latest event reset to 0,0.
+  const latest = project.score_events[project.score_events.length - 1];
+  if (latest && latest.p1_score === 0 && latest.p2_score === 0
+      && (latest.p1_set + latest.p2_set) > 0) {
+    toast(`Set won! ${latest.p1_set}-${latest.p2_set}`);
+  }
+}
+
+function deleteScoreEvent(idx) {
+  if (idx < 0 || idx >= project.score_events.length) return;
+  snapshot();
+  project.score_events.splice(idx, 1);
+  recomputeAllEvents();
+  syncLiveFromTime(player.currentTime);
+  syncEvents();
+  syncScore();
+  toast('Event deleted');
 }
 
 function syncScore() {
@@ -376,11 +471,32 @@ function syncEvents() {
   $('ev-count').textContent = `(${project.score_events.length})`;
   const ul = $('ev-list');
   ul.innerHTML = '';
-  project.score_events.slice().reverse().forEach((e, idx) => {
+  // Display newest at top, but track each event's index in the sorted
+  // (chronological) array so delete acts on the right one.
+  const total = project.score_events.length;
+  project.score_events.slice().reverse().forEach((e, revIdx) => {
+    const idx = total - 1 - revIdx;
+    const whoMark = e.who === 1 ? 'P1' : e.who === 2 ? 'P2' : '··';
+    const whoColor = e.who === 1 ? 'text-orange-400'
+                   : e.who === 2 ? 'text-accent-400'
+                   : 'text-slate-500';
     const li = document.createElement('li');
     li.className = 'list-row';
-    li.textContent = `${fmt(e.timestamp)}  [${e.p1_set}] ${e.p1_score} - ${e.p2_score} [${e.p2_set}]`;
-    li.addEventListener('click', () => { player.currentTime = e.timestamp; });
+    li.innerHTML = `
+      <span class="font-mono text-[11px] w-14">${fmt(e.timestamp)}</span>
+      <span class="text-[11px] font-bold ${whoColor}">${whoMark}</span>
+      <span class="text-[11px]">[${e.p1_set}] ${e.p1_score}-${e.p2_score} [${e.p2_set}]</span>
+      <button class="text-slate-400 hover:text-accent-400 ml-auto px-1" title="Jump" data-jump>↦</button>
+      <button class="text-slate-400 hover:text-danger-500 px-1" title="Delete" data-del>✕</button>
+    `;
+    li.querySelector('[data-jump]').addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      player.currentTime = e.timestamp;
+    });
+    li.querySelector('[data-del]').addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      deleteScoreEvent(idx);
+    });
     ul.appendChild(li);
   });
 }
@@ -389,6 +505,7 @@ function syncInfoFromInputs() {
   project.info.tournament = $('in-tournament').value;
   project.info.p1 = $('in-p1').value;
   project.info.p2 = $('in-p2').value;
+  project.info.best_of = parseInt($('in-best-of').value, 10) || 5;
   $('lbl-p1').textContent = (project.info.p1 || 'P1').toUpperCase();
   $('lbl-p2').textContent = (project.info.p2 || 'P2').toUpperCase();
 }
@@ -397,6 +514,7 @@ function syncAllUI() {
   $('in-tournament').value = project.info.tournament || '';
   $('in-p1').value = project.info.p1 || '';
   $('in-p2').value = project.info.p2 || '';
+  $('in-best-of').value = String(project.info.best_of || 5);
   if (project.info.video_file) {
     $('in-video').value = project.info.video_file;
     if (player.src && !player.src.includes(encodeURIComponent(project.info.video_file))) {
@@ -415,6 +533,7 @@ function syncAllUI() {
 ['in-tournament', 'in-p1', 'in-p2'].forEach((id) =>
   $(id).addEventListener('input', syncInfoFromInputs)
 );
+$('in-best-of').addEventListener('change', syncInfoFromInputs);
 $('in-video').addEventListener('change', (e) => {
   setVideoSource(e.target.value);
 });
@@ -467,16 +586,11 @@ async function loadProject(name) {
   project.trim_segments = data.trim_segments || [];
   project.highlights = data.highlights || [];
   project.score_events = data.score_events || [];
-  // derive live score from last event
-  if (project.score_events.length) {
-    const last = project.score_events[project.score_events.length - 1];
-    Object.assign(live, {
-      p1: last.p1_score, p2: last.p2_score,
-      p1_set: last.p1_set, p2_set: last.p2_set,
-    });
-  } else {
-    Object.assign(live, { p1: 0, p2: 0, p1_set: 0, p2_set: 0 });
-  }
+  // Legacy projects may not have `who` on each event — derive it from
+  // the score diff with the previous event, then sort and recompute so
+  // the events list is internally consistent.
+  migrateLegacyEvents();
+  syncLiveFromTime(player.currentTime);
   $('in-project').value = name;
   syncAllUI();
   $('modal-load').classList.add('hidden');
