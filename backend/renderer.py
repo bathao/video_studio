@@ -571,7 +571,13 @@ def run_render(plan: RenderPlan) -> None:
         if not plan.project.info.video_file:
             raise FFmpegError("No source video selected in project")
 
-        src = config.videos_dir / plan.project.info.video_file
+        # Source may be either a bare filename inside videos_dir (the
+        # default) or an absolute path picked via the native file picker.
+        # Path / abs_right collapses to abs_right on Windows, so this
+        # works for both, but we branch explicitly for clarity.
+        vf = plan.project.info.video_file
+        vf_path = Path(vf)
+        src = vf_path if vf_path.is_absolute() else (config.videos_dir / vf)
         if not src.exists():
             raise FFmpegError(f"Source video not found: {src}")
 

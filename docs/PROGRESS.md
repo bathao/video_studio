@@ -1,6 +1,6 @@
 # Progress Status
 
-Last update: 2026-04-25
+Last update: 2026-05-03
 
 ## Module map
 
@@ -23,6 +23,11 @@ Last update: 2026-04-25
 ### Setup & project management
 - ✅ Tournament + player names
 - ✅ Source video dropdown (auto-scan `videos/`)
+- ✅ Native "Browse…" picker — pick any file from disk. Files inside
+      `videos/` merge with the dropdown; files elsewhere are streamed
+      under a session-scoped sha1 token (`/api/videos/external/{token}/stream`).
+      Saved projects store the absolute path; reload re-registers the
+      token automatically.
 - ✅ Save / Load project to `projects/<name>.json`
 - ✅ Project list modal
 
@@ -74,6 +79,15 @@ Last update: 2026-04-25
 - ✅ Player names + set count + points per row
 - ✅ ▶ marker on the player who most recently scored
 - ✅ Gold highlight on the active player's points; white on the other
+- ✅ Set-point (sets) column tinted gold to read distinctly from the
+      points column at a glance
+- ✅ Compact cell sizing — fonts one step smaller, padding tightened so
+      borders sit close to the digits
+- ✅ Set-transition card ("SET 2/3/4/5") holds for 4.5 s after each set
+      (was 1.5 s) so the viewer has time to read it
+- ✅ End-of-match final scoreboard anchored at the same bottom-right
+      corner with identical fonts/colours/opacities; just adds one
+      column per played set
 - ✅ Vietnamese diacritics (UTF-8 .ass + Arial fallback via libass + DirectWrite)
 
 ### Output & file management

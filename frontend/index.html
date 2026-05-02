@@ -93,9 +93,12 @@
               <input id="in-p2" class="ipt" placeholder="Player 2" value="Player 2" />
             </label>
             <label class="lbl">Source video
-              <select id="in-video" class="ipt">
-                <option value="">— select —</option>
-              </select>
+              <div class="flex gap-2">
+                <select id="in-video" class="ipt flex-1 min-w-0">
+                  <option value="">— select —</option>
+                </select>
+                <button id="btn-browse-video" class="btn-secondary text-xs whitespace-nowrap" title="Pick any file from your computer">Browse…</button>
+              </div>
             </label>
             <button id="btn-refresh-videos" class="btn-secondary text-xs">Refresh video list</button>
             <label class="lbl mt-1">Match format

@@ -98,6 +98,13 @@ def _ass_rgb(r: int, g: int, b: int) -> str:
     return f"&H00{b:02X}{g:02X}{r:02X}&"
 
 
+def _bgr(c: str) -> str:
+    """Strip the &H...& wrapping from an ASS colour. Used when a colour
+    has to be embedded in a raw f-string (drawing primitives, inline
+    \\1c overrides) instead of as a Style: column."""
+    return c.strip("&H&")
+
+
 # Palette (R, G, B). Each comment names the on-screen colour.
 C_WHITE       = _ass_rgb(255, 255, 255)
 C_GREY        = _ass_rgb(185, 185, 185)
@@ -106,6 +113,7 @@ C_GOLD_BRIGHT = _ass_rgb(255, 195,  60)   # brighter gold for emphasis
 C_SEP         = _ass_rgb( 75,  75,  75)   # divider lines
 C_BG_HEADER   = _ass_rgb( 35,  35,  35)   # near-black header strip
 C_BG_ROWS     = _ass_rgb( 18,  18,  18)   # near-black player rows
+C_BG_SETS     = _ass_rgb(102,  76,  24)   # gold-tinted dark for the sets (set-point) column
 C_ACCENT_HDR  = _ass_rgb(180, 140,  40)   # gold accent for tournament header
 C_ACCENT_P1   = _ass_rgb(165, 100, 220)   # purple (player A)
 C_ACCENT_P2   = _ass_rgb( 50, 140, 220)   # sky blue (player B)
@@ -117,9 +125,7 @@ C_DEUCE       = _ass_rgb(255, 195,  60)   # deuce flag amber
 def _ass_header(video_w: int, video_h: int, fs_header: int,
                 fs_name: int, fs_sets: int, fs_pts: int,
                 fs_recap_lbl: int, fs_recap_score: int,
-                fs_transition: int, fs_gp: int,
-                fs_final_title: int, fs_final_row: int,
-                fs_final_sets_row: int) -> str:
+                fs_transition: int, fs_gp: int) -> str:
     return f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {video_w}
@@ -139,9 +145,6 @@ Style: SetTransition, Arial, {fs_transition},  {C_GOLD_BRIGHT}, &H000000FF, &H00
 Style: GamePoint,     Arial, {fs_gp},          {C_GP_RED},      &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 3, 0, 1, 3, 1, 6, 0, 0, 0, 1
 Style: MatchPoint,    Arial, {int(fs_gp * 1.15)}, {C_MP_RED},   &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 4, 0, 1, 4, 2, 6, 0, 0, 0, 1
 Style: Deuce,         Arial, {fs_gp},          {C_DEUCE},       &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 3, 0, 1, 3, 1, 6, 0, 0, 0, 1
-Style: FinalTitle,    Arial, {fs_final_title},    {C_GOLD_BRIGHT}, &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 5, 0, 1, 3, 2, 5, 0, 0, 0, 1
-Style: FinalRow,      Arial, {fs_final_row},      {C_WHITE},       &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 3, 0, 1, 3, 2, 5, 0, 0, 0, 1
-Style: FinalSetsRow,  Arial, {fs_final_sets_row}, {C_WHITE},       &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 3, 0, 1, 2, 1, 5, 0, 0, 0, 1
 Style: PtsNum, Arial, {fs_pts},    {C_WHITE}, &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 0, 0, 1, 1.5, 0, 5, 0, 0, 0, 1
 Style: Box,    Arial, 1,           {C_WHITE}, &H000000FF, &H00000000, &H80000000,  0, 0, 0, 0, 100, 100, 0, 0, 1, 0,   0, 7, 0, 0, 0, 1
 
@@ -152,10 +155,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 def _rect(x: int, y: int, w: int, h: int, color: str, alpha_hex: str = "00", layer: int = 0) -> str:
     """ASS drawing primitive: filled rectangle anchored top-left at (x,y)."""
-    bgr = color.strip("&H&")  # remove leading &H and trailing &
     return (
         f"{{\\an7\\pos({x},{y})\\bord0\\shad0"
-        f"\\1c&H{bgr}&\\1a&H{alpha_hex}&\\p1}}"
+        f"\\1c&H{_bgr(color)}&\\1a&H{alpha_hex}&\\p1}}"
         f"m 0 0 l {w} 0 l {w} {h} l 0 {h}{{\\p0}}"
     )
 
@@ -181,19 +183,19 @@ def build_scoreboard_ass(
     scale = max(0.6, video_h / 1080.0)
 
     # Wider columns so the panel feels broadcast-sized, not minimap-sized.
-    PAD_X      = int(20 * scale)
-    NAME_COL   = int(360 * scale)
+    PAD_X      = int(14 * scale)
+    NAME_COL   = int(290 * scale)
     # Sets and points share the same column width — number cells should
     # match visually (only colour distinguishes them).
-    SETS_COL   = int(72  * scale)
-    PTS_COL    = int(72  * scale)
+    SETS_COL   = int(56  * scale)
+    PTS_COL    = int(56  * scale)
     # No trailing PAD_X: the panel's right edge ends flush with the
     # right edge of the points cell so there's no "dead" strip after
     # the last column.
     BAR_W      = PAD_X + NAME_COL + SETS_COL + PTS_COL
-    ROW_H      = int(52 * scale)
-    HEADER_PAD = int(10 * scale)
-    HEADER_H   = (int(28 * scale) + HEADER_PAD * 2) if tournament.strip() else 0
+    ROW_H      = int(42 * scale)
+    HEADER_PAD = int(6 * scale)
+    HEADER_H   = (int(24 * scale) + HEADER_PAD * 2) if tournament.strip() else 0
     MARGIN     = int(30 * scale)
     ACCENT_W   = max(5, int(6 * scale))
     GOLD_LINE  = max(3, int(4 * scale))
@@ -201,21 +203,17 @@ def build_scoreboard_ass(
     SEP_MID    = max(2, int(3 * scale))   # divider between the two player rows
     GAP_ROWS   = 2
 
-    fs_header = max(18, int(26 * scale))
-    fs_name   = max(18, int(26 * scale))
+    fs_header = max(16, int(22 * scale))
+    fs_name   = max(16, int(22 * scale))
     # Set count and points use the same size so neither visually dominates;
     # colour alone carries the hierarchy (grey sets vs. white points).
-    fs_sets   = max(22, int(30 * scale))
-    fs_pts    = max(22, int(30 * scale))
+    fs_sets   = max(20, int(26 * scale))
+    fs_pts    = max(20, int(26 * scale))
     # Broadcast overlay sizes (set transition cards, game-point flag).
     fs_recap_lbl   = max(28, int(40  * scale))
     fs_recap_score = max(80, int(140 * scale))
     fs_transition  = max(110, int(200 * scale))
     fs_gp          = max(28, int(40  * scale))
-    # End-of-match final-score card sizes.
-    fs_final_title    = max(40, int(56 * scale))
-    fs_final_row      = max(40, int(60 * scale))
-    fs_final_sets_row = max(28, int(42 * scale))
 
     total_h = HEADER_H + ROW_H * 2 + GAP_ROWS
     x1 = video_w - BAR_W - MARGIN
@@ -262,7 +260,6 @@ def build_scoreboard_ass(
     lines: list[str] = [_ass_header(
         video_w, video_h, fs_header, fs_name, fs_sets, fs_pts,
         fs_recap_lbl, fs_recap_score, fs_transition, fs_gp,
-        fs_final_title, fs_final_row, fs_final_sets_row,
     )]
 
     def add_static(payload: str, layer: int = 0) -> None:
@@ -283,6 +280,11 @@ def build_scoreboard_ass(
 
     # Player rows background.
     add_static(_rect(x1, hdr_y2, BAR_W, ROW_H * 2 + GAP_ROWS, C_BG_ROWS, alpha_hex="0C"))
+
+    # Set-point column tint — distinguishes the sets cell from the
+    # points cell at a glance. Same opacity as the row bg so it reads
+    # as a solid coloured cell, not a translucent overlay.
+    add_static(_rect(col_sets_x, hdr_y2, SETS_COL, ROW_H * 2 + GAP_ROWS, C_BG_SETS, alpha_hex="0C"))
 
     # Left edge accent bars (one per player).
     add_static(_rect(x1, hdr_y2,                ACCENT_W, ROW_H, C_ACCENT_P1, alpha_hex="00"))
@@ -371,7 +373,7 @@ def build_scoreboard_ass(
     # we recover the set's final score from the previous event:
     #   prev (10, 7) → P1 scored to 11, won → cur (0, 0) with set+1
     RECAP_DUR = 2.0
-    TRANS_DUR = 1.5
+    TRANS_DUR = 4.5
 
     def _recap_score_text(p1_final: int, p2_final: int, winner: int) -> str:
         if winner == 1:
@@ -481,135 +483,103 @@ def build_scoreboard_ass(
         )
 
     # ------------------------------------------------------------------ final scoreboard
-    # Centred broadcast-style panel that REPLACES the main scoreboard
-    # from the moment the match-winning point is scored until the end
-    # of the video. Same visual idiom as the main panel (header strip
-    # + accent bars + dividers), but the columns are:
-    #   name | total sets | per-set points (one column per played set)
+    # Anchored at the same bottom-right corner as the live panel, with
+    # IDENTICAL fonts / colours / opacities — just one extra column per
+    # played set on the right. Replaces the live scoreboard from match-
+    # end to video-end.
     if match_end_t is not None and set_history:
         last_ev = events[-1]
         final_p1_sets = last_ev.p1_set
         final_p2_sets = last_ev.p2_set
         n_sets = len(set_history)
 
-        # Geometry — matches the main panel's idiom but wider to fit
-        # one column per set.
-        F_PAD_X      = int(24 * scale)
-        F_NAME_COL   = int(360 * scale)
-        F_TOTAL_COL  = int(100 * scale)
-        F_SET_COL    = int(96  * scale)
-        # No trailing PAD_X: panel ends flush with the last set column.
-        F_BAR_W      = F_PAD_X + F_NAME_COL + F_TOTAL_COL + n_sets * F_SET_COL
-        F_ROW_H      = int(72 * scale)
-        F_HEADER_PAD = int(12 * scale)
-        F_HEADER_H   = int(36 * scale) + F_HEADER_PAD * 2 if tournament.strip() else 0
-        F_ACCENT_W   = max(6, int(7 * scale))
-        F_GOLD_LINE  = max(4, int(5 * scale))
-        F_SEP_COL    = max(2, int(2 * scale))
-        F_SEP_MID    = max(3, int(3 * scale))
-        F_GAP_ROWS   = 2
+        # Reuse every constant from the live panel. The only new column
+        # widths are derived from those: total sets uses the same width
+        # as the live SETS column, per-set scores use the live PTS width.
+        F_TOTAL_COL = SETS_COL
+        F_SET_COL   = PTS_COL
+        F_BAR_W     = PAD_X + NAME_COL + F_TOTAL_COL + n_sets * F_SET_COL
+        F_total_h   = HEADER_H + ROW_H * 2 + GAP_ROWS
 
-        F_total_h = F_HEADER_H + F_ROW_H * 2 + F_GAP_ROWS
-        F_x1 = (video_w - F_BAR_W) // 2
-        F_y1 = (video_h - F_total_h) // 2
+        F_x1 = video_w - F_BAR_W - MARGIN
+        F_y1 = video_h - F_total_h - MARGIN
         F_x2 = F_x1 + F_BAR_W
-        F_y2 = F_y1 + F_total_h
-        F_hdr_y2 = F_y1 + F_HEADER_H
-        F_mid_y  = F_hdr_y2 + F_ROW_H
-        F_row1_cy = F_hdr_y2 + F_ROW_H // 2
-        F_row2_cy = F_mid_y + F_GAP_ROWS + F_ROW_H // 2
+        F_hdr_y2 = F_y1 + HEADER_H
+        F_mid_y  = F_hdr_y2 + ROW_H
+        F_row1_cy = F_hdr_y2 + ROW_H // 2
+        F_row2_cy = F_mid_y + GAP_ROWS + ROW_H // 2
 
-        # Column centres
-        F_name_x = F_x1 + F_PAD_X + F_ACCENT_W + 8
-        F_total_cx = F_x1 + F_PAD_X + F_NAME_COL + F_TOTAL_COL // 2
-        F_set_cxs = [
-            F_x1 + F_PAD_X + F_NAME_COL + F_TOTAL_COL + i * F_SET_COL + F_SET_COL // 2
+        F_name_x   = F_x1 + PAD_X + ACCENT_W + 6
+        F_total_x  = F_x1 + PAD_X + NAME_COL
+        F_total_cx = F_total_x + F_TOTAL_COL // 2
+        F_set_cxs  = [
+            F_total_x + F_TOTAL_COL + i * F_SET_COL + F_SET_COL // 2
             for i in range(n_sets)
         ]
-        # Vertical column-divider X positions (between cells only; the
-        # panel's right edge itself closes the rightmost cell).
-        F_div_xs = [F_x1 + F_PAD_X + F_NAME_COL]  # name | total
-        F_div_xs += [
-            F_x1 + F_PAD_X + F_NAME_COL + F_TOTAL_COL + i * F_SET_COL
-            for i in range(n_sets)
-        ]  # total | s1, s1 | s2, ..., last_set
+        # Column dividers: name|total, total|s1, s1|s2, ..., s(n-1)|sn.
+        # Right edge of the panel itself closes the last column.
+        F_div_xs = [F_total_x] + [
+            F_total_x + F_TOTAL_COL + i * F_SET_COL for i in range(n_sets)
+        ]
 
         F_start = match_end_t
         F_end   = end_ts
         fade = "\\fad(500,300)"
 
-        gold_bgr   = C_GOLD.strip("&H&")
-        bg_h_bgr   = C_BG_HEADER.strip("&H&")
-        bg_r_bgr   = C_BG_ROWS.strip("&H&")
-        sep_bgr    = C_SEP.strip("&H&")
-        a_hdr_bgr  = C_ACCENT_HDR.strip("&H&")
-        a_p1_bgr   = C_ACCENT_P1.strip("&H&")
-        a_p2_bgr   = C_ACCENT_P2.strip("&H&")
-
-        def fbox(x: int, y: int, w: int, h: int, color_bgr: str, alpha: str = "00", layer: int = 6) -> str:
+        def fbox(x: int, y: int, w: int, h: int, color: str, alpha: str = "00", layer: int = 6) -> str:
+            # Compose `_rect`'s payload with a Dialogue wrapper + a \fad
+            # tag injected after the opening brace of the tag block.
+            payload = "{" + fade + _rect(x, y, w, h, color, alpha_hex=alpha)[1:]
             return (
                 f"Dialogue: {layer},{_fmt_time(F_start)},{_fmt_time(F_end)},Box,,0,0,0,,"
-                f"{{\\an7\\pos({x},{y}){fade}\\bord0\\shad0"
-                f"\\1c&H{color_bgr}&\\1a&H{alpha}&\\p1}}"
-                f"m 0 0 l {w} 0 l {w} {h} l 0 {h}{{\\p0}}"
+                f"{payload}"
             )
 
-        # Header strip
-        if F_HEADER_H > 0:
-            lines.append(fbox(F_x1, F_y1, F_BAR_W, F_HEADER_H, bg_h_bgr, alpha="08"))
-            lines.append(fbox(F_x1, F_y1, F_BAR_W, F_GOLD_LINE, gold_bgr))
-            lines.append(fbox(F_x1, F_hdr_y2 - F_SEP_COL, F_BAR_W, F_SEP_COL, gold_bgr, alpha="40"))
-            # Header left accent bar — matches the player rows.
-            lines.append(fbox(F_x1, F_y1 + F_GOLD_LINE, F_ACCENT_W, F_HEADER_H - F_GOLD_LINE, a_hdr_bgr))
+        # Header strip + player rows + accent bars + dividers — same
+        # idiom as the live panel above.
+        if HEADER_H > 0:
+            lines.append(fbox(F_x1, F_y1, F_BAR_W, HEADER_H, C_BG_HEADER, alpha="08"))
+            lines.append(fbox(F_x1, F_y1, F_BAR_W, GOLD_LINE, C_GOLD))
+            lines.append(fbox(F_x1, F_hdr_y2 - SEP_COL, F_BAR_W, SEP_COL, C_GOLD, alpha="40"))
+            lines.append(fbox(F_x1, F_y1 + GOLD_LINE, ACCENT_W, HEADER_H - GOLD_LINE, C_ACCENT_HDR))
 
-        # Player rows background
-        lines.append(fbox(F_x1, F_hdr_y2, F_BAR_W, F_ROW_H * 2 + F_GAP_ROWS, bg_r_bgr, alpha="0C"))
+        lines.append(fbox(F_x1, F_hdr_y2, F_BAR_W, ROW_H * 2 + GAP_ROWS, C_BG_ROWS, alpha="0C"))
 
-        # Left-edge accent bars
-        lines.append(fbox(F_x1, F_hdr_y2,                  F_ACCENT_W, F_ROW_H, a_p1_bgr))
-        lines.append(fbox(F_x1, F_mid_y + F_GAP_ROWS,      F_ACCENT_W, F_ROW_H, a_p2_bgr))
+        # Tint just the totals column to mirror the live SETS-column
+        # highlight; per-set columns stay on the plain row bg.
+        lines.append(fbox(F_total_x, F_hdr_y2, F_TOTAL_COL, ROW_H * 2 + GAP_ROWS, C_BG_SETS, alpha="0C"))
 
-        # Mid divider
-        lines.append(fbox(F_x1, F_mid_y, F_BAR_W, F_SEP_MID, sep_bgr))
+        lines.append(fbox(F_x1, F_hdr_y2,           ACCENT_W, ROW_H, C_ACCENT_P1))
+        lines.append(fbox(F_x1, F_mid_y + GAP_ROWS, ACCENT_W, ROW_H, C_ACCENT_P2))
+        lines.append(fbox(F_x1, F_mid_y, F_BAR_W, SEP_MID, C_SEP))
 
-        # Vertical column dividers
-        F_div_y_top = F_hdr_y2 + 8
-        F_div_h     = F_ROW_H * 2 + F_GAP_ROWS - 16
+        F_div_y_top = F_hdr_y2 + 6
+        F_div_h     = ROW_H * 2 + GAP_ROWS - 12
         for dx in F_div_xs:
-            lines.append(fbox(dx, F_div_y_top, F_SEP_COL, F_div_h, sep_bgr))
+            lines.append(fbox(dx, F_div_y_top, SEP_COL, F_div_h, C_SEP))
 
-        # Header text — tournament name, left-aligned
         if tournament.strip():
             tag = _ass_escape(_trim_title(tournament))
-            clip = f"\\clip({F_x1},{F_y1 + F_GOLD_LINE},{F_x2 - F_PAD_X // 2},{F_hdr_y2})"
+            clip = f"\\clip({F_x1},{F_y1 + GOLD_LINE},{F_x2 - PAD_X // 2},{F_hdr_y2})"
             lines.append(
                 f"Dialogue: 7,{_fmt_time(F_start)},{_fmt_time(F_end)},Header,,0,0,0,,"
-                f"{{\\an4\\pos({F_x1 + F_PAD_X},{F_y1 + F_HEADER_H // 2 + F_GOLD_LINE // 2})"
+                f"{{\\an4\\pos({F_x1 + PAD_X},{F_y1 + HEADER_H // 2 + GOLD_LINE // 2})"
                 f"\\q2{clip}{fade}}}{tag}"
             )
 
-        # Player names
         for cy_row, name in ((F_row1_cy, p1_safe), (F_row2_cy, p2_safe)):
             lines.append(
                 f"Dialogue: 7,{_fmt_time(F_start)},{_fmt_time(F_end)},Name,,0,0,0,,"
                 f"{{\\an4\\pos({F_name_x},{cy_row})\\q2{fade}}}{name}"
             )
 
-        # Total sets — bold red, deliberately the most prominent number on
-        # the panel: it's the headline outcome of the match.
-        # Per-set columns to the right still use winner-gold / loser-white.
-        fs_total_boost = max(28, int(40 * scale))  # ~1.3x bigger than fs_pts
-        for cy_row, total in (
-            (F_row1_cy, final_p1_sets),
-            (F_row2_cy, final_p2_sets),
-        ):
+        for cy_row, total in ((F_row1_cy, final_p1_sets), (F_row2_cy, final_p2_sets)):
             lines.append(
-                f"Dialogue: 7,{_fmt_time(F_start)},{_fmt_time(F_end)},PtsNum,,0,0,0,,"
-                f"{{\\an5\\pos({F_total_cx},{cy_row}){fade}"
-                f"\\c{C_MP_RED}\\fs{fs_total_boost}\\b1\\bord3}}{total}"
+                f"Dialogue: 7,{_fmt_time(F_start)},{_fmt_time(F_end)},SetNum,,0,0,0,,"
+                f"{{\\an5\\pos({F_total_cx},{cy_row}){fade}}}{total}"
             )
 
-        # Per-set point columns — winner of each set highlighted gold
+        # Per-set point columns — winner of each set highlighted gold.
         for i, (p1_s, p2_s, w) in enumerate(set_history):
             cx_set = F_set_cxs[i]
             p1_c = C_GOLD_BRIGHT if w == 1 else C_WHITE
@@ -693,9 +663,9 @@ def build_highlight_badge_ass(
         t_end = t0 + period_ms
         pulse += f"\\t({t0},{t_mid},\\1a&HA0&)\\t({t_mid},{t_end},\\1a&H00&)"
 
-    bg_bgr  = _ass_rgb(15, 15, 18).strip("&H&")
-    red_bgr = _ass_rgb(220, 50, 50).strip("&H&")
-    dot_bgr = _ass_rgb(255, 70, 70).strip("&H&")
+    bg_bgr  = _bgr(_ass_rgb(15, 15, 18))
+    red_bgr = _bgr(_ass_rgb(220, 50, 50))
+    dot_bgr = _bgr(_ass_rgb(255, 70, 70))
 
     lines: list[str] = [_badge_header(video_w, video_h, fs_text)]
 
@@ -767,8 +737,8 @@ def build_full_match_badge_ass(
     fade_out_ms = 700
     move_in_ms  = 400
 
-    bg_bgr   = _ass_rgb(15, 15, 18).strip("&H&")
-    gold_bgr = C_GOLD.strip("&H&")
+    bg_bgr   = _bgr(_ass_rgb(15, 15, 18))
+    gold_bgr = _bgr(C_GOLD)
 
     accent_h = max(3, int(3 * scale))
 
@@ -834,7 +804,7 @@ def build_transition_ass(
     move_dur_ms = int(duration * 1000 * 0.8)  # sweep finishes before fade-out
     fade_in = 150
     fade_out = 200
-    gold_bgr = C_GOLD.strip("&H&")
+    gold_bgr = _bgr(C_GOLD)
 
     end_time = _fmt_time(duration)
 
@@ -933,7 +903,7 @@ def build_intro_ass(
     p1_safe    = _ass_escape(p1_name.strip() or "Player 1")
     p2_safe    = _ass_escape(p2_name.strip() or "Player 2")
 
-    gold_bgr = C_GOLD.strip("&H&")
+    gold_bgr = _bgr(C_GOLD)
     vs_dim   = _ass_rgb(120, 120, 120)  # mid-grey "vs" — quiet vs. the names
 
     header = f"""[Script Info]

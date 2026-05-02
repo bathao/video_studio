@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import subprocess
+import sys
+import textwrap
 import threading
 import time
 from pathlib import Path
@@ -9,7 +13,7 @@ from typing import Optional
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -71,6 +75,47 @@ async def no_cache_static(request: Request, call_next):
 # so we don't need persistence here.
 _jobs: dict[str, RenderState] = {}
 _jobs_lock = threading.Lock()
+
+
+# In-memory registry of "external" videos — files chosen by the user
+# from anywhere on disk via the native file picker (or restored from a
+# saved project). Keyed by a short token derived from the absolute path,
+# so the streaming URL doesn't expose the path. Lost on server restart;
+# the frontend re-registers on project load.
+_external_videos: dict[str, Path] = {}
+_external_lock = threading.Lock()
+
+
+def _validate_video_path(path: Path) -> Path:
+    """Resolve the path, ensure it points at an existing video file, or
+    raise an appropriate HTTPException."""
+    abs_path = path.resolve()
+    if not abs_path.exists() or not abs_path.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {abs_path}")
+    if abs_path.suffix.lower() not in VIDEO_EXTS:
+        raise HTTPException(status_code=400, detail=f"Not a supported video file: {abs_path.suffix}")
+    return abs_path
+
+
+def _register_validated_external(abs_path: Path) -> str:
+    """Stash an already-validated absolute path under a stable token."""
+    token = hashlib.sha1(str(abs_path).encode("utf-8")).hexdigest()[:16]
+    with _external_lock:
+        _external_videos[token] = abs_path
+    return token
+
+
+def _register_external_video(path: Path) -> tuple[str, Path]:
+    abs_path = _validate_video_path(path)
+    return _register_validated_external(abs_path), abs_path
+
+
+def _resolve_external_video(token: str) -> Path:
+    with _external_lock:
+        p = _external_videos.get(token)
+    if p is None or not p.exists():
+        raise HTTPException(status_code=404, detail="External video not registered (re-pick the file)")
+    return p
 
 
 def _safe_name(name: str) -> str:
@@ -137,14 +182,12 @@ def probe(name: str) -> dict:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/videos/{name}/stream")
-def stream_video(name: str, request: Request) -> Response:
+def _stream_file(target: Path, request: Request) -> Response:
     """
     Range-aware streaming for the HTML5 <video> tag. We implement Range
     ourselves rather than using FileResponse because the browser will
     seek and we want efficient partial reads from large files.
     """
-    target = _resolve_inside(config.videos_dir, name)
     if not target.exists():
         raise HTTPException(status_code=404, detail="Video not found")
 
@@ -211,6 +254,131 @@ def stream_video(name: str, request: Request) -> Response:
         "Content-Type": mime,
     }
     return StreamingResponse(gen_full(), headers=headers, media_type=mime)
+
+
+@app.get("/api/videos/{name}/stream")
+def stream_video(name: str, request: Request) -> Response:
+    target = _resolve_inside(config.videos_dir, name)
+    return _stream_file(target, request)
+
+
+# ---------- external (browse-anywhere) videos ------------------------------
+
+
+@app.post("/api/videos/browse")
+def browse_video() -> dict:
+    """
+    Open a native OS file picker so the user can pick a video file from
+    anywhere on disk. Default folder is the configured videos_dir. Returns
+    the chosen file's token + metadata, or {"cancelled": true} if the user
+    closed the dialog without picking.
+
+    The picker runs in a subprocess (tkinter) so it doesn't block the
+    asyncio loop or share state with FastAPI's worker thread.
+    """
+    initial_dir = str(config.videos_dir)
+    script = textwrap.dedent(
+        """
+        import sys, tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            root.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        path = filedialog.askopenfilename(
+            initialdir=sys.argv[1],
+            title="Select Source Video",
+            filetypes=[
+                ("Video files", "*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.ts"),
+                ("All files", "*.*"),
+            ],
+        )
+        sys.stdout.write(path or "")
+        root.destroy()
+        """
+    )
+    creation_flags = 0
+    if sys.platform == "win32":
+        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", script, initial_dir],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=600,
+            creationflags=creation_flags,
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="File picker timed out")
+    if result.returncode != 0:
+        raise HTTPException(status_code=500, detail=f"File picker failed: {result.stderr.strip()[-500:]}")
+    chosen = (result.stdout or "").strip()
+    if not chosen:
+        return {"cancelled": True}
+    abs_path = _validate_video_path(Path(chosen))
+
+    # If the picked file lives directly inside videos_dir, it's no
+    # different from picking it from the list — just stream it under
+    # its bare name. The token/registry path is reserved for files
+    # outside videos_dir (or in a subfolder).
+    try:
+        rel = abs_path.relative_to(config.videos_dir.resolve())
+    except ValueError:
+        rel = None
+    if rel is not None and len(rel.parts) == 1:
+        return {
+            "kind": "local",
+            "name": rel.name,
+            "path": str(abs_path),
+            "size": abs_path.stat().st_size,
+        }
+
+    token = _register_validated_external(abs_path)
+    return {
+        "kind": "external",
+        "token": token,
+        "name": abs_path.name,
+        "path": str(abs_path),
+        "size": abs_path.stat().st_size,
+    }
+
+
+@app.post("/api/videos/external/register")
+def register_external_video(payload: dict = Body(...)) -> dict:
+    """
+    Re-register an absolute path the frontend already knows about (used
+    when loading a saved project that referenced a file outside videos_dir).
+    Tokens are session-scoped; this restores them without going through
+    the file picker again.
+    """
+    raw = (payload.get("path") or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Missing 'path' field")
+    token, abs_path = _register_external_video(Path(raw))
+    return {
+        "token": token,
+        "name": abs_path.name,
+        "path": str(abs_path),
+        "size": abs_path.stat().st_size,
+    }
+
+
+@app.get("/api/videos/external/{token}/probe")
+def probe_external(token: str) -> dict:
+    target = _resolve_external_video(token)
+    try:
+        return probe_video(target)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/videos/external/{token}/stream")
+def stream_external(token: str, request: Request) -> Response:
+    target = _resolve_external_video(token)
+    return _stream_file(target, request)
 
 
 @app.get("/api/projects")
