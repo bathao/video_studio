@@ -74,5 +74,17 @@ class Config:
     def use_hwaccel(self) -> bool:
         return bool(self._data.get("use_hwaccel", True))
 
+    @property
+    def intro_duration_seconds(self) -> float:
+        return float(self._data.get("intro_duration_seconds", 6.0))
+
+    @property
+    def intro_avatar_size_px(self) -> int:
+        return int(self._data.get("intro_avatar_size_px", 420))
+
+    @property
+    def intro_blur_sigma(self) -> int:
+        return int(self._data.get("intro_blur_sigma", 30))
+
 
 config = Config()

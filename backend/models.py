@@ -8,6 +8,11 @@ class ProjectInfo(BaseModel):
     tournament: str = ""
     p1: str = "Player 1"
     p2: str = "Player 2"
+    # Optional team / club affiliation per player. Empty by default;
+    # when both are empty the scoreboard hides the team column entirely
+    # so singles matches keep the compact two-column layout.
+    p1_team: str = ""
+    p2_team: str = ""
     video_file: str = ""
     # Best-of N format: 3, 5, or 7 sets. Lets the renderer distinguish
     # GAME POINT (next point wins this set) from MATCH POINT (next point
@@ -53,6 +58,9 @@ class RenderRequest(BaseModel):
     project_name: str
     project: ProjectData
     include_intro: bool = True
+    # "cinematic" (avatars + bg blur, default) or "text" (the original
+    # 3 s libass title card). Ignored when include_intro is False.
+    intro_style: str = "cinematic"
     include_highlights: bool = True
     include_main: bool = True
     output_name: Optional[str] = None

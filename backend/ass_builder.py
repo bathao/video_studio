@@ -59,6 +59,18 @@ def _trim_name(text: str, max_len: int = 22) -> str:
     return text
 
 
+def _trim_team(text: str, max_len: int = 14) -> str:
+    """Like `_trim_name` but returns an empty string for empty input
+    instead of a placeholder, so an unset team renders as a blank cell
+    rather than the literal word PLAYER."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    if len(text) > max_len:
+        return text[: max_len - 1].rstrip() + "…"
+    return text
+
+
 def _set_final_score(prev_p1: int, prev_p2: int, won_by: int) -> tuple[int, int]:
     """
     Recover the final score of a set from the event immediately BEFORE
@@ -114,6 +126,7 @@ C_SEP         = _ass_rgb( 75,  75,  75)   # divider lines
 C_BG_HEADER   = _ass_rgb( 35,  35,  35)   # near-black header strip
 C_BG_ROWS     = _ass_rgb( 18,  18,  18)   # near-black player rows
 C_BG_SETS     = _ass_rgb(102,  76,  24)   # gold-tinted dark for the sets (set-point) column
+C_BG_TEAM     = _ass_rgb( 70,  58,  32)   # muted gold for the optional team column (sibling of C_BG_SETS, desaturated)
 C_ACCENT_HDR  = _ass_rgb(180, 140,  40)   # gold accent for tournament header
 C_ACCENT_P1   = _ass_rgb(165, 100, 220)   # purple (player A)
 C_ACCENT_P2   = _ass_rgb( 50, 140, 220)   # sky blue (player B)
@@ -173,6 +186,8 @@ def build_scoreboard_ass(
     p2_name: str,
     score_events: Iterable[ScoreFrame],
     best_of: int = 5,
+    p1_team: str = "",
+    p2_team: str = "",
 ) -> Path:
     events = sorted(score_events, key=lambda e: e.timestamp)
     if not events or events[0].timestamp > 0.0:
@@ -182,8 +197,13 @@ def build_scoreboard_ass(
     # video_h so the panel keeps the same on-screen footprint at 2K/4K.
     scale = max(0.6, video_h / 1080.0)
 
+    # Team column appears only when at least one player has a team
+    # affiliation set — singles matches keep the compact layout.
+    has_team = bool((p1_team or "").strip() or (p2_team or "").strip())
+
     # Wider columns so the panel feels broadcast-sized, not minimap-sized.
     PAD_X      = int(14 * scale)
+    TEAM_COL   = int(130 * scale) if has_team else 0
     NAME_COL   = int(290 * scale)
     # Sets and points share the same column width — number cells should
     # match visually (only colour distinguishes them).
@@ -192,7 +212,7 @@ def build_scoreboard_ass(
     # No trailing PAD_X: the panel's right edge ends flush with the
     # right edge of the points cell so there's no "dead" strip after
     # the last column.
-    BAR_W      = PAD_X + NAME_COL + SETS_COL + PTS_COL
+    BAR_W      = PAD_X + TEAM_COL + NAME_COL + SETS_COL + PTS_COL
     ROW_H      = int(42 * scale)
     HEADER_PAD = int(6 * scale)
     HEADER_H   = (int(24 * scale) + HEADER_PAD * 2) if tournament.strip() else 0
@@ -223,7 +243,9 @@ def build_scoreboard_ass(
     hdr_y2 = y1 + HEADER_H        # bottom of header strip = top of player rows
     mid_y = hdr_y2 + ROW_H        # divider between the two player rows
 
-    col_sets_x = x1 + PAD_X + NAME_COL
+    col_team_x = x1 + PAD_X
+    col_name_x = col_team_x + TEAM_COL          # name origin shifts when team is shown
+    col_sets_x = col_name_x + NAME_COL
     col_pts_x  = col_sets_x + SETS_COL
 
     # vertical centre of each row, used for middle-anchored text
@@ -233,6 +255,8 @@ def build_scoreboard_ass(
     end_ts = total_duration + 1
     p1_safe = _ass_escape(_trim_name(p1_name))
     p2_safe = _ass_escape(_trim_name(p2_name))
+    p1_team_safe = _ass_escape(_trim_team(p1_team))
+    p2_team_safe = _ass_escape(_trim_team(p2_team))
 
     # Walk events to recover the per-set final scores and the moment the
     # match ended (when one player reaches sets_to_win). The main
@@ -281,6 +305,12 @@ def build_scoreboard_ass(
     # Player rows background.
     add_static(_rect(x1, hdr_y2, BAR_W, ROW_H * 2 + GAP_ROWS, C_BG_ROWS, alpha_hex="0C"))
 
+    # Team column tint — subtle steel-blue panel that visually anchors
+    # the optional team / club affiliation without competing with the
+    # gold sets column.
+    if has_team:
+        add_static(_rect(col_team_x, hdr_y2, TEAM_COL, ROW_H * 2 + GAP_ROWS, C_BG_TEAM, alpha_hex="0C"))
+
     # Set-point column tint — distinguishes the sets cell from the
     # points cell at a glance. Same opacity as the row bg so it reads
     # as a solid coloured cell, not a translucent overlay.
@@ -298,6 +328,8 @@ def build_scoreboard_ass(
     # only need dividers between cells, not after the last one.
     div_y_top = hdr_y2 + 6
     div_h     = ROW_H * 2 + GAP_ROWS - 12
+    if has_team:
+        add_static(_rect(col_name_x, div_y_top, SEP_COL, div_h, C_SEP, alpha_hex="00"))
     add_static(_rect(col_sets_x, div_y_top, SEP_COL, div_h, C_SEP, alpha_hex="00"))
     add_static(_rect(col_pts_x,  div_y_top, SEP_COL, div_h, C_SEP, alpha_hex="00"))
 
@@ -313,15 +345,31 @@ def build_scoreboard_ass(
             f"{{\\an4\\pos({x1 + PAD_X},{y1 + HEADER_H // 2 + GOLD_LINE // 2})\\q2{clip}}}{tag}"
         )
 
-    # Player names (static, until match end).
-    name_x = x1 + PAD_X + ACCENT_W + 6
+    # Team names (static, until match end). White + non-bold over the
+    # steel-blue tint cell — readable but visually subordinate to the
+    # bold white player name on the right. Skipped entirely when neither
+    # player has a team set, preserving the compact singles layout.
+    if has_team:
+        team_text_x = col_team_x + ACCENT_W + 6
+        for cy_row, txt in ((row1_cy, p1_team_safe), (row2_cy, p2_team_safe)):
+            if not txt:
+                continue
+            lines.append(
+                f"Dialogue: 1,{_fmt_time(0)},{_fmt_time(scoreboard_end_t)},Name,,0,0,0,,"
+                f"{{\\an4\\pos({team_text_x},{cy_row})\\q2\\b0}}{txt}"
+            )
+
+    # Player names (static, until match end). When the team column is
+    # present, names anchor just inside it (no extra accent-bar offset);
+    # otherwise they sit flush with the left accent bar.
+    name_text_x = (col_name_x + 6) if has_team else (col_team_x + ACCENT_W + 6)
     lines.append(
         f"Dialogue: 1,{_fmt_time(0)},{_fmt_time(scoreboard_end_t)},Name,,0,0,0,,"
-        f"{{\\an4\\pos({name_x},{row1_cy})\\q2}}{p1_safe}"
+        f"{{\\an4\\pos({name_text_x},{row1_cy})\\q2}}{p1_safe}"
     )
     lines.append(
         f"Dialogue: 1,{_fmt_time(0)},{_fmt_time(scoreboard_end_t)},Name,,0,0,0,,"
-        f"{{\\an4\\pos({name_x},{row2_cy})\\q2}}{p2_safe}"
+        f"{{\\an4\\pos({name_text_x},{row2_cy})\\q2}}{p2_safe}"
     )
 
     # ------------------------------------------------------------------ dynamic numbers
@@ -372,7 +420,7 @@ def build_scoreboard_ass(
     # scorer pushes the post-reset event with set++ and score = 0,0). So
     # we recover the set's final score from the previous event:
     #   prev (10, 7) → P1 scored to 11, won → cur (0, 0) with set+1
-    RECAP_DUR = 2.0
+    RECAP_DUR = 4.0
     TRANS_DUR = 4.5
 
     def _recap_score_text(p1_final: int, p2_final: int, winner: int) -> str:
@@ -496,9 +544,11 @@ def build_scoreboard_ass(
         # Reuse every constant from the live panel. The only new column
         # widths are derived from those: total sets uses the same width
         # as the live SETS column, per-set scores use the live PTS width.
+        # The team column (when present) sits to the LEFT of the name
+        # column and shifts every downstream origin by TEAM_COL.
         F_TOTAL_COL = SETS_COL
         F_SET_COL   = PTS_COL
-        F_BAR_W     = PAD_X + NAME_COL + F_TOTAL_COL + n_sets * F_SET_COL
+        F_BAR_W     = PAD_X + TEAM_COL + NAME_COL + F_TOTAL_COL + n_sets * F_SET_COL
         F_total_h   = HEADER_H + ROW_H * 2 + GAP_ROWS
 
         F_x1 = video_w - F_BAR_W - MARGIN
@@ -509,16 +559,19 @@ def build_scoreboard_ass(
         F_row1_cy = F_hdr_y2 + ROW_H // 2
         F_row2_cy = F_mid_y + GAP_ROWS + ROW_H // 2
 
-        F_name_x   = F_x1 + PAD_X + ACCENT_W + 6
-        F_total_x  = F_x1 + PAD_X + NAME_COL
+        F_team_x   = F_x1 + PAD_X
+        F_name_col_x = F_team_x + TEAM_COL
+        F_team_text_x = F_team_x + ACCENT_W + 6
+        F_name_text_x = (F_name_col_x + 6) if has_team else (F_team_x + ACCENT_W + 6)
+        F_total_x  = F_name_col_x + NAME_COL
         F_total_cx = F_total_x + F_TOTAL_COL // 2
         F_set_cxs  = [
             F_total_x + F_TOTAL_COL + i * F_SET_COL + F_SET_COL // 2
             for i in range(n_sets)
         ]
-        # Column dividers: name|total, total|s1, s1|s2, ..., s(n-1)|sn.
+        # Column dividers: [team|]name|total, total|s1, s1|s2, ..., s(n-1)|sn.
         # Right edge of the panel itself closes the last column.
-        F_div_xs = [F_total_x] + [
+        F_div_xs = ([F_name_col_x] if has_team else []) + [F_total_x] + [
             F_total_x + F_TOTAL_COL + i * F_SET_COL for i in range(n_sets)
         ]
 
@@ -545,6 +598,10 @@ def build_scoreboard_ass(
 
         lines.append(fbox(F_x1, F_hdr_y2, F_BAR_W, ROW_H * 2 + GAP_ROWS, C_BG_ROWS, alpha="0C"))
 
+        # Team column tint — steel-blue panel matching the live board.
+        if has_team:
+            lines.append(fbox(F_team_x, F_hdr_y2, TEAM_COL, ROW_H * 2 + GAP_ROWS, C_BG_TEAM, alpha="0C"))
+
         # Tint just the totals column to mirror the live SETS-column
         # highlight; per-set columns stay on the plain row bg.
         lines.append(fbox(F_total_x, F_hdr_y2, F_TOTAL_COL, ROW_H * 2 + GAP_ROWS, C_BG_SETS, alpha="0C"))
@@ -567,10 +624,19 @@ def build_scoreboard_ass(
                 f"\\q2{clip}{fade}}}{tag}"
             )
 
+        if has_team:
+            for cy_row, txt in ((F_row1_cy, p1_team_safe), (F_row2_cy, p2_team_safe)):
+                if not txt:
+                    continue
+                lines.append(
+                    f"Dialogue: 7,{_fmt_time(F_start)},{_fmt_time(F_end)},Name,,0,0,0,,"
+                    f"{{\\an4\\pos({F_team_text_x},{cy_row})\\q2{fade}\\b0}}{txt}"
+                )
+
         for cy_row, name in ((F_row1_cy, p1_safe), (F_row2_cy, p2_safe)):
             lines.append(
                 f"Dialogue: 7,{_fmt_time(F_start)},{_fmt_time(F_end)},Name,,0,0,0,,"
-                f"{{\\an4\\pos({F_name_x},{cy_row})\\q2{fade}}}{name}"
+                f"{{\\an4\\pos({F_name_text_x},{cy_row})\\q2{fade}}}{name}"
             )
 
         for cy_row, total in ((F_row1_cy, final_p1_sets), (F_row2_cy, final_p2_sets)):
@@ -974,6 +1040,148 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     # Bottom accent line — wipes outward from centre after the names.
     lines.append(_line_dialogue(start_ms=900, fade_in=300, fade_out=500, y=bot_line_y))
+
+    output_path.write_text("\n".join(lines), encoding="utf-8")
+    return output_path
+
+
+# ---------------------------------------------------------------------------
+# Cinematic intro (avatar slide-in companion)
+# ---------------------------------------------------------------------------
+
+def build_cinematic_intro_ass(
+    *,
+    output_path: Path,
+    video_w: int,
+    video_h: int,
+    duration: float,
+    tournament: str,
+    p1_name: str,
+    p2_name: str,
+    avatar_size_px: int,
+) -> Path:
+    """
+    Text overlays for the cinematic intro. Layout assumes the caller's
+    ffmpeg filter graph is rendering two avatars at x = W*0.27 and W*0.73,
+    centred vertically with a +80 px y-offset (matches `intro_builder.py`).
+
+        ┌────────────────────────────────────────────┐
+        │                                            │
+        │            TOURNAMENT NAME                 │ ← top
+        │                                            │
+        │     ⬤  Avatar1   VS   Avatar2 ⬤           │
+        │                                            │
+        │     P1 NAME              P2 NAME           │
+        │                                            │
+        └────────────────────────────────────────────┘
+
+    Timing — chosen to cooperate with the slide-in (settles at t=1.0):
+      0.0s  Tournament fades in
+      0.7s  Player names fade in below the still-moving avatars
+      1.1s  "VS" fades in + scales 80 → 100% over 0.4s
+      DUR-0.5  Everything fades out
+    """
+    scale = max(0.6, video_h / 1080.0)
+    fs_tournament = max(36, int(64 * scale))
+    fs_name       = max(28, int(52 * scale))
+    fs_vs         = max(48, int(96 * scale))
+
+    cx = video_w // 2
+    # Avatar centre Y = (H-h)/2 + 80 + h/2 = H/2 + 80. The text rows sit
+    # above and below that.
+    avatar_cy = video_h // 2 + 80
+    avatar_half = avatar_size_px // 2
+
+    tournament_y = max(int(80 * scale), avatar_cy - avatar_half - int(70 * scale))
+    name_y       = avatar_cy + avatar_half + int(50 * scale)
+    p1_cx        = int(video_w * 0.27)
+    p2_cx        = int(video_w * 0.73)
+    vs_cy        = avatar_cy
+
+    end_time = _fmt_time(duration)
+    out_fade_start_ms = int(max(0.0, duration - 0.5) * 1000)
+
+    title_safe = _ass_escape(_trim_title(tournament)) if tournament.strip() else ""
+    p1_safe    = _ass_escape(p1_name.strip() or "Player 1")
+    p2_safe    = _ass_escape(p2_name.strip() or "Player 2")
+
+    header = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: {video_w}
+PlayResY: {video_h}
+WrapStyle: 2
+ScaledBorderAndShadow: yes
+YCbCr Matrix: TV.709
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Tournament, Arial, {fs_tournament}, {C_GOLD_BRIGHT}, &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 4, 0, 1, 3, 2, 5, 0, 0, 0, 1
+Style: Name,       Arial, {fs_name},       {C_WHITE},       &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 2, 0, 1, 2, 2, 5, 0, 0, 0, 1
+Style: VS,         Arial, {fs_vs},         {C_GOLD_BRIGHT}, &H000000FF, &H00000000, &H80000000, -1, 1, 0, 0, 100, 100, 6, 0, 1, 4, 3, 5, 0, 0, 0, 1
+Style: Box,        Arial, 1,               {C_WHITE},       &H000000FF, &H00000000, &H80000000,  0, 0, 0, 0, 100, 100, 0, 0, 1, 0, 0, 7, 0, 0, 0, 1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+
+    lines: list[str] = [header]
+
+    if title_safe:
+        lines.append(
+            f"Dialogue: 1,0:00:00.00,{end_time},Tournament,,0,0,0,,"
+            f"{{\\an5\\pos({cx},{tournament_y})\\fad(500,500)}}{title_safe}"
+        )
+
+        # Gold underline that wipes in below the tournament name at t=2 s.
+        # This is the deliberate "beat" that breaks up the otherwise
+        # static hold from t≈1.5 s onward.
+        gold_bgr = _bgr(C_GOLD)
+        line_w = max(280, int(520 * scale))
+        line_h = max(2, int(3 * scale))
+        line_y = tournament_y + int(48 * scale)
+        lines.append(
+            f"Dialogue: 0,0:00:02.00,{end_time},Box,,0,0,0,,"
+            f"{{\\an5\\pos({cx},{line_y})\\fad(200,500)"
+            f"\\fscx0\\t(0,600,\\fscx100)\\bord0\\shad0"
+            f"\\1c&H{gold_bgr}&\\1a&H00&\\p1}}"
+            f"m {-line_w // 2} 0 l {line_w // 2} 0 "
+            f"l {line_w // 2} {line_h} l {-line_w // 2} {line_h}{{\\p0}}"
+        )
+
+    # Player names — fade in @ 0.7 s while avatars are still sliding,
+    # locking in by the time avatars settle at t=1.0 s. Fade-out spans
+    # the last ~3 s (capped at half the intro) so the names ease out
+    # slowly instead of snapping off — gives the wind-down a graceful
+    # feel rather than a hard cut.
+    name_fadeout_ms = max(800, min(3000, int(duration * 500)))
+    lines.append(
+        f"Dialogue: 1,0:00:00.70,{end_time},Name,,0,0,0,,"
+        f"{{\\an5\\pos({p1_cx},{name_y})\\fad(400,{name_fadeout_ms})}}{p1_safe}"
+    )
+    lines.append(
+        f"Dialogue: 1,0:00:00.70,{end_time},Name,,0,0,0,,"
+        f"{{\\an5\\pos({p2_cx},{name_y})\\fad(400,{name_fadeout_ms})}}{p2_safe}"
+    )
+
+    # "VS" centred between avatars — fades in just after both avatars
+    # settle, scales 80→100 % to pop into place, then gentle 100→105→100
+    # pulses every 2 s through the hold phase so the centre of the card
+    # never feels frozen.
+    vs_dialog_start = 1.1
+    pulse_chain = ""
+    pulse_t = 3.0
+    while pulse_t < duration - 0.8:
+        offset_ms = int((pulse_t - vs_dialog_start) * 1000)
+        pulse_chain += (
+            f"\\t({offset_ms},{offset_ms + 250},\\fscx105\\fscy105)"
+            f"\\t({offset_ms + 250},{offset_ms + 550},\\fscx100\\fscy100)"
+        )
+        pulse_t += 2.0
+    lines.append(
+        f"Dialogue: 2,0:00:01.10,{end_time},VS,,0,0,0,,"
+        f"{{\\an5\\pos({cx},{vs_cy})\\fad(300,500)"
+        f"\\fscx80\\fscy80\\t(0,400,\\fscx100\\fscy100){pulse_chain}}}vs"
+    )
 
     output_path.write_text("\n".join(lines), encoding="utf-8")
     return output_path

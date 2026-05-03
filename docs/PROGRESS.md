@@ -63,7 +63,11 @@ Last update: 2026-05-03
 - ✅ Trim segments (T/Y or manual)
 
 ### Render pipeline
-- ✅ Intro (3 s title card via `lavfi color` + `drawtext`)
+- ✅ Intro (4 s default; cinematic avatar card with blurred-source bg,
+      circular-masked player photos sliding in from both sides, gold
+      tournament line, slow Ken-Burns bg zoom, avatar bobbing, "VS"
+      pulse, slow name fade-out — falls back to text-only intro when
+      no avatar/placeholder is on disk)
 - ✅ Highlight reel (per-clip ffmpeg with input seeking + 2× slow-mo on tail)
 - ✅ Main match (multi-input ffmpeg with input seeking, scoreboard burned via `ass=`)
 - ✅ Final concat (concat demuxer, no re-encode)

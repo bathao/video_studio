@@ -46,7 +46,10 @@
         <div class="relative bg-black aspect-video">
           <video id="player" class="w-full h-full" preload="metadata" playsinline></video>
           <div class="absolute top-2 left-2 px-2 py-1 rounded bg-black/60 text-xs font-mono" id="hud-time">0:00.00 / 0:00.00</div>
-          <div id="hud-hl" class="absolute top-2 right-2 px-2 py-1 rounded bg-danger-500 text-xs font-bold hidden">● HIGHLIGHT</div>
+          <div class="absolute top-2 right-2 flex flex-col gap-1 items-end">
+            <div id="hud-hl" class="px-2 py-1 rounded bg-danger-500 text-xs font-bold hidden">● HIGHLIGHT</div>
+            <div id="hud-trim" class="px-2 py-1 rounded bg-warn-400 text-ink-950 text-xs font-bold hidden">▶ TRIM START</div>
+          </div>
         </div>
         <div class="px-3 py-2 flex items-center gap-1 flex-wrap text-sm">
           <button class="btn-ctl" data-skip="-10">-10s</button>
@@ -87,10 +90,22 @@
               <input id="in-tournament" class="ipt" placeholder="Spring Open 2026" />
             </label>
             <label class="lbl">Player 1 (Left, key A)
-              <input id="in-p1" class="ipt" placeholder="Player 1" value="Player 1" />
+              <div class="flex items-center gap-2">
+                <input id="in-p1" class="ipt flex-1 min-w-0" placeholder="Player 1" value="Player 1" />
+                <img id="thumb-p1" alt="" class="w-10 h-10 rounded-full object-cover bg-ink-800 border border-ink-700 opacity-30 shrink-0" />
+              </div>
+            </label>
+            <label class="lbl">Team 1 (optional, for team matches)
+              <input id="in-p1-team" class="ipt" placeholder="—" />
             </label>
             <label class="lbl">Player 2 (Right, key D)
-              <input id="in-p2" class="ipt" placeholder="Player 2" value="Player 2" />
+              <div class="flex items-center gap-2">
+                <input id="in-p2" class="ipt flex-1 min-w-0" placeholder="Player 2" value="Player 2" />
+                <img id="thumb-p2" alt="" class="w-10 h-10 rounded-full object-cover bg-ink-800 border border-ink-700 opacity-30 shrink-0" />
+              </div>
+            </label>
+            <label class="lbl">Team 2 (optional, for team matches)
+              <input id="in-p2-team" class="ipt" placeholder="—" />
             </label>
             <label class="lbl">Source video
               <div class="flex gap-2">
@@ -144,7 +159,8 @@
         <section class="panel col-span-4">
           <h2 class="panel-h">Render</h2>
           <div class="space-y-2 text-sm">
-            <label class="flex items-center gap-2"><input type="checkbox" id="opt-intro" checked> Intro (3s title card)</label>
+            <label class="flex items-center gap-2"><input type="checkbox" id="opt-intro-cinematic" checked> Intro: cinematic (4s, avatars + bg blur)</label>
+            <label class="flex items-center gap-2"><input type="checkbox" id="opt-intro-text"> Intro: text only (3s, classic title card)</label>
             <label class="flex items-center gap-2"><input type="checkbox" id="opt-hl" checked> Highlight reel</label>
             <label class="flex items-center gap-2"><input type="checkbox" id="opt-main" checked> Main match + scoreboard</label>
             <label class="lbl mt-1">Output filename

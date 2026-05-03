@@ -23,8 +23,26 @@ const fmt = (s) => {
   return `${m}:${sec.toFixed(2).padStart(5, '0')}`;
 };
 
+// Inverse of fmt(): "1:23.45" -> 83.45, "23.45" -> 23.45, "1:23" -> 83.
+// Returns NaN for invalid input so callers can detect parse failure and
+// revert the displayed value.
+function parseTimecode(str) {
+  if (str == null) return NaN;
+  const s = String(str).trim();
+  if (!s) return NaN;
+  const parts = s.split(':');
+  if (parts.length === 1) return parseFloat(parts[0]);
+  if (parts.length === 2) {
+    const m = parseInt(parts[0], 10);
+    const sec = parseFloat(parts[1]);
+    if (!isFinite(m) || !isFinite(sec)) return NaN;
+    return m * 60 + sec;
+  }
+  return NaN;
+}
+
 const project = {
-  info: { tournament: '', p1: 'Player 1', p2: 'Player 2', video_file: '', best_of: 5 },
+  info: { tournament: '', p1: 'Player 1', p2: 'Player 2', p1_team: '', p2_team: '', video_file: '', best_of: 5 },
   trim_segments: [],
   highlights: [],
   score_events: [],
@@ -437,12 +455,12 @@ function toggleSlowmoOnLastHighlight() {
 
 function addManualHighlight() {
   const t = player.currentTime;
-  const startStr = prompt('Start time (s)', t.toFixed(2));
+  const startStr = prompt('Start time (m:ss.xx)', fmt(t));
   if (startStr === null) return;
-  const endStr = prompt('End time (s)', (t + 6).toFixed(2));
+  const endStr = prompt('End time (m:ss.xx)', fmt(t + 6));
   if (endStr === null) return;
-  const start = parseFloat(startStr);
-  const end = parseFloat(endStr);
+  const start = parseTimecode(startStr);
+  const end = parseTimecode(endStr);
   if (!isFinite(start) || !isFinite(end) || end <= start) {
     toast('Invalid range');
     return;
@@ -475,6 +493,7 @@ let pendingTrimStart = null;
 function markTrimStart() {
   if (!player.duration) return toast('Load a video first');
   pendingTrimStart = player.currentTime;
+  $('hud-trim').classList.remove('hidden');
   toast(`Trim start @ ${fmt(pendingTrimStart)}`);
 }
 
@@ -483,6 +502,7 @@ function markTrimEnd() {
   const start = pendingTrimStart;
   const end = player.currentTime;
   pendingTrimStart = null;
+  $('hud-trim').classList.add('hidden');
   if (end <= start) {
     toast('Trim end must be after start');
     return;
@@ -494,12 +514,12 @@ function markTrimEnd() {
 }
 
 function addManualTrim() {
-  const startStr = prompt('Trim start (s)', '0');
+  const startStr = prompt('Trim start (m:ss.xx)', fmt(0));
   if (startStr === null) return;
-  const endStr = prompt('Trim end (s)', '60');
+  const endStr = prompt('Trim end (m:ss.xx)', fmt(60));
   if (endStr === null) return;
-  const start = parseFloat(startStr);
-  const end = parseFloat(endStr);
+  const start = parseTimecode(startStr);
+  const end = parseTimecode(endStr);
   if (!isFinite(start) || !isFinite(end) || end <= start) {
     toast('Invalid range');
     return;
@@ -530,16 +550,26 @@ function syncHighlights() {
     li.className = 'list-row';
     li.innerHTML = `
       <span class="font-mono text-accent-400 text-[11px]">#${i + 1}</span>
-      <input type="number" step="0.05" value="${h.start.toFixed(2)}" class="ipt w-20 text-[11px] py-0.5" data-field="start" />
+      <input type="text" value="${fmt(h.start)}" class="ipt w-20 text-[11px] py-0.5 font-mono" data-field="start" title="m:ss.xx" />
       <span class="text-slate-500">→</span>
-      <input type="number" step="0.05" value="${h.end.toFixed(2)}" class="ipt w-20 text-[11px] py-0.5" data-field="end" />
+      <input type="text" value="${fmt(h.end)}" class="ipt w-20 text-[11px] py-0.5 font-mono" data-field="end" title="m:ss.xx" />
       <label class="flex items-center gap-1 ml-1"><input type="checkbox" data-field="slow_mo" ${h.slow_mo ? 'checked' : ''}/>slow</label>
       <button class="text-slate-400 hover:text-accent-400 ml-auto" title="Jump to start" data-jump>↦</button>
       <button class="text-slate-400 hover:text-danger-500" title="Delete" data-del>✕</button>
     `;
     li.querySelectorAll('input').forEach((el) => {
-      el.addEventListener('change', () => setHighlightField(i, el.dataset.field,
-        el.type === 'checkbox' ? el.checked : el.value));
+      el.addEventListener('change', () => {
+        if (el.type === 'checkbox') {
+          setHighlightField(i, el.dataset.field, el.checked);
+          return;
+        }
+        const v = parseTimecode(el.value);
+        if (isFinite(v) && v >= 0) {
+          setHighlightField(i, el.dataset.field, v);
+        } else {
+          syncHighlights();  // bad input — revert displayed value
+        }
+      });
     });
     li.querySelector('[data-jump]').addEventListener('click', () => {
       player.currentTime = h.start;
@@ -559,16 +589,21 @@ function syncTrims() {
     li.className = 'list-row';
     li.innerHTML = `
       <span class="font-mono text-warn-400 text-[11px]">#${i + 1}</span>
-      <input type="number" step="0.05" value="${t.start.toFixed(2)}" class="ipt w-20 text-[11px] py-0.5" data-field="start" />
+      <input type="text" value="${fmt(t.start)}" class="ipt w-20 text-[11px] py-0.5 font-mono" data-field="start" title="m:ss.xx" />
       <span class="text-slate-500">→</span>
-      <input type="number" step="0.05" value="${t.end.toFixed(2)}" class="ipt w-20 text-[11px] py-0.5" data-field="end" />
+      <input type="text" value="${fmt(t.end)}" class="ipt w-20 text-[11px] py-0.5 font-mono" data-field="end" title="m:ss.xx" />
       <button class="text-slate-400 hover:text-accent-400 ml-auto" title="Jump to start" data-jump>↦</button>
       <button class="text-slate-400 hover:text-danger-500" title="Delete" data-del>✕</button>
     `;
     li.querySelectorAll('input').forEach((el) => {
       el.addEventListener('change', () => {
+        const v = parseTimecode(el.value);
+        if (!isFinite(v) || v < 0) {
+          syncTrims();  // bad input — revert displayed value
+          return;
+        }
         snapshot();
-        project.trim_segments[i][el.dataset.field] = parseFloat(el.value);
+        project.trim_segments[i][el.dataset.field] = v;
         syncTrims();
       });
     });
@@ -618,15 +653,40 @@ function syncInfoFromInputs() {
   project.info.tournament = $('in-tournament').value;
   project.info.p1 = $('in-p1').value;
   project.info.p2 = $('in-p2').value;
+  project.info.p1_team = $('in-p1-team').value;
+  project.info.p2_team = $('in-p2-team').value;
   project.info.best_of = parseInt($('in-best-of').value, 10) || 5;
   $('lbl-p1').textContent = (project.info.p1 || 'P1').toUpperCase();
   $('lbl-p2').textContent = (project.info.p2 || 'P2').toUpperCase();
+}
+
+// Debounced thumbnail loader: when the player name changes, look up
+// `assets/avatars/<name>/`. The cache-buster in the URL forces a refresh
+// when the user replaces the file on disk without restarting the server.
+const _thumbDebounce = { p1: 0, p2: 0 };
+function refreshAvatarThumb(slot) {
+  const input = $(`in-${slot}`);
+  const img = $(`thumb-${slot}`);
+  const name = (input.value || '').trim();
+  clearTimeout(_thumbDebounce[slot]);
+  _thumbDebounce[slot] = setTimeout(() => {
+    if (!name) {
+      img.removeAttribute('src');
+      img.classList.add('opacity-30');
+      return;
+    }
+    img.onload  = () => img.classList.remove('opacity-30');
+    img.onerror = () => { img.removeAttribute('src'); img.classList.add('opacity-30'); };
+    img.src = `/api/avatars/${encodeURIComponent(name)}/preview?t=${Date.now()}`;
+  }, 350);
 }
 
 function syncAllUI() {
   $('in-tournament').value = project.info.tournament || '';
   $('in-p1').value = project.info.p1 || '';
   $('in-p2').value = project.info.p2 || '';
+  $('in-p1-team').value = project.info.p1_team || '';
+  $('in-p2-team').value = project.info.p2_team || '';
   $('in-best-of').value = String(project.info.best_of || 5);
   const vf = project.info.video_file || '';
   if (vf) {
@@ -643,9 +703,13 @@ function syncAllUI() {
   syncTrims();
   syncEvents();
   syncInfoFromInputs();
+  refreshAvatarThumb('p1');
+  refreshAvatarThumb('p2');
 }
 
-['in-tournament', 'in-p1', 'in-p2'].forEach((id) =>
+$('in-p1').addEventListener('input', () => refreshAvatarThumb('p1'));
+$('in-p2').addEventListener('input', () => refreshAvatarThumb('p2'));
+['in-tournament', 'in-p1', 'in-p2', 'in-p1-team', 'in-p2-team'].forEach((id) =>
   $(id).addEventListener('input', syncInfoFromInputs)
 );
 $('in-best-of').addEventListener('change', syncInfoFromInputs);
@@ -727,10 +791,13 @@ async function startRender() {
   syncInfoFromInputs();
   if (!project.info.video_file) return toast('Pick a video first');
   const name = ($('in-project').value || 'match').trim();
+  const cinematic = $('opt-intro-cinematic').checked;
+  const textIntro = $('opt-intro-text').checked;
   const body = {
     project_name: name,
     project,
-    include_intro: $('opt-intro').checked,
+    include_intro: cinematic || textIntro,
+    intro_style: cinematic ? 'cinematic' : 'text',
     include_highlights: $('opt-hl').checked,
     include_main: $('opt-main').checked,
     output_name: $('in-output').value || null,
@@ -787,6 +854,16 @@ function pollRender(jobId) {
 }
 
 $('btn-render').addEventListener('click', startRender);
+
+// Intro style — radio-like behaviour: ticking one auto-unticks the
+// other so cinematic and text never run simultaneously. Both can
+// remain unticked → no intro at all.
+$('opt-intro-cinematic').addEventListener('change', (e) => {
+  if (e.target.checked) $('opt-intro-text').checked = false;
+});
+$('opt-intro-text').addEventListener('change', (e) => {
+  if (e.target.checked) $('opt-intro-cinematic').checked = false;
+});
 $('btn-open-output').addEventListener('click', async () => {
   await fetch('/api/output-folder/open', { method: 'POST' });
 });

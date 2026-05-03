@@ -12,6 +12,9 @@
   "rc": "vbr",
   "cq": 21,
   "use_hwaccel": true,
+  "intro_duration_seconds": 4.0,
+  "intro_avatar_size_px": 420,
+  "intro_blur_sigma": 30,
   "host": "127.0.0.1",
   "port": 8765
 }

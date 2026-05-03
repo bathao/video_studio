@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from .avatars import find_avatar
 from .config import config
 from .ffmpeg_runner import probe_video
 from .models import ProjectData, RenderRequest
@@ -381,6 +382,37 @@ def stream_external(token: str, request: Request) -> Response:
     return _stream_file(target, request)
 
 
+# ---------- avatars ---------------------------------------------------------
+
+
+_AVATAR_MIME = {
+    ".png":  "image/png",
+    ".jpg":  "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
+
+
+@app.get("/api/avatars/{name}")
+def avatar_status(name: str) -> dict:
+    """Tells the UI whether an avatar exists for this player name. Used
+    for the live thumbnail preview next to the name input."""
+    p = find_avatar(name)
+    return {"name": name, "exists": p is not None, "path": str(p) if p else None}
+
+
+@app.get("/api/avatars/{name}/preview")
+def avatar_preview(name: str) -> Response:
+    p = find_avatar(name)
+    if not p:
+        raise HTTPException(status_code=404, detail="No avatar")
+    mime = _AVATAR_MIME.get(p.suffix.lower(), "application/octet-stream")
+    return FileResponse(str(p), media_type=mime)
+
+
+# ---------- projects --------------------------------------------------------
+
+
 @app.get("/api/projects")
 def list_projects() -> dict:
     items = []
@@ -467,6 +499,7 @@ def start_render(req: RenderRequest) -> dict:
         project=req.project,
         project_name=name,
         include_intro=req.include_intro,
+        intro_style=req.intro_style,
         include_highlights=req.include_highlights,
         include_main=req.include_main,
         output_name=req.output_name,

@@ -34,6 +34,7 @@ from .ass_builder import (
     build_scoreboard_ass,
     build_transition_ass,
 )
+from .avatars import find_avatar_or_default
 from .config import config
 from .ffmpeg_runner import (
     FFmpegError,
@@ -41,6 +42,7 @@ from .ffmpeg_runner import (
     probe_video,
     run_ffmpeg_with_progress,
 )
+from .intro_builder import render_cinematic_intro
 from .models import Highlight, ProjectData, ScoreEvent, TrimSegment
 
 SLOWMO_TAIL_SECONDS = 2.5  # length of the slow-motion tail per highlight
@@ -555,6 +557,7 @@ class RenderPlan:
     project: ProjectData
     project_name: str
     include_intro: bool = True
+    intro_style: str = "cinematic"   # "cinematic" | "text"
     include_highlights: bool = True
     include_main: bool = True
     output_name: Optional[str] = None
@@ -642,16 +645,43 @@ def run_render(plan: RenderPlan) -> None:
 
         if plan.include_intro:
             intro_path = job_dir / "intro.mp4"
-            render_intro(
-                out_path=intro_path,
-                width=width,
-                height=height,
-                fps=fps,
-                tournament=plan.project.info.tournament,
-                p1=plan.project.info.p1,
-                p2=plan.project.info.p2,
-                on_progress=make_progress("intro", weight_lookup["intro"]),
-            )
+            style = (plan.intro_style or "cinematic").lower()
+            use_cinematic = style != "text"
+            p1_photo = p2_photo = None
+            p1_default = p2_default = False
+            if use_cinematic:
+                p1_photo, p1_default = find_avatar_or_default(plan.project.info.p1)
+                p2_photo, p2_default = find_avatar_or_default(plan.project.info.p2)
+            if use_cinematic and p1_photo and p2_photo:
+                render_cinematic_intro(
+                    out_path=intro_path,
+                    src=src,
+                    width=width, height=height, fps=fps,
+                    tournament=plan.project.info.tournament,
+                    p1_name=plan.project.info.p1, p1_avatar=p1_photo,
+                    p2_name=plan.project.info.p2, p2_avatar=p2_photo,
+                    on_progress=make_progress("intro", weight_lookup["intro"]),
+                )
+                missing = []
+                if p1_default: missing.append(plan.project.info.p1)
+                if p2_default: missing.append(plan.project.info.p2)
+                if missing:
+                    s.message = (
+                        f"Cinematic intro used the default placeholder for "
+                        f"{', '.join(missing)} — drop a real photo into "
+                        f"assets/avatars/ when you have one."
+                    )
+            else:
+                # User picked text intro, OR cinematic was requested but
+                # the default placeholder is missing too.
+                render_intro(
+                    out_path=intro_path,
+                    width=width, height=height, fps=fps,
+                    tournament=plan.project.info.tournament,
+                    p1=plan.project.info.p1,
+                    p2=plan.project.info.p2,
+                    on_progress=make_progress("intro", weight_lookup["intro"]),
+                )
             parts.append(intro_path)
             completed_weight += weight_lookup["intro"]
 
@@ -706,6 +736,8 @@ def run_render(plan: RenderPlan) -> None:
                 tournament=plan.project.info.tournament,
                 p1_name=plan.project.info.p1,
                 p2_name=plan.project.info.p2,
+                p1_team=plan.project.info.p1_team,
+                p2_team=plan.project.info.p2_team,
                 score_events=remapped_events,
                 best_of=plan.project.info.best_of,
             )
@@ -750,6 +782,15 @@ def run_render(plan: RenderPlan) -> None:
         s.stage = "done"
         s.message = "Render complete"
         s.output_path = str(final_path)
+
+        # Drop the per-job temp dir now that the final mp4 is safely in
+        # output/. We only do this on success — on error we keep the
+        # intermediate .ass / .mp4 / .concat.txt files so the operator
+        # (or a developer) can inspect what ffmpeg was actually fed.
+        try:
+            shutil.rmtree(job_dir)
+        except OSError:
+            pass  # file still locked (antivirus / open in player) — leave it
     except FFmpegError as e:
         s.status = "error"
         s.error = str(e)

@@ -12,9 +12,10 @@ indicator: 🟢 quick (<1h), 🟡 medium (~half-day), 🔴 large (1+ day).
       `RenderState.cancel_requested` already exists but is never read by
       `run_ffmpeg_with_progress`. Wire `proc.terminate()` when the flag flips.
       Add `POST /api/render/{job_id}/cancel`.
-- [ ] 🟢 **Cleanup `temp/<job_id>` after success**
-      Currently temp grows forever. Delete on `status=done`; keep on
-      `status=error` for debugging.
+- [x] 🟢 **Cleanup `temp/<job_id>` after success** — done.
+      `run_render` now `shutil.rmtree`s the job dir once the final mp4
+      lands in `output/`. Errors still leave temp untouched so the
+      operator can inspect the failed ffmpeg inputs.
 - [ ] 🟡 **Scoreboard preview in the UI**
       A small toggle that overlays the current scoreboard graphic on the
       live `<video>` element so the user can sanity-check the layout
