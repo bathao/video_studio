@@ -660,6 +660,8 @@ def run_render(plan: RenderPlan) -> None:
                     tournament=plan.project.info.tournament,
                     p1_name=plan.project.info.p1, p1_avatar=p1_photo,
                     p2_name=plan.project.info.p2, p2_avatar=p2_photo,
+                    p1_team=plan.project.info.p1_team,
+                    p2_team=plan.project.info.p2_team,
                     on_progress=make_progress("intro", weight_lookup["intro"]),
                 )
                 missing = []

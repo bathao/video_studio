@@ -1059,6 +1059,8 @@ def build_cinematic_intro_ass(
     p1_name: str,
     p2_name: str,
     avatar_size_px: int,
+    p1_team: str = "",
+    p2_team: str = "",
 ) -> Path:
     """
     Text overlays for the cinematic intro. Layout assumes the caller's
@@ -1162,6 +1164,25 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         f"Dialogue: 1,0:00:00.70,{end_time},Name,,0,0,0,,"
         f"{{\\an5\\pos({p2_cx},{name_y})\\fad(400,{name_fadeout_ms})}}{p2_safe}"
     )
+
+    # Team labels — only when BOTH players have a team affiliation set.
+    # Renders gold-italic + non-bold just above each player name so the
+    # team reads as elegant context, subordinate to the player. Skipped
+    # entirely for singles to keep the intro uncluttered.
+    p1_team_safe = _trim_team(p1_team, max_len=20)
+    p2_team_safe = _trim_team(p2_team, max_len=20)
+    if p1_team_safe and p2_team_safe:
+        fs_team = max(22, int(36 * scale))
+        team_y = name_y - int(38 * scale)
+        for cx_team, txt in (
+            (p1_cx, _ass_escape(p1_team_safe)),
+            (p2_cx, _ass_escape(p2_team_safe)),
+        ):
+            lines.append(
+                f"Dialogue: 1,0:00:00.70,{end_time},Name,,0,0,0,,"
+                f"{{\\an5\\pos({cx_team},{team_y})\\fad(400,{name_fadeout_ms})"
+                f"\\fs{fs_team}\\c{C_GOLD_BRIGHT}\\i1\\b0}}{txt}"
+            )
 
     # "VS" centred between avatars — fades in just after both avatars
     # settle, scales 80→100 % to pop into place, then gentle 100→105→100

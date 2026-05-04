@@ -94,6 +94,8 @@ def render_cinematic_intro(
     p2_name: str, p2_avatar: Path,
     on_progress: Callable[[float, str], None],
     duration: float | None = None,
+    p1_team: str = "",
+    p2_team: str = "",
 ) -> float:
     """Render a cinematic intro clip and return its duration."""
     duration = duration if duration is not None else config.intro_duration_seconds
@@ -116,6 +118,7 @@ def render_cinematic_intro(
         duration=duration,
         tournament=tournament,
         p1_name=p1_name, p2_name=p2_name,
+        p1_team=p1_team, p2_team=p2_team,
         avatar_size_px=asize,
     )
     ass_arg = escape_ffmpeg_filter_path(ass_path)
