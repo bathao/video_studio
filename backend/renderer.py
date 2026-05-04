@@ -546,235 +546,313 @@ class RenderPlan:
     state: RenderState = field(default_factory=lambda: RenderState(job_id=uuid.uuid4().hex[:12]))
 
 
+@dataclass
+class RenderContext:
+    """Shared state passed between the per-stage helpers below.
+
+    Built once by `_prepare_context` (probe + trim/event remap +
+    weight table) and threaded through `_intro_stage`, `_highlight_stage`,
+    `_bridge_stage`, `_main_stage`, `_finalize`. Each stage may append to
+    `parts` and bump `completed_weight`; `make_progress` reads both at
+    callback time, so progress fractions stay correct as the pipeline
+    advances.
+    """
+    plan: RenderPlan
+    state: RenderState
+    src: Path
+    width: int
+    height: int
+    fps: float
+    has_audio: bool
+    kept: list[tuple[float, float]]
+    remapped_events: list[ScoreFrame]
+    job_dir: Path
+    weight_lookup: dict[str, float]
+    parts: list[Path] = field(default_factory=list)
+    completed_weight: float = 0.0
+
+    def make_progress(self, stage_name: str) -> Callable[[float, str], None]:
+        """Return a (frac, msg) callback that updates the shared
+        RenderState with this stage's contribution to overall progress."""
+        weight = self.weight_lookup.get(stage_name, 0.0)
+        state = self.state
+        ctx = self
+
+        def cb(frac: float, msg: str) -> None:
+            if state.cancel_requested:
+                return
+            state.stage = stage_name
+            state.message = msg
+            state.progress = ctx.completed_weight + weight * max(0.0, min(1.0, frac))
+
+        return cb
+
+
+def _resolve_source(plan: RenderPlan) -> Path:
+    """Resolve the project's video_file to an existing absolute Path,
+    accepting either a bare filename inside videos_dir or an absolute
+    path picked via the native file picker."""
+    vf = plan.project.info.video_file
+    if not vf:
+        raise FFmpegError("No source video selected in project")
+    vf_path = Path(vf)
+    src = vf_path if vf_path.is_absolute() else (config.videos_dir / vf)
+    if not src.exists():
+        raise FFmpegError(f"Source video not found: {src}")
+    return src
+
+
+def _prepare_context(plan: RenderPlan) -> RenderContext:
+    """Probe the source, compute trim-derived state, allocate the temp
+    directory and the per-stage weight table that drives progress
+    reporting."""
+    s = plan.state
+    src = _resolve_source(plan)
+
+    s.stage = "probe"
+    s.message = f"probing {src.name}"
+    probe = probe_video(src)
+    width = probe["width"]
+    height = probe["height"]
+    fps = probe["fps"]
+    duration = probe["duration"]
+    has_audio = probe["has_audio"]
+
+    kept = kept_segments_from_trims(duration, plan.project.trim_segments)
+    if not kept and plan.include_main:
+        raise FFmpegError("All content was removed by trim segments")
+
+    # Remap score events from source time → trimmed-main time.
+    remapped_events: list[ScoreFrame] = []
+    for ev in plan.project.score_events:
+        t = remap_score_event_to_trimmed(ev.timestamp, kept)
+        if t is None:
+            continue
+        remapped_events.append(
+            ScoreFrame(
+                timestamp=t,
+                p1_score=ev.p1_score,
+                p2_score=ev.p2_score,
+                p1_set=ev.p1_set,
+                p2_set=ev.p2_set,
+            )
+        )
+
+    job_dir = config.temp_dir / s.job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    # Stage weights for the unified 0..1 progress fraction. Concat is
+    # always present; intro/highlight/main only contribute when their
+    # stages will actually run.
+    weights: list[tuple[str, float]] = []
+    if plan.include_intro:
+        weights.append(("intro", 0.05))
+    if plan.include_highlights and plan.project.highlights:
+        weights.append(("highlight", 0.25))
+    if plan.include_main:
+        weights.append(("main", 0.65))
+    weights.append(("concat", 0.05))
+    total = sum(w for _, w in weights)
+    weight_lookup = {n: w / total for n, w in weights}
+
+    return RenderContext(
+        plan=plan, state=s, src=src,
+        width=width, height=height, fps=fps,
+        has_audio=has_audio,
+        kept=kept,
+        remapped_events=remapped_events,
+        job_dir=job_dir,
+        weight_lookup=weight_lookup,
+    )
+
+
+def _intro_stage(ctx: RenderContext) -> None:
+    """Render the intro card. Cinematic when both players have an avatar
+    on disk (or fall back to the shipped placeholder) and intro_style is
+    not 'text'; otherwise the libass-only title card."""
+    plan = ctx.plan
+    if not plan.include_intro:
+        return
+
+    intro_path = ctx.job_dir / "intro.mp4"
+    style = (plan.intro_style or "cinematic").lower()
+    use_cinematic = style != "text"
+    p1_photo = p2_photo = None
+    p1_default = p2_default = False
+    if use_cinematic:
+        p1_photo, p1_default = find_avatar_or_default(plan.project.info.p1)
+        p2_photo, p2_default = find_avatar_or_default(plan.project.info.p2)
+
+    if use_cinematic and p1_photo and p2_photo:
+        render_cinematic_intro(
+            out_path=intro_path,
+            src=ctx.src,
+            width=ctx.width, height=ctx.height, fps=ctx.fps,
+            tournament=plan.project.info.tournament,
+            p1_name=plan.project.info.p1, p1_avatar=p1_photo,
+            p2_name=plan.project.info.p2, p2_avatar=p2_photo,
+            p1_team=plan.project.info.p1_team,
+            p2_team=plan.project.info.p2_team,
+            on_progress=ctx.make_progress("intro"),
+        )
+        missing = []
+        if p1_default: missing.append(plan.project.info.p1)
+        if p2_default: missing.append(plan.project.info.p2)
+        if missing:
+            ctx.state.message = (
+                f"Cinematic intro used the default placeholder for "
+                f"{', '.join(missing)} — drop a real photo into "
+                f"assets/avatars/ when you have one."
+            )
+    else:
+        # User picked text intro, OR cinematic was requested but the
+        # default placeholder is missing too.
+        render_intro(
+            out_path=intro_path,
+            width=ctx.width, height=ctx.height, fps=ctx.fps,
+            tournament=plan.project.info.tournament,
+            p1=plan.project.info.p1,
+            p2=plan.project.info.p2,
+            on_progress=ctx.make_progress("intro"),
+        )
+    ctx.parts.append(intro_path)
+    ctx.completed_weight += ctx.weight_lookup["intro"]
+
+
+def _highlight_stage(ctx: RenderContext) -> bool:
+    """Render the highlight reel. Returns True iff a highlight clip was
+    actually appended to `ctx.parts` (so the bridge stage knows whether
+    to insert a transition)."""
+    plan = ctx.plan
+    if not (plan.include_highlights and plan.project.highlights):
+        return False
+
+    hi_path = ctx.job_dir / "highlight.mp4"
+    written = render_highlight_clip(
+        src=ctx.src,
+        out_path=hi_path,
+        job_dir=ctx.job_dir,
+        highlights=plan.project.highlights,
+        width=ctx.width, height=ctx.height, fps=ctx.fps,
+        has_audio=ctx.has_audio,
+        on_progress=ctx.make_progress("highlight"),
+    )
+    if written:
+        ctx.parts.append(hi_path)
+    ctx.completed_weight += ctx.weight_lookup["highlight"]
+    return bool(written)
+
+
+def _bridge_stage(ctx: RenderContext, highlight_appended: bool) -> None:
+    """Render the gold-sweep bridge between highlight reel and main
+    match — only when both segments are present in the final output."""
+    plan = ctx.plan
+    wants_bridge = (
+        plan.include_highlights
+        and plan.project.highlights
+        and plan.include_main
+        and highlight_appended
+    )
+    if not wants_bridge:
+        return
+    tr_path = ctx.job_dir / "transition.mp4"
+    render_transition(
+        out_path=tr_path,
+        width=ctx.width, height=ctx.height, fps=ctx.fps,
+        on_progress=lambda f, m: None,  # quick clip, no progress reporting
+    )
+    ctx.parts.append(tr_path)
+
+
+def _main_stage(ctx: RenderContext) -> None:
+    """Render the main match (trims removed) with the scoreboard burned
+    in plus the FULL MATCH badge over the first ~15 s."""
+    plan = ctx.plan
+    if not plan.include_main:
+        return
+
+    ass_path = ctx.job_dir / "scoreboard.ass"
+    # The trimmed main duration is the sum of kept segment lengths.
+    trimmed_duration = sum(b - a for a, b in ctx.kept)
+    build_scoreboard_ass(
+        output_path=ass_path,
+        video_w=ctx.width, video_h=ctx.height,
+        total_duration=trimmed_duration,
+        tournament=plan.project.info.tournament,
+        p1_name=plan.project.info.p1,
+        p2_name=plan.project.info.p2,
+        p1_team=plan.project.info.p1_team,
+        p2_team=plan.project.info.p2_team,
+        score_events=ctx.remapped_events,
+        best_of=plan.project.info.best_of,
+    )
+    # FULL MATCH badge: shown for the first 15 seconds of the main
+    # render so the viewer knows the highlight reel is over.
+    fm_badge_path = ctx.job_dir / "full_match_badge.ass"
+    build_full_match_badge_ass(
+        output_path=fm_badge_path,
+        video_w=ctx.width, video_h=ctx.height,
+        show_seconds=15.0,
+    )
+    main_path = ctx.job_dir / "main.mp4"
+    render_main_with_scoreboard(
+        src=ctx.src,
+        out_path=main_path,
+        ass_path=ass_path,
+        full_match_badge_ass=fm_badge_path,
+        kept=ctx.kept,
+        width=ctx.width, height=ctx.height, fps=ctx.fps,
+        has_audio=ctx.has_audio,
+        on_progress=ctx.make_progress("main"),
+    )
+    ctx.parts.append(main_path)
+    ctx.completed_weight += ctx.weight_lookup["main"]
+
+
+def _finalize(ctx: RenderContext) -> None:
+    """Concat all rendered parts into the final output mp4, mark the
+    render done, and drop the per-job temp directory."""
+    plan = ctx.plan
+    s = ctx.state
+    if not ctx.parts:
+        raise FFmpegError("No stages selected for render")
+
+    out_name = plan.output_name or f"{plan.project_name}_{int(time.time())}.mp4"
+    if not out_name.lower().endswith(".mp4"):
+        out_name += ".mp4"
+    final_path = config.output_dir / out_name
+
+    concat_parts(ctx.parts, final_path, on_progress=ctx.make_progress("concat"))
+    ctx.completed_weight += ctx.weight_lookup["concat"]
+
+    s.status = "done"
+    s.progress = 1.0
+    s.stage = "done"
+    s.message = "Render complete"
+    s.output_path = str(final_path)
+
+    # Drop the per-job temp dir now that the final mp4 is safely in
+    # output/. We only do this on success — on error we keep the
+    # intermediate .ass / .mp4 / .concat.txt files so the operator
+    # (or a developer) can inspect what ffmpeg was actually fed.
+    try:
+        shutil.rmtree(ctx.job_dir)
+    except OSError:
+        pass  # file still locked (antivirus / open in player) — leave it
+
+
 def run_render(plan: RenderPlan) -> None:
     """Synchronous render pipeline. The caller (server) runs it in a thread."""
     s = plan.state
     s.status = "running"
     s.started_at = time.time()
-
     try:
-        if not plan.project.info.video_file:
-            raise FFmpegError("No source video selected in project")
-
-        # Source may be either a bare filename inside videos_dir (the
-        # default) or an absolute path picked via the native file picker.
-        # Path / abs_right collapses to abs_right on Windows, so this
-        # works for both, but we branch explicitly for clarity.
-        vf = plan.project.info.video_file
-        vf_path = Path(vf)
-        src = vf_path if vf_path.is_absolute() else (config.videos_dir / vf)
-        if not src.exists():
-            raise FFmpegError(f"Source video not found: {src}")
-
-        s.stage = "probe"
-        s.message = f"probing {src.name}"
-        probe = probe_video(src)
-        width = probe["width"]
-        height = probe["height"]
-        fps = probe["fps"]
-        duration = probe["duration"]
-        has_audio = probe["has_audio"]
-
-        kept = kept_segments_from_trims(duration, plan.project.trim_segments)
-        if not kept and plan.include_main:
-            raise FFmpegError("All content was removed by trim segments")
-
-        # Remap score events from source time → trimmed-main time.
-        remapped_events: list[ScoreFrame] = []
-        for ev in plan.project.score_events:
-            t = remap_score_event_to_trimmed(ev.timestamp, kept)
-            if t is None:
-                continue
-            remapped_events.append(
-                ScoreFrame(
-                    timestamp=t,
-                    p1_score=ev.p1_score,
-                    p2_score=ev.p2_score,
-                    p1_set=ev.p1_set,
-                    p2_set=ev.p2_set,
-                )
-            )
-
-        # Per-job temp directory.
-        job_dir = config.temp_dir / s.job_id
-        job_dir.mkdir(parents=True, exist_ok=True)
-
-        # Plan stage weights (for combined progress).
-        weights: list[tuple[str, float]] = []
-        if plan.include_intro:
-            weights.append(("intro", 0.05))
-        if plan.include_highlights and plan.project.highlights:
-            weights.append(("highlight", 0.25))
-        if plan.include_main:
-            weights.append(("main", 0.65))
-        weights.append(("concat", 0.05))
-        total_weight = sum(w for _, w in weights)
-        weights = [(n, w / total_weight) for n, w in weights]
-
-        completed_weight = 0.0
-
-        def make_progress(stage_name: str, stage_weight: float) -> Callable[[float, str], None]:
-            def cb(frac: float, msg: str) -> None:
-                if s.cancel_requested:
-                    return
-                s.stage = stage_name
-                s.message = msg
-                s.progress = completed_weight + stage_weight * max(0.0, min(1.0, frac))
-            return cb
-
-        parts: list[Path] = []
-        weight_lookup = dict(weights)
-
-        if plan.include_intro:
-            intro_path = job_dir / "intro.mp4"
-            style = (plan.intro_style or "cinematic").lower()
-            use_cinematic = style != "text"
-            p1_photo = p2_photo = None
-            p1_default = p2_default = False
-            if use_cinematic:
-                p1_photo, p1_default = find_avatar_or_default(plan.project.info.p1)
-                p2_photo, p2_default = find_avatar_or_default(plan.project.info.p2)
-            if use_cinematic and p1_photo and p2_photo:
-                render_cinematic_intro(
-                    out_path=intro_path,
-                    src=src,
-                    width=width, height=height, fps=fps,
-                    tournament=plan.project.info.tournament,
-                    p1_name=plan.project.info.p1, p1_avatar=p1_photo,
-                    p2_name=plan.project.info.p2, p2_avatar=p2_photo,
-                    p1_team=plan.project.info.p1_team,
-                    p2_team=plan.project.info.p2_team,
-                    on_progress=make_progress("intro", weight_lookup["intro"]),
-                )
-                missing = []
-                if p1_default: missing.append(plan.project.info.p1)
-                if p2_default: missing.append(plan.project.info.p2)
-                if missing:
-                    s.message = (
-                        f"Cinematic intro used the default placeholder for "
-                        f"{', '.join(missing)} — drop a real photo into "
-                        f"assets/avatars/ when you have one."
-                    )
-            else:
-                # User picked text intro, OR cinematic was requested but
-                # the default placeholder is missing too.
-                render_intro(
-                    out_path=intro_path,
-                    width=width, height=height, fps=fps,
-                    tournament=plan.project.info.tournament,
-                    p1=plan.project.info.p1,
-                    p2=plan.project.info.p2,
-                    on_progress=make_progress("intro", weight_lookup["intro"]),
-                )
-            parts.append(intro_path)
-            completed_weight += weight_lookup["intro"]
-
-        if plan.include_highlights and plan.project.highlights:
-            hi_path = job_dir / "highlight.mp4"
-            written = render_highlight_clip(
-                src=src,
-                out_path=hi_path,
-                job_dir=job_dir,
-                highlights=plan.project.highlights,
-                width=width,
-                height=height,
-                fps=fps,
-                has_audio=has_audio,
-                on_progress=make_progress("highlight", weight_lookup["highlight"]),
-            )
-            if written:
-                parts.append(hi_path)
-            completed_weight += weight_lookup["highlight"]
-
-        # Bridge clip between highlight reel and main match: gives the
-        # cut a short visual beat so it doesn't feel like a hard jump.
-        # Only render when both segments are present (otherwise nothing
-        # to bridge).
-        wants_bridge = (
-            plan.include_highlights
-            and plan.project.highlights
-            and plan.include_main
-            and parts  # highlight render actually appended a part
-            and parts[-1].name.startswith("highlight")
-        )
-        if wants_bridge:
-            tr_path = job_dir / "transition.mp4"
-            render_transition(
-                out_path=tr_path,
-                width=width,
-                height=height,
-                fps=fps,
-                on_progress=lambda f, m: None,  # quick clip, no progress reporting
-            )
-            parts.append(tr_path)
-
-        if plan.include_main:
-            ass_path = job_dir / "scoreboard.ass"
-            # The trimmed main duration is the sum of kept segment lengths.
-            trimmed_duration = sum(b - a for a, b in kept)
-            build_scoreboard_ass(
-                output_path=ass_path,
-                video_w=width,
-                video_h=height,
-                total_duration=trimmed_duration,
-                tournament=plan.project.info.tournament,
-                p1_name=plan.project.info.p1,
-                p2_name=plan.project.info.p2,
-                p1_team=plan.project.info.p1_team,
-                p2_team=plan.project.info.p2_team,
-                score_events=remapped_events,
-                best_of=plan.project.info.best_of,
-            )
-            # FULL MATCH badge: shown for the first 15 seconds of the
-            # main render so the viewer knows the highlight reel is over.
-            fm_badge_path = job_dir / "full_match_badge.ass"
-            build_full_match_badge_ass(
-                output_path=fm_badge_path,
-                video_w=width,
-                video_h=height,
-                show_seconds=15.0,
-            )
-            main_path = job_dir / "main.mp4"
-            render_main_with_scoreboard(
-                src=src,
-                out_path=main_path,
-                ass_path=ass_path,
-                full_match_badge_ass=fm_badge_path,
-                kept=kept,
-                width=width,
-                height=height,
-                fps=fps,
-                has_audio=has_audio,
-                on_progress=make_progress("main", weight_lookup["main"]),
-            )
-            parts.append(main_path)
-            completed_weight += weight_lookup["main"]
-
-        if not parts:
-            raise FFmpegError("No stages selected for render")
-
-        out_name = plan.output_name or f"{plan.project_name}_{int(time.time())}.mp4"
-        if not out_name.lower().endswith(".mp4"):
-            out_name += ".mp4"
-        final_path = config.output_dir / out_name
-
-        concat_parts(parts, final_path, on_progress=make_progress("concat", weight_lookup["concat"]))
-        completed_weight += weight_lookup["concat"]
-
-        s.status = "done"
-        s.progress = 1.0
-        s.stage = "done"
-        s.message = "Render complete"
-        s.output_path = str(final_path)
-
-        # Drop the per-job temp dir now that the final mp4 is safely in
-        # output/. We only do this on success — on error we keep the
-        # intermediate .ass / .mp4 / .concat.txt files so the operator
-        # (or a developer) can inspect what ffmpeg was actually fed.
-        try:
-            shutil.rmtree(job_dir)
-        except OSError:
-            pass  # file still locked (antivirus / open in player) — leave it
+        ctx = _prepare_context(plan)
+        _intro_stage(ctx)
+        highlight_appended = _highlight_stage(ctx)
+        _bridge_stage(ctx, highlight_appended)
+        _main_stage(ctx)
+        _finalize(ctx)
     except FFmpegError as e:
         s.status = "error"
         s.error = str(e)
