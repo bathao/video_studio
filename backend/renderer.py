@@ -43,7 +43,7 @@ from .ffmpeg_runner import (
     run_ffmpeg_with_progress,
 )
 from .intro_builder import render_cinematic_intro
-from .models import Highlight, ProjectData, ScoreEvent, TrimSegment
+from .models import Highlight, ProjectData, TrimSegment
 
 SLOWMO_TAIL_SECONDS = 2.5  # length of the slow-motion tail per highlight
 TARGET_AUDIO_RATE = 48000

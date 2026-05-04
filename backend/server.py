@@ -7,15 +7,13 @@ import subprocess
 import sys
 import textwrap
 import threading
-import time
 from pathlib import Path
-from typing import Optional
 
 from contextlib import asynccontextmanager
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .avatars import find_avatar

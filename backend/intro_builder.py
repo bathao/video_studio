@@ -24,7 +24,6 @@ image came from where as long as both inputs are valid image files.
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Callable
