@@ -16,11 +16,50 @@ from typing import Callable, Optional
 from .config import config
 
 
+# Audio target every rendered stage normalises to. Keeping these
+# centralised means intro / highlight / main / transition all produce
+# concat-demuxer-compatible streams without re-encode.
+TARGET_AUDIO_RATE = 48000
+TARGET_AUDIO_CHANNELS = 2
+
+
 class FFmpegError(RuntimeError):
     def __init__(self, message: str, stderr: str = "", returncode: int = 1) -> None:
         super().__init__(message)
         self.stderr = stderr
         self.returncode = returncode
+
+
+def nvenc_args() -> list[str]:
+    """Standard NVENC video-encode flags pulled from `config.json`. Used
+    by every render stage so encoder / preset / cq stay consistent."""
+    return [
+        "-c:v", config.encoder,
+        "-preset", config.preset,
+        "-rc", "vbr",
+        "-cq", str(config.cq),
+        "-b:v", "0",
+        "-pix_fmt", "yuv420p",
+    ]
+
+
+def aac_args() -> list[str]:
+    """Standard AAC audio-encode flags. Sample rate / channel count are
+    locked to the package-wide TARGET_AUDIO_* constants."""
+    return [
+        "-c:a", "aac",
+        "-ar", str(TARGET_AUDIO_RATE),
+        "-ac", str(TARGET_AUDIO_CHANNELS),
+        "-b:a", "192k",
+    ]
+
+
+def hwaccel_input_args() -> list[str]:
+    """Prepend before `-i <video>` to enable NVDEC for source decoding,
+    or return an empty list when CUDA hwaccel is disabled in config."""
+    if config.use_hwaccel:
+        return ["-hwaccel", "cuda"]
+    return []
 
 
 def ffprobe_json(path: Path) -> dict:

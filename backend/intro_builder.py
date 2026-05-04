@@ -32,33 +32,13 @@ from .ass import build_cinematic_intro_ass
 from .config import config
 from .ffmpeg_runner import (
     FFmpegError,
+    TARGET_AUDIO_RATE,
+    aac_args,
     escape_ffmpeg_filter_path,
+    nvenc_args,
     probe_video,
     run_ffmpeg_with_progress,
 )
-
-TARGET_AUDIO_RATE = 48000
-TARGET_AUDIO_CHANNELS = 2
-
-
-def _nvenc_args() -> list[str]:
-    return [
-        "-c:v", config.encoder,
-        "-preset", config.preset,
-        "-rc", "vbr",
-        "-cq", str(config.cq),
-        "-b:v", "0",
-        "-pix_fmt", "yuv420p",
-    ]
-
-
-def _aac_args() -> list[str]:
-    return [
-        "-c:a", "aac",
-        "-ar", str(TARGET_AUDIO_RATE),
-        "-ac", str(TARGET_AUDIO_CHANNELS),
-        "-b:a", "192k",
-    ]
 
 
 def _extract_bg_frame(src: Path, midpoint: float, out_png: Path) -> None:
@@ -189,8 +169,8 @@ def render_cinematic_intro(
         "-i", f"anullsrc=r={TARGET_AUDIO_RATE}:cl=stereo",
         "-filter_complex", filter_complex,
         "-map", "[vout]", "-map", "3:a",
-        *_nvenc_args(),
-        *_aac_args(),
+        *nvenc_args(),
+        *aac_args(),
         "-shortest",
         str(out_path),
     ]

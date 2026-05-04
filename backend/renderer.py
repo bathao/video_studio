@@ -38,7 +38,12 @@ from .avatars import find_avatar_or_default
 from .config import config
 from .ffmpeg_runner import (
     FFmpegError,
+    TARGET_AUDIO_CHANNELS,
+    TARGET_AUDIO_RATE,
+    aac_args,
     escape_ffmpeg_filter_path,
+    hwaccel_input_args,
+    nvenc_args,
     probe_video,
     run_ffmpeg_with_progress,
 )
@@ -46,8 +51,6 @@ from .intro_builder import render_cinematic_intro
 from .models import Highlight, ProjectData, TrimSegment
 
 SLOWMO_TAIL_SECONDS = 2.5  # length of the slow-motion tail per highlight
-TARGET_AUDIO_RATE = 48000
-TARGET_AUDIO_CHANNELS = 2
 
 
 @dataclass
@@ -139,27 +142,6 @@ def remap_score_event_to_trimmed(
 # ---------- stages ----------------------------------------------------------
 
 
-def _nvenc_args() -> list[str]:
-    return [
-        "-c:v", config.encoder,
-        "-preset", config.preset,
-        "-rc", "vbr",
-        "-cq", str(config.cq),
-        "-b:v", "0",
-        "-pix_fmt", "yuv420p",
-    ]
-
-
-def _aac_args() -> list[str]:
-    return ["-c:a", "aac", "-ar", str(TARGET_AUDIO_RATE), "-ac", str(TARGET_AUDIO_CHANNELS), "-b:a", "192k"]
-
-
-def _hwaccel_input_args() -> list[str]:
-    if config.use_hwaccel:
-        return ["-hwaccel", "cuda"]
-    return []
-
-
 def render_transition(
     *,
     out_path: Path,
@@ -189,8 +171,8 @@ def render_transition(
         "-f", "lavfi", "-i", f"anullsrc=r={TARGET_AUDIO_RATE}:cl=stereo",
         "-vf", f"ass='{ass_arg}',format=yuv420p",
         "-t", f"{duration}",
-        *_nvenc_args(),
-        *_aac_args(),
+        *nvenc_args(),
+        *aac_args(),
         "-shortest",
         str(out_path),
     ]
@@ -239,8 +221,8 @@ def render_intro(
         "-f", "lavfi", "-i", f"anullsrc=r={TARGET_AUDIO_RATE}:cl=stereo",
         "-vf", f"ass='{ass_arg}',format=yuv420p",
         "-t", f"{duration}",
-        *_nvenc_args(),
-        *_aac_args(),
+        *nvenc_args(),
+        *aac_args(),
         "-shortest",
         str(out_path),
     ]
@@ -327,7 +309,7 @@ def _render_one_highlight(
     # would silently truncate slow-mo highlights since slow-mo expands
     # output PTS beyond the source range.)
     args = [
-        *_hwaccel_input_args(),
+        *hwaccel_input_args(),
         "-ss", f"{h.start:.3f}",
         "-t", f"{duration:.3f}",
         "-i", str(src),
@@ -338,9 +320,9 @@ def _render_one_highlight(
 
     args += ["-filter_complex", filter_complex, "-map", "[vout]"]
     if has_audio:
-        args += ["-map", "[aout]", *_nvenc_args(), *_aac_args()]
+        args += ["-map", "[aout]", *nvenc_args(), *aac_args()]
     else:
-        args += ["-map", "1:a", *_nvenc_args(), *_aac_args(), "-shortest"]
+        args += ["-map", "1:a", *nvenc_args(), *aac_args(), "-shortest"]
     args += [str(out_path)]
 
     run_ffmpeg_with_progress(
@@ -441,7 +423,7 @@ def render_main_with_scoreboard(
     args: list[str] = []
     for a, b in kept:
         args += [
-            *_hwaccel_input_args(),
+            *hwaccel_input_args(),
             "-ss", f"{a:.3f}",
             "-t", f"{(b - a):.3f}",
             "-i", str(src),
@@ -495,9 +477,9 @@ def render_main_with_scoreboard(
         "-map", "[vout]",
     ]
     if has_audio:
-        args += ["-map", "[aout]", *_nvenc_args(), *_aac_args()]
+        args += ["-map", "[aout]", *nvenc_args(), *aac_args()]
     else:
-        args += ["-map", f"{silent_idx}:a", *_nvenc_args(), *_aac_args(), "-shortest"]
+        args += ["-map", f"{silent_idx}:a", *nvenc_args(), *aac_args(), "-shortest"]
     args += [str(out_path)]
 
     run_ffmpeg_with_progress(
