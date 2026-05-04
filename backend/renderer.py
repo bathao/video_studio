@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from .ass_builder import (
+from .ass import (
     ScoreFrame,
     build_full_match_badge_ass,
     build_highlight_badge_ass,

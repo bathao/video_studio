@@ -29,7 +29,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
-from .ass_builder import build_cinematic_intro_ass
+from .ass import build_cinematic_intro_ass
 from .config import config
 from .ffmpeg_runner import (
     FFmpegError,
