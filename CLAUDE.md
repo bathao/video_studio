@@ -57,10 +57,30 @@ backend/
     transition.py    Gold-sweep bridge between highlight reel and main.
 
 frontend/
-  index.html         Tailwind via CDN, single-page UI.
-  app.js             All frontend state + UI wiring. ~915 lines.
-                     Vanilla JS. Sections separated by comment banners
-                     (snapshots, video & player, score logic, …).
+  index.html         Tailwind via CDN, single-page UI. Entry script
+                     `<script type="module" src="app.js">`.
+  app.js             Boot module: imports each feature module (which
+                     wires its own DOM events at load time), defines
+                     the cross-cutting `syncAllUI` / `syncInfoFromInputs`
+                     / `undo`, and runs the initial health ping.
+  state.js           project / live / undoStack + the `mut` object for
+                     scalar shared state (pendingHighlightStart,
+                     pendingTrimStart, externalToken, lastSourcedFile,
+                     pollTimer). Plus `snapshot()`.
+  dom.js             `$` helper.
+  timecode.js        `fmt(s)` and `parseTimecode("m:ss.xx")`.
+  toast.js           Floating toast.
+  avatars.js         `refreshAvatarThumb(slot)` debounced lookup.
+  player.js          <video> element + HUD + seek/scrub + speed +
+                     source switching (loadVideoList / setVideoSource /
+                     browseForVideo / external token registration).
+  score.js           Score logic (recompute, sync from time, score,
+                     delete) + score-panel UI + events list.
+  highlights.js      All highlight ops + list UI.
+  trims.js           All trim ops + list UI.
+  project_io.js      Save / Load Project + load modal.
+  render.js          startRender + pollRender + intro-style mutual
+                     exclusion + Open output folder.
   styles.css         A few @apply shorthands plus plain-CSS fallbacks
                      for the Tailwind classes (the CDN's @apply support
                      is patchy on older builds).
@@ -167,10 +187,13 @@ progress fraction stays correct as stages advance.
 - Don't duplicate `nvenc_args()` / `aac_args()` / `hwaccel_input_args()`
   — import from `ffmpeg_runner`.
 
-- The frontend is one file (`app.js`). Section comment banners delimit
-  responsibilities. If you add a major feature consider whether
-  splitting into ES6 modules is worth it (it's on the cleanup
-  shortlist).
+- The frontend is split into ES6 modules under `frontend/*.js`. Each
+  module wires its own DOM event listeners at load time. Cross-cutting
+  state lives in `state.js`; cross-cutting orchestration (`syncAllUI`,
+  `undo`) lives in `app.js`. When you need a dependency that would
+  introduce a circular import, register a callback (see
+  `setSyncAllUI` / `setSyncInfoFromInputs` in `project_io.js` and
+  `render.js`).
 
 - When changing render output (scoreboard layout, intro animation,
   etc.), capture reference outputs first and verify byte-identical

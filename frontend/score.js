@@ -1,0 +1,173 @@
+// Score logic + UI. Events are ACTIONS, not absolute states. Each
+// event records who scored (`who`) at a specific video timestamp.
+// The p1_score / p2_score / set fields are a derived cache,
+// recomputed by replaying all actions in chronological order. This
+// way, scoring at any playback position (including after seeking
+// back) inserts at the right place in time and every later event's
+// score gets recomputed automatically.
+import { $ } from './dom.js';
+import { fmt } from './timecode.js';
+import { live, project, snapshot } from './state.js';
+import { toast } from './toast.js';
+
+const POINTS_TO_WIN = 11;
+const MIN_LEAD = 2;
+
+// Sort events by timestamp and replay all actions to fill in the
+// derived score / set fields. Mutates the input array.
+export function recomputeAllEvents() {
+  project.score_events.sort((a, b) => a.timestamp - b.timestamp);
+  let p1 = 0, p2 = 0, p1Set = 0, p2Set = 0;
+  for (const ev of project.score_events) {
+    if (ev.who === 1) p1 += 1;
+    else if (ev.who === 2) p2 += 1;
+    // (who === 0 is a legacy / placeholder and counts as no-op)
+
+    const max = Math.max(p1, p2);
+    const lead = Math.abs(p1 - p2);
+    if (max >= POINTS_TO_WIN && lead >= MIN_LEAD) {
+      if (p1 > p2) p1Set += 1;
+      else p2Set += 1;
+      p1 = 0;
+      p2 = 0;
+    }
+    ev.p1_score = p1;
+    ev.p2_score = p2;
+    ev.p1_set = p1Set;
+    ev.p2_set = p2Set;
+  }
+}
+
+// Update the live score panel to reflect the score state at time `t`
+// — i.e. the latest event with timestamp ≤ t. Lets the operator scrub
+// the timeline and see "what was the score here?" without pressing
+// anything.
+export function syncLiveFromTime(t) {
+  let latest = null;
+  for (const ev of project.score_events) {
+    if (ev.timestamp <= t) latest = ev;
+    else break;  // events are sorted, can stop early
+  }
+  if (latest) {
+    live.p1 = latest.p1_score;
+    live.p2 = latest.p2_score;
+    live.p1_set = latest.p1_set;
+    live.p2_set = latest.p2_set;
+  } else {
+    live.p1 = live.p2 = live.p1_set = live.p2_set = 0;
+  }
+}
+
+// Migrate legacy projects (pre-action schema) by deriving the `who`
+// field from the score diff with the previous event. Assumes events
+// are already in press-order (which is how legacy projects stored them).
+export function migrateLegacyEvents() {
+  let p1 = 0, p2 = 0, p1Set = 0, p2Set = 0;
+  let dirty = false;
+  for (const ev of project.score_events) {
+    if (ev.who === undefined || ev.who === 0) {
+      if (ev.p1_score > p1)        ev.who = 1;
+      else if (ev.p2_score > p2)   ev.who = 2;
+      else if (ev.p1_set > p1Set)  ev.who = 1;
+      else if (ev.p2_set > p2Set)  ev.who = 2;
+      else                         ev.who = 0;
+      dirty = true;
+    }
+    p1 = ev.p1_score;
+    p2 = ev.p2_score;
+    p1Set = ev.p1_set;
+    p2Set = ev.p2_set;
+  }
+  if (dirty) recomputeAllEvents();
+}
+
+export function scorePoint(who) {
+  // Imported lazily to break the circular dep with player.js (player
+  // imports syncLiveFromTime/syncScore from this module on its
+  // `timeupdate` listener — pulling the player element here at load
+  // time would deadlock that init).
+  const player = $('player');
+  if (!player.duration && player.readyState < 1) {
+    toast('Load a video first');
+    return;
+  }
+  snapshot();
+  // Insert action at current playback time.
+  project.score_events.push({
+    timestamp: player.currentTime,
+    who,
+    p1_score: 0,
+    p2_score: 0,
+    p1_set: 0,
+    p2_set: 0,
+  });
+  recomputeAllEvents();
+  syncLiveFromTime(player.currentTime);
+  syncEvents();
+  syncScore();
+
+  // Toast on set win — detect by checking if the latest event reset to 0,0.
+  const latest = project.score_events[project.score_events.length - 1];
+  if (latest && latest.p1_score === 0 && latest.p2_score === 0
+      && (latest.p1_set + latest.p2_set) > 0) {
+    toast(`Set won! ${latest.p1_set}-${latest.p2_set}`);
+  }
+}
+
+export function deleteScoreEvent(idx) {
+  if (idx < 0 || idx >= project.score_events.length) return;
+  const player = $('player');
+  snapshot();
+  project.score_events.splice(idx, 1);
+  recomputeAllEvents();
+  syncLiveFromTime(player.currentTime);
+  syncEvents();
+  syncScore();
+  toast('Event deleted');
+}
+
+export function syncScore() {
+  $('score-p1').textContent = live.p1;
+  $('score-p2').textContent = live.p2;
+  $('set-p1').textContent = live.p1_set;
+  $('set-p2').textContent = live.p2_set;
+}
+
+export function syncEvents() {
+  $('ev-count').textContent = `(${project.score_events.length})`;
+  const ul = $('ev-list');
+  ul.innerHTML = '';
+  // Display newest at top, but track each event's index in the sorted
+  // (chronological) array so delete acts on the right one.
+  const total = project.score_events.length;
+  const player = $('player');
+  project.score_events.slice().reverse().forEach((e, revIdx) => {
+    const idx = total - 1 - revIdx;
+    const whoMark = e.who === 1 ? 'P1' : e.who === 2 ? 'P2' : '··';
+    const whoColor = e.who === 1 ? 'text-orange-400'
+                   : e.who === 2 ? 'text-accent-400'
+                   : 'text-slate-500';
+    const li = document.createElement('li');
+    li.className = 'list-row';
+    li.innerHTML = `
+      <span class="font-mono text-[11px] w-14">${fmt(e.timestamp)}</span>
+      <span class="text-[11px] font-bold ${whoColor}">${whoMark}</span>
+      <span class="text-[11px]">[${e.p1_set}] ${e.p1_score}-${e.p2_score} [${e.p2_set}]</span>
+      <button class="text-slate-400 hover:text-accent-400 ml-auto px-1" title="Jump" data-jump>↦</button>
+      <button class="text-slate-400 hover:text-danger-500 px-1" title="Delete" data-del>✕</button>
+    `;
+    li.querySelector('[data-jump]').addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      player.currentTime = e.timestamp;
+    });
+    li.querySelector('[data-del]').addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      deleteScoreEvent(idx);
+    });
+    ul.appendChild(li);
+  });
+}
+
+// Wire score-panel buttons.
+$('btn-p1').addEventListener('click', () => scorePoint(1));
+$('btn-p2').addEventListener('click', () => scorePoint(2));
