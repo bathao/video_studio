@@ -1,0 +1,10 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+# Quiet plugin discovery noise; keep the report compact. Pytest's
+# default basetemp lives under %TEMP% (C:\Users\…\AppData\Local\Temp)
+# which sandboxed shells / antivirus on this machine sometimes deny
+# enter access to. Pin it inside the repo's temp/ instead — same
+# folder the renderer uses for its own intermediates.
+addopts = "-q --tb=short --basetemp=temp/pytest"
