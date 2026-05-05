@@ -19,7 +19,8 @@ from pathlib import Path
 
 from .common import (
     C_GOLD, C_GOLD_BRIGHT, C_WHITE,
-    _ass_escape, _ass_rgb, _bgr, _fmt_time, _trim_team, _trim_title,
+    _ass_escape, _ass_rgb, _ass_skeleton, _bgr, _fmt_time,
+    _trim_team, _trim_title,
 )
 
 
@@ -82,26 +83,13 @@ def build_intro_ass(
     gold_bgr = _bgr(C_GOLD)
     vs_dim   = _ass_rgb(120, 120, 120)  # mid-grey "vs" — quiet vs. the names
 
-    header = f"""[Script Info]
-ScriptType: v4.00+
-PlayResX: {video_w}
-PlayResY: {video_h}
-WrapStyle: 2
-ScaledBorderAndShadow: yes
-YCbCr Matrix: TV.709
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Title, Arial, {fs_title}, {C_GOLD},  &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 3, 0, 1, 2, 1, 5, 0, 0, 0, 1
-Style: VS,    Arial, {fs_vs},    {vs_dim},  &H000000FF, &H00000000, &H80000000,  0, 1, 0, 0, 100, 100, 4, 0, 1, 2, 0, 5, 0, 0, 0, 1
-Style: Name,  Arial, {fs_name},  {C_WHITE}, &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 2, 0, 1, 2, 2, 5, 0, 0, 0, 1
-Style: Box,   Arial, 1,           {C_WHITE}, &H000000FF, &H00000000, &H80000000,  0, 0, 0, 0, 100, 100, 0, 0, 1, 0, 0, 7, 0, 0, 0, 1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
-
-    lines: list[str] = [header]
+    styles = (
+        f"Style: Title, Arial, {fs_title}, {C_GOLD},  &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 3, 0, 1, 2, 1, 5, 0, 0, 0, 1\n"
+        f"Style: VS,    Arial, {fs_vs},    {vs_dim},  &H000000FF, &H00000000, &H80000000,  0, 1, 0, 0, 100, 100, 4, 0, 1, 2, 0, 5, 0, 0, 0, 1\n"
+        f"Style: Name,  Arial, {fs_name},  {C_WHITE}, &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 2, 0, 1, 2, 2, 5, 0, 0, 0, 1\n"
+        f"Style: Box,   Arial, 1,           {C_WHITE}, &H000000FF, &H00000000, &H80000000,  0, 0, 0, 0, 100, 100, 0, 0, 1, 0, 0, 7, 0, 0, 0, 1"
+    )
+    lines: list[str] = [_ass_skeleton(video_w, video_h, styles)]
 
     def _line_dialogue(start_ms: int, fade_in: int, fade_out: int, y: int) -> str:
         """Gold accent line. Anchored top-left at (cx - line_w/2, y) with
@@ -211,32 +199,18 @@ def build_cinematic_intro_ass(
     vs_cy        = avatar_cy
 
     end_time = _fmt_time(duration)
-    out_fade_start_ms = int(max(0.0, duration - 0.5) * 1000)
 
     title_safe = _ass_escape(_trim_title(tournament)) if tournament.strip() else ""
     p1_safe    = _ass_escape(p1_name.strip() or "Player 1")
     p2_safe    = _ass_escape(p2_name.strip() or "Player 2")
 
-    header = f"""[Script Info]
-ScriptType: v4.00+
-PlayResX: {video_w}
-PlayResY: {video_h}
-WrapStyle: 2
-ScaledBorderAndShadow: yes
-YCbCr Matrix: TV.709
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Tournament, Arial, {fs_tournament}, {C_GOLD_BRIGHT}, &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 4, 0, 1, 3, 2, 5, 0, 0, 0, 1
-Style: Name,       Arial, {fs_name},       {C_WHITE},       &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 2, 0, 1, 2, 2, 5, 0, 0, 0, 1
-Style: VS,         Arial, {fs_vs},         {C_GOLD_BRIGHT}, &H000000FF, &H00000000, &H80000000, -1, 1, 0, 0, 100, 100, 6, 0, 1, 4, 3, 5, 0, 0, 0, 1
-Style: Box,        Arial, 1,               {C_WHITE},       &H000000FF, &H00000000, &H80000000,  0, 0, 0, 0, 100, 100, 0, 0, 1, 0, 0, 7, 0, 0, 0, 1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
-
-    lines: list[str] = [header]
+    styles = (
+        f"Style: Tournament, Arial, {fs_tournament}, {C_GOLD_BRIGHT}, &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 4, 0, 1, 3, 2, 5, 0, 0, 0, 1\n"
+        f"Style: Name,       Arial, {fs_name},       {C_WHITE},       &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 2, 0, 1, 2, 2, 5, 0, 0, 0, 1\n"
+        f"Style: VS,         Arial, {fs_vs},         {C_GOLD_BRIGHT}, &H000000FF, &H00000000, &H80000000, -1, 1, 0, 0, 100, 100, 6, 0, 1, 4, 3, 5, 0, 0, 0, 1\n"
+        f"Style: Box,        Arial, 1,               {C_WHITE},       &H000000FF, &H00000000, &H80000000,  0, 0, 0, 0, 100, 100, 0, 0, 1, 0, 0, 7, 0, 0, 0, 1"
+    )
+    lines: list[str] = [_ass_skeleton(video_w, video_h, styles)]
 
     if title_safe:
         lines.append(

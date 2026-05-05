@@ -48,8 +48,8 @@ def _trim_team(text: str, max_len: int = 14) -> str:
     return text
 
 
-def _trim_title(text: str, max_words: int = 10) -> str:
-    """Tournament title: cap at 10 whitespace-separated tokens. Anything
+def _trim_title(text: str, max_words: int = 14) -> str:
+    """Tournament title: cap at 14 whitespace-separated tokens. Anything
     longer gets truncated with an ellipsis. Keeps the panel layout
     predictable regardless of how chatty the user is."""
     text = (text or "").strip()
@@ -99,3 +99,30 @@ def _rect(x: int, y: int, w: int, h: int, color: str, alpha_hex: str = "00", lay
         f"\\1c&H{_bgr(color)}&\\1a&H{alpha_hex}&\\p1}}"
         f"m 0 0 l {w} 0 l {w} {h} l 0 {h}{{\\p0}}"
     )
+
+
+def _ass_skeleton(video_w: int, video_h: int, styles_block: str) -> str:
+    """Wrap a per-builder list of `Style: …` rows with the standard ASS
+    skeleton (`[Script Info]` header + `[V4+ Styles]` framing + `[Events]`
+    footer). Every builder ended up writing the same boilerplate before
+    its own Style rows; this helper is the single source of truth.
+
+    `styles_block` is the joined `Style: …` lines (no leading newline,
+    no trailing newline) that go between the Format line and the
+    `[Events]` section.
+    """
+    return f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: {video_w}
+PlayResY: {video_h}
+WrapStyle: 2
+ScaledBorderAndShadow: yes
+YCbCr Matrix: TV.709
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+{styles_block}
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""

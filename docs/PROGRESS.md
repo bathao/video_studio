@@ -1,6 +1,6 @@
 # Progress Status
 
-Last update: 2026-05-03
+Last update: 2026-05-12
 
 ## Module map
 
@@ -109,6 +109,33 @@ Last update: 2026-05-03
 - ✅ `.gitignore` for venv / temp / outputs
 - ✅ README in English with full workflow
 - ✅ Docs index (this folder)
+- ✅ Pytest suite for pure logic (segment math, text helpers,
+      avatar lookup, scoreboard event walk, builder smoke tests).
+      78 tests, runs in <0.5 s. Configured in `pyproject.toml`,
+      basetemp pinned to `temp/pytest/` to dodge sandbox-denied
+      access on the user-temp dir.
+
+### Code organisation
+- ✅ ASS overlay generators split from a 1208-line `ass_builder.py`
+      monolith into the `backend/ass/` package — common / scoreboard
+      / intro / badges / transition. Public re-exports in
+      `__init__.py`; every emitted .ass file is byte-identical to
+      pre-split output (verified across 8 + 11 cases).
+- ✅ `build_scoreboard_ass` decomposed into `_Geometry` dataclass +
+      `_AssetText` + 5 emit helpers (`_emit_live_panel`,
+      `_emit_dynamic_numbers`, `_emit_recap_cards`,
+      `_emit_flag_overlays`, `_emit_final_scoreboard`). Public function
+      now a 66-line dispatcher.
+- ✅ `run_render` decomposed into `RenderContext` + 7 stage helpers
+      (`_resolve_source`, `_prepare_context`, `_intro_stage`,
+      `_highlight_stage`, `_bridge_stage`, `_main_stage`, `_finalize`).
+      Public function now a 12-line dispatcher.
+- ✅ NVENC / AAC / hwaccel helpers + audio rate constants centralised
+      in `ffmpeg_runner.py` (was duplicated between renderer.py and
+      intro_builder.py).
+- ✅ Frontend `app.js` (915 lines) split into 12 ES6 modules under
+      `frontend/*.js` — state, dom, timecode, toast, avatars, score,
+      player, highlights, trims, project_io, render + the boot file.
 
 ## Known gaps
 

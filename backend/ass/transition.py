@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .common import C_GOLD, _bgr, _fmt_time
+from .common import C_GOLD, _ass_skeleton, _bgr, _fmt_time
 
 
 def build_transition_ass(
@@ -35,23 +35,8 @@ def build_transition_ass(
 
     end_time = _fmt_time(duration)
 
-    header = f"""[Script Info]
-ScriptType: v4.00+
-PlayResX: {video_w}
-PlayResY: {video_h}
-WrapStyle: 2
-ScaledBorderAndShadow: yes
-YCbCr Matrix: TV.709
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Box, Arial, 1, &H00FFFFFF, &H000000FF, &H00000000, &H80000000, 0, 0, 0, 0, 100, 100, 0, 0, 1, 0, 0, 7, 0, 0, 0, 1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
-
-    lines: list[str] = [header]
+    styles = "Style: Box, Arial, 1, &H00FFFFFF, &H000000FF, &H00000000, &H80000000, 0, 0, 0, 0, 100, 100, 0, 0, 1, 0, 0, 7, 0, 0, 0, 1"
+    lines: list[str] = [_ass_skeleton(video_w, video_h, styles)]
 
     # Gold sweep line — moves from off-screen left to off-screen right
     # across the middle of the frame.
