@@ -126,34 +126,54 @@
           </div>
         </section>
 
-        <!-- live score (centre, large) -->
-        <section class="panel col-span-4">
-          <h2 class="panel-h">Live Score</h2>
-          <div class="grid grid-cols-2 gap-3 text-center">
-            <div class="bg-ink-800 rounded-md p-3 border border-ink-700">
-              <div class="text-xs uppercase tracking-wider text-slate-400" id="lbl-p1">P1</div>
-              <div class="flex justify-center items-baseline gap-1">
-                <div class="text-6xl font-bold text-accent-400" id="score-p1">0</div>
-                <div class="text-xs text-slate-400">pts</div>
+        <!-- centre column: Live Score + Timeline stacked -->
+        <div class="col-span-4 flex flex-col gap-4">
+          <section class="panel">
+            <h2 class="panel-h">Live Score</h2>
+            <div class="grid grid-cols-2 gap-2 text-center">
+              <div class="bg-ink-800 rounded-md p-2 border border-ink-700">
+                <div class="text-[11px] uppercase tracking-wider text-slate-400" id="lbl-p1">P1</div>
+                <div class="flex justify-center items-baseline gap-1">
+                  <div class="text-5xl font-bold text-accent-400 leading-tight" id="score-p1">0</div>
+                  <div class="text-xs text-slate-400">pts</div>
+                </div>
+                <div class="text-warn-400 text-xs">Sets: <span id="set-p1">0</span></div>
               </div>
-              <div class="text-warn-400 text-sm mt-1">Sets: <span id="set-p1">0</span></div>
-            </div>
-            <div class="bg-ink-800 rounded-md p-3 border border-ink-700">
-              <div class="text-xs uppercase tracking-wider text-slate-400" id="lbl-p2">P2</div>
-              <div class="flex justify-center items-baseline gap-1">
-                <div class="text-6xl font-bold text-accent-400" id="score-p2">0</div>
-                <div class="text-xs text-slate-400">pts</div>
+              <div class="bg-ink-800 rounded-md p-2 border border-ink-700">
+                <div class="text-[11px] uppercase tracking-wider text-slate-400" id="lbl-p2">P2</div>
+                <div class="flex justify-center items-baseline gap-1">
+                  <div class="text-5xl font-bold text-accent-400 leading-tight" id="score-p2">0</div>
+                  <div class="text-xs text-slate-400">pts</div>
+                </div>
+                <div class="text-warn-400 text-xs">Sets: <span id="set-p2">0</span></div>
               </div>
-              <div class="text-warn-400 text-sm mt-1">Sets: <span id="set-p2">0</span></div>
             </div>
-          </div>
-          <div class="grid grid-cols-3 gap-2 mt-3">
-            <button id="btn-p1" class="btn-score" title="A">+ P1</button>
-            <button id="btn-undo" class="btn-secondary" title="Ctrl+Z">Undo</button>
-            <button id="btn-p2" class="btn-score" title="D">+ P2</button>
-          </div>
-          <p class="text-xs text-slate-400 mt-2">Auto rule: 11pts, lead by 2. Set won → score resets to 0-0.</p>
-        </section>
+            <div class="grid grid-cols-3 gap-2 mt-2">
+              <button id="btn-p1" class="btn-score" title="A">+ P1</button>
+              <button id="btn-undo" class="btn-secondary" title="Ctrl+Z">Undo</button>
+              <button id="btn-p2" class="btn-score" title="D">+ P2</button>
+            </div>
+            <p class="text-[11px] text-slate-500 mt-1.5 leading-snug">Auto rule: 11 pts, lead by 2. Set won → score resets to 0-0.</p>
+          </section>
+
+          <section class="panel">
+            <h2 class="panel-h">Timeline</h2>
+            <dl class="text-sm space-y-1.5">
+              <div class="flex justify-between">
+                <dt class="text-slate-400">Highlights <span class="text-slate-500 text-[10px]">(incl. slow-mo)</span></dt>
+                <dd class="font-mono text-accent-400" id="tl-hl">0:00.00</dd>
+              </div>
+              <div class="flex justify-between">
+                <dt class="text-slate-400">Trimmed <span class="text-slate-500 text-[10px]">(removed)</span></dt>
+                <dd class="font-mono text-warn-400" id="tl-trim">0:00.00</dd>
+              </div>
+              <div class="flex justify-between border-t border-ink-700 pt-1.5 mt-1">
+                <dt class="text-slate-400">Output <span class="text-slate-500 text-[10px]">(estimate)</span></dt>
+                <dd class="font-mono text-slate-100 font-bold" id="tl-output">0:00.00</dd>
+              </div>
+            </dl>
+          </section>
+        </div>
 
         <!-- render -->
         <section class="panel col-span-4">
@@ -210,18 +230,18 @@
           <h2 class="panel-h !mb-0">Highlights <span class="text-slate-500 text-xs" id="hl-count">(0)</span></h2>
           <button id="btn-add-hl-manual" class="btn-secondary text-xs">Add manual</button>
         </div>
-        <ul id="hl-list" class="mt-2 space-y-1 max-h-72 overflow-y-auto"></ul>
+        <ul id="hl-list" class="mt-2 space-y-1 max-h-[28rem] overflow-y-auto"></ul>
       </section>
       <section class="panel">
         <div class="flex items-center justify-between">
           <h2 class="panel-h !mb-0">Trim <span class="text-slate-500 text-xs" id="tr-count">(0)</span></h2>
           <button id="btn-add-tr-manual" class="btn-secondary text-xs">Add manual</button>
         </div>
-        <ul id="tr-list" class="mt-2 space-y-1 max-h-48 overflow-y-auto"></ul>
+        <ul id="tr-list" class="mt-2 space-y-1 max-h-[28rem] overflow-y-auto"></ul>
       </section>
       <section class="panel">
         <h2 class="panel-h">Score events <span class="text-slate-500 text-xs" id="ev-count">(0)</span></h2>
-        <ul id="ev-list" class="mt-2 space-y-1 max-h-72 overflow-y-auto text-xs font-mono"></ul>
+        <ul id="ev-list" class="mt-2 space-y-1 max-h-[28rem] overflow-y-auto text-xs font-mono"></ul>
       </section>
     </aside>
   </div>

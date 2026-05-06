@@ -5,6 +5,7 @@ import { $ } from './dom.js';
 import { fmt, parseTimecode } from './timecode.js';
 import { mut, project, snapshot } from './state.js';
 import { player } from './player.js';
+import { syncTimeline } from './timeline.js';
 import { toast } from './toast.js';
 
 export function markTrimStart() {
@@ -53,6 +54,9 @@ function removeTrim(idx) {
 }
 
 export function syncTrims() {
+  // Always render in chronological order, regardless of when each
+  // trim was added.
+  project.trim_segments.sort((a, b) => a.start - b.start);
   $('tr-count').textContent = `(${project.trim_segments.length})`;
   const ul = $('tr-list');
   ul.innerHTML = '';
@@ -85,6 +89,7 @@ export function syncTrims() {
     li.querySelector('[data-del]').addEventListener('click', () => removeTrim(i));
     ul.appendChild(li);
   });
+  syncTimeline();
 }
 
 $('btn-trim-start').addEventListener('click', markTrimStart);

@@ -25,6 +25,7 @@ import {
 import { syncTrims, markTrimStart, markTrimEnd } from './trims.js';
 import { setSyncAllUI, setSyncInfoFromInputs as setProjectIoSync } from './project_io.js';
 import { setSyncInfoFromInputs as setRenderSync } from './render.js';
+import { syncTimeline } from './timeline.js';
 import { toast } from './toast.js';
 
 
@@ -63,6 +64,7 @@ function syncAllUI() {
   syncTrims();
   syncEvents();
   syncInfoFromInputs();
+  syncTimeline();
   refreshAvatarThumb('p1');
   refreshAvatarThumb('p2');
 }

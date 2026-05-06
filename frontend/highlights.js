@@ -5,6 +5,7 @@ import { $ } from './dom.js';
 import { fmt, parseTimecode } from './timecode.js';
 import { mut, project, snapshot } from './state.js';
 import { player } from './player.js';
+import { syncTimeline } from './timeline.js';
 import { toast } from './toast.js';
 
 export function toggleHighlightMark() {
@@ -75,6 +76,10 @@ function setHighlightField(idx, field, value) {
 }
 
 export function syncHighlights() {
+  // Always render in chronological order, regardless of when each
+  // highlight was added. Sorting in place means subsequent edits +
+  // the index used by click handlers stay consistent with display.
+  project.highlights.sort((a, b) => a.start - b.start);
   $('hl-count').textContent = `(${project.highlights.length})`;
   const ul = $('hl-list');
   ul.innerHTML = '';
@@ -111,6 +116,7 @@ export function syncHighlights() {
     li.querySelector('[data-del]').addEventListener('click', () => removeHighlight(i));
     ul.appendChild(li);
   });
+  syncTimeline();
 }
 
 $('btn-mark-hl').addEventListener('click', toggleHighlightMark);
