@@ -50,11 +50,23 @@ backend/
                      _bgr) + _fmt_time. Imported by every other ass/*.
     scoreboard.py    Live + final scoreboard, recap/transition cards,
                      GP/MP/DEUCE flag. Internally split into
-                     _Geometry + _AssetText + _emit_* helpers.
+                     _Geometry + _AssetText + _emit_* helpers. Exports
+                     `resolve_row_names` so doubles' combined-name rule
+                     (last 2 words of each partner) is shared by every
+                     consumer.
     intro.py         Text-only fallback intro + libass companion for
-                     the cinematic intro.
-    badges.py        Top-left HIGHLIGHT and FULL MATCH badges.
-    transition.py    Gold-sweep bridge between highlight reel and main.
+                     the cinematic intro. Same builder serves singles
+                     (2 avatars) and doubles (4 avatars laid out as 2
+                     pairs); caller pre-combines names for doubles.
+    badges.py        Top-left HIGHLIGHT, FULL MATCH and SLOW MOTION
+                     badges. SLOW MOTION takes a list of (start, end)
+                     ranges so one .ass covers every spliced replay.
+    intermission.py  3-second typography bridge between highlight reel
+                     and main match (when `intermission_enabled` is
+                     true). Headline + tournament + players over a
+                     dim bg image (optional, falls back to lavfi color).
+    transition.py    Gold-sweep bridge — fallback when intermission is
+                     disabled in config.
 
 frontend/
   index.html         Tailwind via CDN, single-page UI. Entry script
@@ -101,6 +113,10 @@ frontend/
 
 assets/avatars/      Player photos as flat files: <Name>.{png,jpg,jpeg,webp}
                      `_default.jpg` ships as the placeholder silhouette.
+assets/backgrounds/  Optional `intermission_bg.jpg` for the intermission
+                     card. Missing → renderer falls back to lavfi color.
+assets/sounds/       Optional `intermission_boom.mp3` impact sound for
+                     the intermission card. Missing → silent audio.
 videos/              Source MP4s (gitignored).
 projects/            Saved project JSON files (gitignored).
 output/              Final rendered MP4s.
@@ -124,9 +140,17 @@ run_render(plan):
                                        # remap score events, alloc job_dir,
                                        # build stage weight table
   _intro_stage(ctx)                   # cinematic OR text intro → intro.mp4
+                                       # 4-avatar layout when doubles
   hl = _highlight_stage(ctx)          # render highlight reel → highlight.mp4
-  _bridge_stage(ctx, hl)              # gold-sweep transition → transition.mp4
-  _main_stage(ctx)                    # scoreboard + FULL MATCH badge → main.mp4
+                                       # (no per-clip slow-mo — straight encode)
+  _bridge_stage(ctx, hl)              # intermission card (3 s typography
+                                       # over dim bg) when enabled; gold-sweep
+                                       # 0.8 s fallback otherwise
+  _main_stage(ctx)                    # scoreboard + (optional FULL MATCH
+                                       # badge) + per-highlight 50%-speed
+                                       # replay spliced after each real-time
+                                       # occurrence, with SLOW MOTION badge
+                                       # → main.mp4
   _finalize(ctx)                      # concat → output/<name>.mp4
                                        # then shutil.rmtree(job_dir) on success
 ```
@@ -164,6 +188,29 @@ progress fraction stays correct as stages advance.
   JASSUB-in-browser. If you change how the scoreboard looks, change
   `scoreboard.py` and both paths update — never duplicate the layout
   logic on the frontend.
+
+- **Doubles row-name rule is one function.** `resolve_row_names` in
+  `backend/ass/scoreboard.py` is the *only* place that decides how the
+  4 raw names (p1/p2/p3/p4) collapse to the 2 scoreboard row labels.
+  Both the scoreboard renderer AND `_intro_stage` (for the cinematic
+  intro's name line) call into it. The frontend mirrors the rule for
+  Live Score panel labels only — actual rendered output always goes
+  through the backend.
+
+- **Main render splices slow-mo replays inline.** Every highlight
+  becomes a 50%-speed replay inserted into main *right after* its
+  real-time occurrence. `build_replay_plan` + `build_main_playlist` in
+  `renderer.py` produce a chronological list of (slice | replay)
+  entries; `remap_events_with_replays` shifts score events past each
+  insert point by the replay's final duration. Total main duration
+  changes — the scoreboard `total_duration` must use the post-replay
+  value, not the trimmed-source sum.
+
+- **Intermission card suppresses the FULL MATCH top-left badge.** When
+  `config.intermission_enabled` is true, `_main_stage` passes
+  `full_match_badge_ass=None`, since the intermission card already
+  signals "we're entering the main match". Keeping both would read as
+  duplicate for ~18 s.
 
 - **Temp survives errors.** `_finalize` deletes `temp/<job_id>/` ONLY
   on success. Failed renders leave the .ass / .mp4 / .concat.txt
@@ -248,12 +295,17 @@ progress fraction stays correct as stages advance.
 |---|---|
 | Encoder, preset, quality             | [config.json](config.json) |
 | Intro duration / avatar size / blur  | [config.json](config.json) (`intro_*` keys) |
+| Intermission on/off, text, bg, sound | [config.json](config.json) (`intermission_*` keys) |
 | Scoreboard layout / colours          | [backend/ass/scoreboard.py](backend/ass/scoreboard.py) |
-| Cinematic intro filter graph         | [backend/intro_builder.py](backend/intro_builder.py) |
+| Doubles combined-name rule           | `resolve_row_names` / `_combine_doubles_name` in [backend/ass/scoreboard.py](backend/ass/scoreboard.py) + [backend/ass/common.py](backend/ass/common.py) |
+| Cinematic intro filter graph         | [backend/intro_builder.py](backend/intro_builder.py) — branches on `is_doubles` for the 4-avatar layout |
 | Cinematic intro text overlays        | `build_cinematic_intro_ass` in [backend/ass/intro.py](backend/ass/intro.py) |
+| Intermission card layout             | `build_intermission_card_ass` in [backend/ass/intermission.py](backend/ass/intermission.py); ffmpeg side in `render_intermission_card` in [backend/renderer.py](backend/renderer.py) |
 | Highlight reel rendering             | `render_highlight_clip` in [backend/renderer.py](backend/renderer.py) |
-| Score logic (replay, set wins)       | [frontend/app.js](frontend/app.js) — `recomputeAllEvents`, `scorePoint` |
+| Slow-mo replay plan / playlist       | `build_replay_plan` / `build_main_playlist` / `remap_events_with_replays` in [backend/renderer.py](backend/renderer.py) |
+| Slow-mo / HIGHLIGHT / FULL MATCH badge | [backend/ass/badges.py](backend/ass/badges.py) |
+| Score logic (replay, set wins)       | [frontend/score.js](frontend/score.js) — `recomputeAllEvents`, `scorePoint` |
 | Avatar lookup rules                  | [backend/avatars.py](backend/avatars.py) |
-| Render-time pipeline orchestration   | `_intro_stage` / `_highlight_stage` / `_main_stage` / `_finalize` in [backend/renderer.py](backend/renderer.py) |
+| Render-time pipeline orchestration   | `_intro_stage` / `_highlight_stage` / `_bridge_stage` / `_main_stage` / `_finalize` in [backend/renderer.py](backend/renderer.py) |
 | Add a new HTTP endpoint              | [backend/server.py](backend/server.py) |
-| Add new project field                | [backend/models.py](backend/models.py) `ProjectInfo`, then frontend `project.info` schema in [frontend/app.js](frontend/app.js), then UI input in [frontend/index.html](frontend/index.html) |
+| Add new project field                | [backend/models.py](backend/models.py) `ProjectInfo`, then frontend `project.info` schema in [frontend/state.js](frontend/state.js), then UI input in [frontend/index.html](frontend/index.html) |

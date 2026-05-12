@@ -267,6 +267,25 @@ reserved for v2+; not in config until then.
 - [x] Config keys (§9): `intro_duration_seconds=4.0`,
       `intro_avatar_size_px=420`, `intro_blur_sigma=30`
 
+### Phase B′ — Doubles 4-avatar layout  ✅ done
+
+- [x] When `project.info.match_type == "double"`, the renderer resolves
+      photos for all four players via `find_avatar_or_default` and
+      lays them out as two pairs sliding in from opposite edges.
+- [x] Avatar size scales to ~60% of the singles value
+      (`config.intro_avatar_size_px * 0.6`) so each pair fits inside
+      `W*0.27 ± ~200 px` and stays clear of the centre `VS`.
+- [x] Inputs to the filter graph are ordered P1 → P3 → P2 → P4 so the
+      overlay chain reads left-to-right: team-1-left, team-1-right,
+      team-2-left, team-2-right.
+- [x] Same ease-out cubic slide-in curve as singles — both avatars in
+      a pair share the same animation so the pair reads as one unit.
+- [x] Text overlay reuses `build_cinematic_intro_ass` with the names
+      pre-combined by `resolve_row_names` (e.g.
+      `"Văn An + Hoàng Nam"`), so the singles layout works unchanged.
+- [x] Falls back to text intro when ANY of the four required photos
+      (incl. `_default.jpg` fallback) is missing.
+
 ### Phase C — Polish  ⏳ later
 
 - [ ] Animation timing tuning (overshoot? subtle camera shake?)

@@ -1,6 +1,6 @@
 # Progress Status
 
-Last update: 2026-05-11
+Last update: 2026-05-12
 
 ## Module map
 
@@ -22,6 +22,13 @@ Last update: 2026-05-11
 
 ### Setup & project management
 - ✅ Tournament + player names
+- ✅ Match type tabs (**Single** / **Double**). Doubles adds P3 + P4
+      inputs (team 1 partner = P3, team 2 partner = P4) and switches the
+      scoreboard rows to combined "lastTwo(P1) + lastTwo(P3)" labels.
+      Score hotkeys A/D map to top team / bottom team in doubles. Shared
+      rule lives in `resolve_row_names` (backend) — same combine logic
+      drives the scoreboard, the cinematic intro's name line, and the
+      Live Score panel mirror in the frontend.
 - ✅ Source video dropdown (auto-scan `videos/`)
 - ✅ Native "Browse…" picker — pick any file from disk. Files inside
       `videos/` merge with the dropdown; files elsewhere are streamed
@@ -42,11 +49,13 @@ Last update: 2026-05-11
 |---|---|---|
 | Space | play / pause | ✅ |
 | ←/→ | seek 5s (Shift = 1s) | ✅ |
-| A / D | P1 / P2 score | ✅ |
+| A / D | P1 / P2 score (top / bottom team in doubles) | ✅ |
 | H | mark highlight start/end | ✅ |
-| S | toggle slow-mo on most-recent highlight | ✅ |
 | T / Y | mark trim start / end | ✅ |
 | Ctrl+Z | undo (100-deep stack) | ✅ |
+
+(S used to toggle per-highlight tail slow-mo; removed once the main
+render started splicing a full 50% replay after every highlight.)
 
 ### Referee logic
 - ✅ Point-by-point scoring
@@ -58,7 +67,6 @@ Last update: 2026-05-11
 ### Highlight & trim lists
 - ✅ Add highlight by `H` key (start / end)
 - ✅ Add highlight manually (start / end via prompt)
-- ✅ Per-highlight slow-mo checkbox
 - ✅ Edit start/end inline; jump-to-start; delete
 - ✅ Trim segments (T/Y or manual)
 
@@ -73,13 +81,42 @@ Last update: 2026-05-11
       circular-masked player photos sliding in from both sides, gold
       tournament line, slow Ken-Burns bg zoom, avatar bobbing, "VS"
       pulse, slow name fade-out — falls back to text-only intro when
-      no avatar/placeholder is on disk)
-- ✅ Highlight reel (per-clip ffmpeg with input seeking + 2× slow-mo on tail)
-- ✅ Main match (multi-input ffmpeg with input seeking, scoreboard burned via `ass=`)
+      no avatar/placeholder is on disk). Doubles uses a 4-avatar layout
+      (P1+P3 left pair, P2+P4 right pair, each ~60% of the singles
+      avatar size) so all four players appear without re-rendering or
+      a separate pipeline.
+- ✅ Highlight reel (per-clip ffmpeg with input seeking, straight encode;
+      slow-mo no longer applied per clip — see main-stage replays below)
+- ✅ Typography intermission card between highlight reel and main:
+      3 s libass overlay over a dim background image (optional, falls
+      back to lavfi color) with optional impact-sound mp3. Layout top
+      to bottom: tournament (gold) → "FULL MATCH" headline (white,
+      zoom 1.0 → 1.1) → gold accent line wiping outward → team labels
+      "Team A *vs* Team B" (white, gold "vs", only when both team
+      fields are set) → player labels "P1 + P3 *vs* P2 + P4" (white,
+      gold "vs"). The inline-gold "vs" on both lines is what visually
+      separates the two competing sides; team-vs-players hierarchy
+      comes from font size (38 px vs 48 px). Toggled via
+      `intermission_enabled` in config — `false` falls back to the
+      original 0.8 s gold-sweep bridge. When enabled, the FULL MATCH
+      top-left badge in main is suppressed so the "we're entering the
+      match" signal doesn't read as duplicate.
+- ✅ Main match (multi-input ffmpeg with input seeking, scoreboard
+      burned via `ass=`). Every highlight gets a 50%-speed replay
+      spliced in **right after its real-time occurrence** (setpts*2 +
+      atempo=0.5), with a pulsing SLOW MOTION badge top-left for the
+      duration of each replay. Replay plan + playlist builder + event
+      remap pass live in `renderer.py`; total main duration grows by
+      `sum(highlight_dur) × (1 / 0.5)` and the scoreboard's
+      `total_duration` is recomputed from the playlist's final
+      timeline so libass doesn't expire mid-clip.
 - ✅ Final concat (concat demuxer, no re-encode)
 - ✅ NVENC h264 (configurable to hevc / av1)
 - ✅ NVDEC via `-hwaccel cuda`
-- ✅ Per-stage progress reporting via `-progress pipe:1`
+- ✅ Per-stage progress reporting via `-progress pipe:1` — progress
+      messages format the elapsed / expected time as `m:ss` (or
+      `h:mm:ss` past an hour) instead of raw seconds so operator can
+      glance and know how far in / left at a glance.
 - ✅ Score-event timestamp remap (source-time → trimmed-output-time)
 - ✅ Silent-audio injection when source has no audio track
 

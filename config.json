@@ -15,6 +15,11 @@
   "intro_duration_seconds": 4.0,
   "intro_avatar_size_px": 420,
   "intro_blur_sigma": 30,
+  "intermission_enabled": true,
+  "intermission_text": "FULL MATCH",
+  "intermission_duration_seconds": 3.0,
+  "intermission_bg_path": "assets/backgrounds/intermission_bg.jpg",
+  "intermission_sound_path": "assets/sounds/intermission_boom.mp3",
   "host": "127.0.0.1",
   "port": 8765
 }

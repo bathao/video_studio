@@ -11,7 +11,7 @@
 //       p1_team, p2_team, video_file, best_of,
 //     },
 //     trim_segments: [{ start, end }],
-//     highlights:    [{ start, end, slow_mo, label }],
+//     highlights:    [{ start, end, label }],
 //     score_events:  [{ timestamp, who, p1_score, p2_score, p1_set, p2_set }],
 //   }
 //

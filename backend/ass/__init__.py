@@ -22,6 +22,7 @@ from .badges import (
     build_highlight_badge_ass,
     build_slow_motion_badge_ass,
 )
+from .intermission import build_intermission_card_ass
 from .intro import build_cinematic_intro_ass, build_intro_ass
 from .scoreboard import ScoreFrame, build_scoreboard_ass, build_scoreboard_ass_text
 from .transition import build_transition_ass
@@ -31,6 +32,7 @@ __all__ = [
     "build_cinematic_intro_ass",
     "build_full_match_badge_ass",
     "build_highlight_badge_ass",
+    "build_intermission_card_ass",
     "build_intro_ass",
     "build_scoreboard_ass",
     "build_scoreboard_ass_text",

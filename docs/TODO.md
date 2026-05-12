@@ -37,16 +37,37 @@ indicator: 🟢 quick (<1h), 🟡 medium (~half-day), 🔴 large (1+ day).
       Table-tennis serves alternate every 2 points (every 1 in deuce).
       Track `serving_player` in live state and surface a `🏓` next to the
       server's name in both UI and scoreboard.
-- [ ] 🟡 **Deuce / match-point flag**
-      Show `DEUCE` / `MATCH POINT` overlays on the scoreboard when the
-      conditions are met.
-- [ ] 🟡 **Best-of-N match config**
-      User picks "best of 3 / 5 / 7" and the renderer stops the
-      scoreboard updates after match completion. Currently we treat each
-      set independently with no match-end concept.
-- [ ] 🟡 **Multiple slow-mo factors**
-      Right now slow-mo is hard-coded to 2× on the last 2.5 s. Add UI to
-      pick `1.5× / 2× / 4×` and tail length per highlight.
+- [x] 🟡 **Deuce / match-point flag** — done.
+      `_emit_flag_overlays` in `backend/ass/scoreboard.py` pulses DEUCE
+      / GAME POINT / MATCH POINT on the scoreboard during the
+      qualifying state.
+- [x] 🟡 **Best-of-N match config** — done.
+      `ProjectInfo.best_of` (3 / 5 / 7) feeds `_walk_events` so the
+      final scoreboard fires when one side hits `sets_to_win`; GAME
+      POINT upgrades to MATCH POINT when winning the current set
+      finishes the match.
+- [x] 🟡 **Doubles support** — done.
+      Setup form gains Single / Double tabs. Doubles adds P3 + P4 and
+      switches scoreboard rows to combined "lastTwo(p1) + lastTwo(p3)"
+      / "lastTwo(p2) + lastTwo(p4)" via `resolve_row_names`. Cinematic
+      intro renders a 4-avatar layout (2 pairs, ~60% avatar size).
+- [x] 🟡 **Slow-mo replays spliced into main** — done.
+      Replaces the per-highlight tail slow-mo (and its `S` hotkey /
+      checkbox UI / `slow_mo` field). Each highlight now becomes a
+      50%-speed replay inserted immediately after its real-time
+      occurrence in main, with a pulsing SLOW MOTION top-left badge
+      during the replay window. Score events get a second remap pass
+      that shifts forward by the cumulative replay duration.
+- [x] 🟡 **Typography intermission card** — done.
+      3 s libass card (headline / tournament / players over a dim bg)
+      between highlight reel and main; replaces the 0.8 s gold-sweep
+      when `intermission_enabled` is true. Optional bg image + boom
+      sound; graceful fallback to lavfi color + silent. Suppresses the
+      FULL MATCH top-left badge in main to avoid duplicate signalling.
+- [ ] 🟡 **Multiple slow-mo factors / configurable replay speed**
+      Replay speed is currently fixed at 50 % (`REPLAY_SPEED = 0.5` in
+      `renderer.py`). Add per-highlight or global UI to pick
+      `25 / 50 / 75 %`.
 - [ ] 🟡 **Inline rename / reorder highlights and trims**
       Drag-to-reorder is nice; rename via the existing inline inputs.
 - [ ] 🔴 **Resume from last completed stage**
@@ -66,8 +87,10 @@ indicator: 🟢 quick (<1h), 🟡 medium (~half-day), 🔴 large (1+ day).
       atempo=0.5 sounds robotic). Try crossfade or use `rubberband`.
 - [ ] 🔴 **Per-highlight export** as separate MP4 files (in addition to
       the combined reel).
-- [ ] 🔴 **Animated set transition card** (1-second card between sets in
-      the main render).
+- [x] 🔴 **Animated set transition card** — done.
+      `_emit_recap_cards` in `backend/ass/scoreboard.py` shows
+      `SET N` + final score (4 s) immediately followed by a `SET N+1`
+      transition (4.5 s) for every non-match-ending set boundary.
 
 ## Dev infra
 

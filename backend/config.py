@@ -86,5 +86,47 @@ class Config:
     def intro_blur_sigma(self) -> int:
         return int(self._data.get("intro_blur_sigma", 30))
 
+    # ------------------------------------------------------------------
+    # Intermission card — typography bridge between highlight reel and
+    # main match. When enabled, replaces the 0.8 s gold-sweep transition
+    # (see backend/ass/transition.py) and suppresses the FULL MATCH
+    # top-left badge in the main render so the headline doesn't read as
+    # duplicated.
+    # ------------------------------------------------------------------
+
+    @property
+    def intermission_enabled(self) -> bool:
+        return bool(self._data.get("intermission_enabled", True))
+
+    @property
+    def intermission_text(self) -> str:
+        return (self._data.get("intermission_text") or "FULL MATCH").strip() or "FULL MATCH"
+
+    @property
+    def intermission_duration_seconds(self) -> float:
+        return float(self._data.get("intermission_duration_seconds", 3.0))
+
+    def _optional_asset(self, key: str) -> Path | None:
+        """Resolve a config-supplied asset path, returning None when the
+        value is missing OR the file doesn't exist. Used by the
+        intermission renderer to gracefully fall back to a solid-colour
+        background / silent audio when the operator hasn't dropped real
+        assets in yet."""
+        raw = self._data.get(key)
+        if not raw:
+            return None
+        p = Path(raw)
+        if not p.is_absolute():
+            p = ROOT_DIR / p
+        return p if p.exists() and p.is_file() else None
+
+    @property
+    def intermission_bg_path(self) -> Path | None:
+        return self._optional_asset("intermission_bg_path")
+
+    @property
+    def intermission_sound_path(self) -> Path | None:
+        return self._optional_asset("intermission_sound_path")
+
 
 config = Config()

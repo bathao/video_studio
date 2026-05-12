@@ -37,7 +37,6 @@ class TrimSegment(BaseModel):
 class Highlight(BaseModel):
     start: float
     end: float
-    slow_mo: bool = False
     label: str = ""
 
 

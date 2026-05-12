@@ -19,9 +19,7 @@ import { syncLiveFromTime, syncScore, syncEvents, scorePoint } from './score.js'
 import {
   player, setVideoSource, togglePlay, seekBy, loadVideoList,
 } from './player.js';
-import {
-  syncHighlights, toggleHighlightMark, toggleSlowmoOnLastHighlight,
-} from './highlights.js';
+import { syncHighlights, toggleHighlightMark } from './highlights.js';
 import { syncTrims, markTrimStart, markTrimEnd } from './trims.js';
 import { setSyncAllUI, setSyncInfoFromInputs as setProjectIoSync } from './project_io.js';
 import { setSyncInfoFromInputs as setRenderSync } from './render.js';
@@ -202,7 +200,6 @@ window.addEventListener('keydown', (e) => {
     case 'a': case 'A': e.preventDefault(); scorePoint(1); break;
     case 'd': case 'D': e.preventDefault(); scorePoint(2); break;
     case 'h': case 'H': e.preventDefault(); toggleHighlightMark(); break;
-    case 's': case 'S': e.preventDefault(); toggleSlowmoOnLastHighlight(); break;
     case 't': case 'T': e.preventDefault(); markTrimStart(); break;
     case 'y': case 'Y': e.preventDefault(); markTrimEnd(); break;
     default: break;

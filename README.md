@@ -43,18 +43,21 @@ browser.
 ## Workflow
 
 1. Drop video files into `videos/`.
-2. Open the app, fill in tournament + player names, pick the source video.
+2. Open the app. In the **Setup** panel choose **Single** or **Double**:
+   - **Single**: fill Player 1 (left, key `A`) and Player 2 (right, key `D`).
+   - **Double**: also fill Player 3 (team 1 partner) and Player 4
+     (team 2 partner). The scoreboard combines names per team using
+     the last two words of each partner (e.g. "Văn An + Hoàng Nam").
 3. Watch the match. Use shortcuts to keep your hands off the mouse:
 
    | Key | Action |
    | --- | --- |
    | `Space` | Play / pause |
    | `←` / `→` | Seek 5s (hold `Shift` for 1s) |
-   | `A` | Player 1 scores a point |
-   | `D` | Player 2 scores a point |
+   | `A` | Player 1 (team 1 in doubles) scores a point |
+   | `D` | Player 2 (team 2 in doubles) scores a point |
    | `Ctrl+Z` | Undo last action |
    | `H` | Toggle highlight start/end |
-   | `S` | Toggle slow-mo on most-recent highlight |
    | `T` / `Y` | Mark trim start / end |
 
    The referee logic is automatic: 11 points + 2-point lead wins a set,
@@ -91,11 +94,23 @@ video_studio/
 ## Render pipeline
 
 ```
-intro.mp4   ── 3s title card built with lavfi color + drawtext
-highlight.mp4 ── per-clip ffmpeg with input seeking + slow-mo, then concat
-main.mp4    ── one ffmpeg with one `-i` per kept segment (input seeking)
-              + concat + scoreboard.ass burn, all NVDEC → CPU → NVENC
-final.mp4   ── concat-demuxer of the three (no re-encode)
+intro.mp4          ── cinematic title card (4 avatars in doubles, 2 in
+                      singles); falls back to a 3 s libass-only card
+                      when player photos are missing
+highlight.mp4      ── per-clip ffmpeg with input seeking, then concat;
+                      no per-clip slow-mo (the main render now replays
+                      each highlight at 50% in place)
+intermission.mp4   ── 3 s typography bridge between highlight and main:
+                      headline ("FULL MATCH") + tournament + players
+                      over a dim bg (optional asset). Fallback when
+                      `intermission_enabled=false`: 0.8 s gold-sweep
+main.mp4           ── one ffmpeg, one `-i` per kept slice AND one `-i`
+                      per slow-mo replay (replays use setpts*2 +
+                      atempo=0.5); concat + scoreboard.ass + SLOW
+                      MOTION badge burn, all NVDEC → CPU → NVENC.
+                      Score events shift forward by cumulative replay
+                      duration before they hit the scoreboard
+final.mp4          ── concat-demuxer of the four (no re-encode)
 ```
 
 All stages share the source video's resolution, fps, pixel format, sample
@@ -122,6 +137,15 @@ Edit `config.json`:
 - `preset` — NVENC presets `p1`..`p7` (p1 = fastest, p7 = best quality)
 - `cq` — constant quality (lower = better, default 21)
 - `use_hwaccel` — set false to disable CUDA decode if your driver chokes
+- `intermission_enabled` — `true` for the 3 s typography card between
+  highlight reel and main; `false` falls back to the 0.8 s gold-sweep
+- `intermission_text` — big headline on the card (default `"FULL MATCH"`)
+- `intermission_bg_path` — JPG/PNG dimmed and used as the card background
+  (default `assets/backgrounds/intermission_bg.jpg`). Missing file →
+  solid dark colour fallback.
+- `intermission_sound_path` — MP3 impact sound played during the card
+  (default `assets/sounds/intermission_boom.mp3`). Missing file →
+  silent.
 
 ## Project docs
 

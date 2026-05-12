@@ -7,8 +7,7 @@ with the concat demuxer (no re-encode) into the final output.
 Stage layout:
 
   intro.mp4       — 3 second title card built with lavfi color + drawtext
-  highlight.mp4   — concat of all highlight clips, with optional slow-mo on
-                    the last 2.5 seconds of each
+  highlight.mp4   — concat of all highlight clips at normal speed
   main.mp4        — source video minus trim_segments, with the scoreboard
                     burned in via libass. Every highlight also gets a
                     50%-speed replay spliced in right after its real-time
@@ -33,6 +32,7 @@ from .ass import (
     ScoreFrame,
     build_full_match_badge_ass,
     build_highlight_badge_ass,
+    build_intermission_card_ass,
     build_intro_ass,
     build_scoreboard_ass,
     build_slow_motion_badge_ass,
@@ -55,9 +55,6 @@ from .ffmpeg_runner import (
 )
 from .intro_builder import render_cinematic_intro
 from .models import Highlight, ProjectData, TrimSegment
-
-SLOWMO_TAIL_SECONDS = 2.5  # length of the slow-motion tail per highlight
-
 
 @dataclass
 class RenderState:
@@ -368,6 +365,104 @@ def render_transition(
     return duration
 
 
+def render_intermission_card(
+    *,
+    out_path: Path,
+    width: int,
+    height: int,
+    fps: float,
+    duration: float,
+    tournament: str,
+    p1_label: str,
+    p2_label: str,
+    p1_team: str,
+    p2_team: str,
+    headline: str,
+    bg_path: Optional[Path],
+    sound_path: Optional[Path],
+    on_progress: Callable[[float, str], None],
+    cancel_check: Optional[Callable[[], bool]] = None,
+) -> float:
+    """Render the typography intermission card that bridges the
+    highlight reel and the main match.
+
+    Background is `bg_path` (looped JPG/PNG) when available, otherwise a
+    solid dark colour from lavfi — keeps the renderer robust when the
+    operator hasn't dropped an asset in yet. Same fallback policy on
+    `sound_path`: a real impact mp3 plays through if present, silence
+    otherwise. Everything else (typography, fades, zoom, gold accent)
+    is libass-driven so it scales to any resolution and stays sharp.
+
+    Returns the clip duration.
+    """
+    ass_path = out_path.with_suffix(".intermission.ass")
+    build_intermission_card_ass(
+        output_path=ass_path,
+        video_w=width, video_h=height,
+        duration=duration,
+        headline=headline,
+        tournament=tournament,
+        p1_label=p1_label,
+        p2_label=p2_label,
+        p1_team=p1_team,
+        p2_team=p2_team,
+    )
+
+    args: list[str] = []
+    # Input 0: background. Looped image when available; lavfi colour
+    # otherwise. eq=brightness=-0.2 dims a real photo so the centre
+    # type stays the focal point; the lavfi fallback is already dark
+    # so we only apply the dim on the image branch.
+    if bg_path is not None:
+        args += ["-loop", "1", "-t", f"{duration:.3f}", "-i", str(bg_path)]
+        bg_chain = (
+            f"[0:v]scale={width}:{height},eq=brightness=-0.2,"
+            f"format=yuv420p[bg]"
+        )
+    else:
+        args += [
+            "-f", "lavfi", "-t", f"{duration:.3f}",
+            "-i", f"color=c=0x101418:s={width}x{height}:r={fps}",
+        ]
+        bg_chain = f"[0:v]format=yuv420p[bg]"
+
+    # Input 1: audio. Real impact sound when present, otherwise silent
+    # (anullsrc). Either way the map points at index 1, so the rest of
+    # the command stays uniform.
+    if sound_path is not None:
+        args += ["-t", f"{duration:.3f}", "-i", str(sound_path)]
+    else:
+        args += [
+            "-f", "lavfi", "-t", f"{duration:.3f}",
+            "-i", f"anullsrc=r={TARGET_AUDIO_RATE}:cl=stereo",
+        ]
+
+    ass_arg = escape_ffmpeg_filter_path(ass_path)
+    filter_complex = (
+        f"{bg_chain};"
+        f"[bg]ass='{ass_arg}',format=yuv420p[vout]"
+    )
+
+    args += [
+        "-filter_complex", filter_complex,
+        "-map", "[vout]",
+        "-map", "1:a",
+        *nvenc_args(),
+        *aac_args(),
+        "-shortest",
+        str(out_path),
+    ]
+
+    run_ffmpeg_with_progress(
+        args,
+        expected_out_seconds=duration,
+        on_progress=on_progress,
+        log_prefix="intermission: ",
+        cancel_check=cancel_check,
+    )
+    return duration
+
+
 def render_intro(
     *,
     out_path: Path,
@@ -435,54 +530,27 @@ def _render_one_highlight(
     """
     Render a single highlight clip with input-side seeking (`-ss BEFORE -i`),
     so ffmpeg only demuxes the few seconds of source we actually need —
-    crucial when the source is 10+ GB.
-
-    Returns the output duration (which is longer than the source range
-    when slow-motion is applied to the tail).
+    crucial when the source is 10+ GB. Returns the clip duration.
     """
     duration = h.end - h.start
-    apply_slowmo = h.slow_mo and duration > SLOWMO_TAIL_SECONDS + 0.2
 
-    # We'll emit the concat output to [vc] (or [vout] when there's no
-    # badge), then optionally chain an `ass=` burn for the HIGHLIGHT
-    # badge. The final video label is always [vout].
+    # Emit the concat output to [vc] (or [vout] when there's no badge),
+    # then optionally chain an `ass=` burn for the HIGHLIGHT badge. The
+    # final video label is always [vout].
     vc_label = "vc" if badge_ass else "vout"
 
-    if apply_slowmo:
-        head_dur = duration - SLOWMO_TAIL_SECONDS
-        v_filter_parts = [
-            f"[0:v]trim=duration={head_dur:.3f},setpts=PTS-STARTPTS,"
-            f"scale={width}:{height},fps={fps}[vh]",
-            f"[0:v]trim=start={head_dur:.3f}:duration={SLOWMO_TAIL_SECONDS},"
-            f"setpts=2.0*(PTS-STARTPTS),scale={width}:{height},fps={fps}[vt]",
-        ]
-        if has_audio:
-            a_filter_parts = [
-                f"[0:a]atrim=duration={head_dur:.3f},asetpts=PTS-STARTPTS,"
-                f"aformat=sample_rates={TARGET_AUDIO_RATE}:channel_layouts=stereo[ah]",
-                f"[0:a]atrim=start={head_dur:.3f}:duration={SLOWMO_TAIL_SECONDS},"
-                f"asetpts=PTS-STARTPTS,atempo=0.5,"
-                f"aformat=sample_rates={TARGET_AUDIO_RATE}:channel_layouts=stereo[at]",
-            ]
-            concat = f"[vh][ah][vt][at]concat=n=2:v=1:a=1[{vc_label}][aout]"
-        else:
-            a_filter_parts = []
-            concat = f"[vh][vt]concat=n=2:v=1:a=0[{vc_label}]"
-        filter_complex = ";".join(v_filter_parts + a_filter_parts + [concat])
-        out_duration = head_dur + (SLOWMO_TAIL_SECONDS * 2.0)
-    else:
-        v_filter = (
-            f"[0:v]setpts=PTS-STARTPTS,scale={width}:{height},fps={fps}[{vc_label}]"
+    v_filter = (
+        f"[0:v]setpts=PTS-STARTPTS,scale={width}:{height},fps={fps}[{vc_label}]"
+    )
+    if has_audio:
+        a_filter = (
+            f"[0:a]asetpts=PTS-STARTPTS,"
+            f"aformat=sample_rates={TARGET_AUDIO_RATE}:channel_layouts=stereo[aout]"
         )
-        if has_audio:
-            a_filter = (
-                f"[0:a]asetpts=PTS-STARTPTS,"
-                f"aformat=sample_rates={TARGET_AUDIO_RATE}:channel_layouts=stereo[aout]"
-            )
-            filter_complex = ";".join([v_filter, a_filter])
-        else:
-            filter_complex = v_filter
-        out_duration = duration
+        filter_complex = ";".join([v_filter, a_filter])
+    else:
+        filter_complex = v_filter
+    out_duration = duration
 
     # Burn the HIGHLIGHT badge on top of the concat output.
     if badge_ass:
@@ -491,9 +559,6 @@ def _render_one_highlight(
 
     # Both `-ss` and `-t` placed BEFORE `-i` are input-side. `-ss` is a
     # fast keyframe seek; `-t` limits how much of the source we demux.
-    # (Putting `-t` after `-i` would be an OUTPUT-duration limit, which
-    # would silently truncate slow-mo highlights since slow-mo expands
-    # output PTS beyond the source range.)
     args = [
         *hwaccel_input_args(),
         "-ss", f"{h.start:.3f}",
@@ -546,7 +611,7 @@ def render_highlight_clip(
     # clip restarts the .ass timeline at 0, so the same file works for
     # any clip duration (we just need the .ass to outlast the longest).
     longest = max((h.end - h.start) for h in valid)
-    badge_dur = longest * 2.0 + 5.0  # generous slack for slow-mo expansion
+    badge_dur = longest + 5.0  # slack so libass doesn't expire before the longest clip ends
     badge_path = job_dir / "highlight_badge.ass"
     build_highlight_badge_ass(
         output_path=badge_path,
@@ -1029,8 +1094,15 @@ def _highlight_stage(ctx: RenderContext) -> bool:
 
 
 def _bridge_stage(ctx: RenderContext, highlight_appended: bool) -> None:
-    """Render the gold-sweep bridge between highlight reel and main
-    match — only when both segments are present in the final output."""
+    """Bridge between the highlight reel and the main match.
+
+    When `config.intermission_enabled` is true we render the 3 s
+    typography intermission card (libass overlay over a dim background
+    + optional impact sound); otherwise we fall back to the original
+    0.8 s gold-sweep transition. Either way the bridge only runs when
+    both highlight reel and main match are actually in the final
+    output — same gating as before.
+    """
     plan = ctx.plan
     wants_bridge = (
         plan.include_highlights
@@ -1041,6 +1113,33 @@ def _bridge_stage(ctx: RenderContext, highlight_appended: bool) -> None:
     if not wants_bridge:
         return
     ctx._bail_if_cancelled()
+
+    if config.intermission_enabled:
+        info = plan.project.info
+        # Resolve scoreboard row labels so doubles shows the combined
+        # team names on the players line instead of just p1 / p2.
+        top_label, bot_label = resolve_row_names(
+            info.match_type, info.p1, info.p2, info.p3, info.p4,
+        )
+        im_path = ctx.job_dir / "intermission.mp4"
+        render_intermission_card(
+            out_path=im_path,
+            width=ctx.width, height=ctx.height, fps=ctx.fps,
+            duration=config.intermission_duration_seconds,
+            tournament=info.tournament,
+            p1_label=top_label,
+            p2_label=bot_label,
+            p1_team=info.p1_team,
+            p2_team=info.p2_team,
+            headline=config.intermission_text,
+            bg_path=config.intermission_bg_path,
+            sound_path=config.intermission_sound_path,
+            on_progress=lambda f, m: None,  # short clip, no progress reporting
+            cancel_check=ctx.cancel_check,
+        )
+        ctx.parts.append(im_path)
+        return
+
     tr_path = ctx.job_dir / "transition.mp4"
     render_transition(
         out_path=tr_path,
@@ -1096,13 +1195,18 @@ def _main_stage(ctx: RenderContext) -> None:
         best_of=plan.project.info.best_of,
     )
     # FULL MATCH badge: shown for the first 15 seconds of the main
-    # render so the viewer knows the highlight reel is over.
-    fm_badge_path = ctx.job_dir / "full_match_badge.ass"
-    build_full_match_badge_ass(
-        output_path=fm_badge_path,
-        video_w=ctx.width, video_h=ctx.height,
-        show_seconds=15.0,
-    )
+    # render so the viewer knows the highlight reel is over. Skipped
+    # when the intermission card is enabled — the card already plays
+    # the "we're entering main" signal, repeating it as a 15 s top-left
+    # badge would read as duplicate.
+    fm_badge_path: Optional[Path] = None
+    if not config.intermission_enabled:
+        fm_badge_path = ctx.job_dir / "full_match_badge.ass"
+        build_full_match_badge_ass(
+            output_path=fm_badge_path,
+            video_w=ctx.width, video_h=ctx.height,
+            show_seconds=15.0,
+        )
     # SLOW MOTION badge: one Dialogue range per spliced-in replay, in
     # final-render coords. Skipped when no replays were spliced — saves
     # a no-op ass= filter from the chain.

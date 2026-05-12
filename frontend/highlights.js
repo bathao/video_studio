@@ -1,6 +1,7 @@
-// Highlight reel ops + list UI. Highlights store source-time ranges
-// with optional slow-mo flags; the renderer pulls them in order to
-// build the highlight reel mp4.
+// Highlight reel ops + list UI. Highlights store source-time ranges;
+// the renderer pulls them in order to build the highlight reel mp4
+// AND inserts a 50%-speed replay of each into the main render at the
+// matching real-time point.
 import { $ } from './dom.js';
 import { fmt, parseTimecode } from './timecode.js';
 import { mut, project, snapshot } from './state.js';
@@ -27,22 +28,10 @@ export function toggleHighlightMark() {
       toast('Highlight too short, ignored');
       return;
     }
-    project.highlights.push({ start, end, slow_mo: false, label: '' });
+    project.highlights.push({ start, end, label: '' });
     syncHighlights();
     toast(`Highlight ${fmt(start)} → ${fmt(end)}`);
   }
-}
-
-export function toggleSlowmoOnLastHighlight() {
-  if (!project.highlights.length) {
-    toast('No highlights yet');
-    return;
-  }
-  snapshot();
-  const last = project.highlights[project.highlights.length - 1];
-  last.slow_mo = !last.slow_mo;
-  syncHighlights();
-  toast(`Last highlight slow-mo: ${last.slow_mo ? 'ON' : 'OFF'}`);
 }
 
 function addManualHighlight() {
@@ -58,7 +47,7 @@ function addManualHighlight() {
     return;
   }
   snapshot();
-  project.highlights.push({ start, end, slow_mo: false, label: '' });
+  project.highlights.push({ start, end, label: '' });
   syncHighlights();
 }
 
@@ -70,8 +59,7 @@ function removeHighlight(idx) {
 
 function setHighlightField(idx, field, value) {
   snapshot();
-  if (field === 'slow_mo') project.highlights[idx].slow_mo = !!value;
-  else project.highlights[idx][field] = parseFloat(value);
+  project.highlights[idx][field] = parseFloat(value);
   syncHighlights();
 }
 
@@ -91,16 +79,11 @@ export function syncHighlights() {
       <input type="text" value="${fmt(h.start)}" class="ipt w-20 text-[11px] py-0.5 font-mono" data-field="start" title="m:ss.xx" />
       <span class="text-slate-500">→</span>
       <input type="text" value="${fmt(h.end)}" class="ipt w-20 text-[11px] py-0.5 font-mono" data-field="end" title="m:ss.xx" />
-      <label class="flex items-center gap-1 ml-1"><input type="checkbox" data-field="slow_mo" ${h.slow_mo ? 'checked' : ''}/>slow</label>
       <button class="text-slate-400 hover:text-accent-400 ml-auto" title="Jump to start" data-jump>↦</button>
       <button class="text-slate-400 hover:text-danger-500" title="Delete" data-del>✕</button>
     `;
     li.querySelectorAll('input').forEach((el) => {
       el.addEventListener('change', () => {
-        if (el.type === 'checkbox') {
-          setHighlightField(i, el.dataset.field, el.checked);
-          return;
-        }
         const v = parseTimecode(el.value);
         if (isFinite(v) && v >= 0) {
           setHighlightField(i, el.dataset.field, v);

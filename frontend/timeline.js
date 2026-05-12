@@ -3,49 +3,35 @@
 // Shows three derived totals that update on every highlight / trim
 // edit and every change to the render-stage checkboxes:
 //
-//   - Highlights total (with slow-mo expansion factored in — the
-//     last 2.5 s of any slow_mo highlight runs at half speed in the
-//     renderer, so the rendered duration is +2.5 s).
+//   - Highlights total (sum of all `(end - start)` ranges).
 //   - Trimmed total (sum of all `(end - start)` ranges removed from
 //     the source).
-//   - Output estimate (intro + highlight reel + bridge + main, where
-//     each contribution is gated on the matching checkbox).
+//   - Output estimate (intro + highlight reel + bridge + main + the
+//     per-highlight slow-mo replays spliced into main).
 //
-// All constants here mirror the backend defaults:
-//   - SLOWMO_TAIL          → renderer.SLOWMO_TAIL_SECONDS
+// Constants mirror the backend defaults:
 //   - INTRO_DUR_CINEMATIC  → config.intro_duration_seconds (default 4.0)
 //   - INTRO_DUR_TEXT       → render_intro hard-codes 3.0 s
-//   - BRIDGE_DUR           → render_transition hard-codes 0.8 s
+//   - BRIDGE_DUR           → 3.0 s when intermission is on (current default),
+//                            falls back to 0.8 s gold-sweep otherwise
+//   - REPLAY_SPEED         → renderer.REPLAY_SPEED (0.5 → 2× duration)
 // If any of those defaults change in the backend, the estimate will
-// drift; that's accepted because this is a status display, not a
-// contract.
+// drift; accepted because this is a status display, not a contract.
 
 import { $ } from './dom.js';
 import { fmt } from './timecode.js';
 import { project } from './state.js';
 import { player } from './player.js';
 
-const SLOWMO_TAIL = 2.5;
 const INTRO_DUR_CINEMATIC = 4.0;
 const INTRO_DUR_TEXT = 3.0;
-const BRIDGE_DUR = 0.8;
-
-
-function expandedHighlightDuration(h) {
-  const d = Math.max(0, h.end - h.start);
-  // Matches `apply_slowmo` in renderer._render_one_highlight: only
-  // applies when the source range is meaningfully longer than the
-  // tail, otherwise the slow-mo flag is silently ignored.
-  if (h.slow_mo && d > SLOWMO_TAIL + 0.2) {
-    return d + SLOWMO_TAIL;   // tail of 2.5 s plays at 2× → +2.5 s
-  }
-  return d;
-}
+const BRIDGE_DUR = 3.0;
+const REPLAY_SPEED = 0.5;
 
 
 export function syncTimeline() {
   const hlTotal = project.highlights.reduce(
-    (sum, h) => sum + expandedHighlightDuration(h), 0,
+    (sum, h) => sum + Math.max(0, h.end - h.start), 0,
   );
   const trimTotal = project.trim_segments.reduce(
     (sum, t) => sum + Math.max(0, t.end - t.start), 0,
@@ -61,9 +47,13 @@ export function syncTimeline() {
                  : textIntro ? INTRO_DUR_TEXT
                  : 0;
   const bridgeDur = (includeHl && includeMain) ? BRIDGE_DUR : 0;
-  const mainDur = includeMain ? Math.max(0, (player.duration || 0) - trimTotal) : 0;
+  const baseMain = includeMain ? Math.max(0, (player.duration || 0) - trimTotal) : 0;
+  // Each highlight gets a 50%-speed replay spliced into main, so the
+  // main contribution stretches by `sum(highlight_dur) / REPLAY_SPEED`
+  // whenever both reel and main are on (replays gated on includeHl).
+  const replayDur = (includeHl && includeMain) ? hlTotal / REPLAY_SPEED : 0;
   const hlDur = includeHl ? hlTotal : 0;
-  const outputDur = introDur + hlDur + bridgeDur + mainDur;
+  const outputDur = introDur + hlDur + bridgeDur + baseMain + replayDur;
 
   $('tl-hl').textContent = fmt(hlTotal);
   $('tl-trim').textContent = fmt(trimTotal);
