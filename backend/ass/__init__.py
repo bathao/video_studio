@@ -17,7 +17,11 @@ Public symbols are re-exported from this package so call sites can do
 each builder lives in.
 """
 
-from .badges import build_full_match_badge_ass, build_highlight_badge_ass
+from .badges import (
+    build_full_match_badge_ass,
+    build_highlight_badge_ass,
+    build_slow_motion_badge_ass,
+)
 from .intro import build_cinematic_intro_ass, build_intro_ass
 from .scoreboard import ScoreFrame, build_scoreboard_ass, build_scoreboard_ass_text
 from .transition import build_transition_ass
@@ -30,5 +34,6 @@ __all__ = [
     "build_intro_ass",
     "build_scoreboard_ass",
     "build_scoreboard_ass_text",
+    "build_slow_motion_badge_ass",
     "build_transition_ass",
 ]

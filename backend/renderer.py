@@ -10,7 +10,10 @@ Stage layout:
   highlight.mp4   — concat of all highlight clips, with optional slow-mo on
                     the last 2.5 seconds of each
   main.mp4        — source video minus trim_segments, with the scoreboard
-                    burned in via libass
+                    burned in via libass. Every highlight also gets a
+                    50%-speed replay spliced in right after its real-time
+                    occurrence in main, with a pulsing SLOW MOTION badge
+                    on the top-left for the duration of each replay.
 
 All produced files share the same resolution, fps, pixel format, audio
 sample rate, channel layout, and codec, so the concat demuxer can stitch
@@ -32,6 +35,7 @@ from .ass import (
     build_highlight_badge_ass,
     build_intro_ass,
     build_scoreboard_ass,
+    build_slow_motion_badge_ass,
     build_transition_ass,
 )
 from .ass.scoreboard import resolve_row_names
@@ -139,6 +143,181 @@ def remap_score_event_to_trimmed(
             return accumulated + (t_source - a)
         accumulated += b - a
     return accumulated  # past end → end of trimmed video
+
+
+# ---------- slow-mo replay plumbing ----------------------------------------
+
+# Speed factor for slow-mo replays inserted into main. 0.5 → 2× duration,
+# atempo=0.5 audio. Picked to match what's visually readable for a table-
+# tennis rally and to align with the highlight-reel tail-slow-mo idiom.
+REPLAY_SPEED = 0.5
+
+
+@dataclass(frozen=True)
+class ReplayInsert:
+    """A slow-mo replay of a highlight, scheduled to play in the main
+    render right after the highlight's real-time occurrence.
+
+    `insert_at_main` is the moment (in TRIMMED-main coords, before any
+    replay is added to the timeline) where the replay drops in. Built
+    by remapping the highlight's source `end` time through the trims.
+
+    `src_start` / `src_end` is the source range to slow down. The final
+    replay clip plays for `(src_end - src_start) / REPLAY_SPEED` seconds.
+    """
+    insert_at_main: float
+    src_start: float
+    src_end: float
+
+    @property
+    def replay_duration(self) -> float:
+        return (self.src_end - self.src_start) / REPLAY_SPEED
+
+
+def build_replay_plan(
+    highlights: list[Highlight],
+    kept: list[tuple[float, float]],
+) -> list[ReplayInsert]:
+    """For each highlight, compute the trimmed-main insert point right
+    after its real-time playback. Highlights whose `end` lies inside a
+    trim get snapped forward to the start of the next kept segment, so
+    the replay still plays once the main video resumes (which still
+    reads as 'just after we saw the action live')."""
+    plan: list[ReplayInsert] = []
+    for h in highlights:
+        if h.end <= h.start:
+            continue
+        t_main = remap_score_event_to_trimmed(h.end, kept)
+        if t_main is None:
+            continue
+        plan.append(ReplayInsert(
+            insert_at_main=t_main,
+            src_start=float(h.start),
+            src_end=float(h.end),
+        ))
+    plan.sort(key=lambda r: r.insert_at_main)
+    return plan
+
+
+def remap_events_with_replays(
+    events: list[ScoreFrame],
+    replays: list[ReplayInsert],
+) -> list[ScoreFrame]:
+    """Shift each score event by the cumulative replay duration of
+    replays that occur strictly before the event. Events that fire AT
+    a replay's insert point stay put so the post-highlight score is
+    visible during the replay too."""
+    if not replays:
+        return events
+    out: list[ScoreFrame] = []
+    for ev in events:
+        shift = 0.0
+        for r in replays:
+            if r.insert_at_main < ev.timestamp:
+                shift += r.replay_duration
+            else:
+                break
+        out.append(ScoreFrame(
+            timestamp=ev.timestamp + shift,
+            p1_score=ev.p1_score, p2_score=ev.p2_score,
+            p1_set=ev.p1_set, p2_set=ev.p2_set,
+        ))
+    return out
+
+
+@dataclass(frozen=True)
+class _PlaylistEntry:
+    """One ffmpeg input slot for the main render. `kind` discriminates
+    between a normal-speed source slice and a slow-mo replay (which
+    needs setpts*2 + atempo=0.5). `final_start` / `final_end` are the
+    entry's position in the final main timeline — used to time the
+    SLOW MOTION badge during replay entries."""
+    kind: str   # "slice" | "replay"
+    src_start: float
+    src_end: float
+    final_start: float
+    final_end: float
+
+
+def build_main_playlist(
+    kept: list[tuple[float, float]],
+    replays: list[ReplayInsert],
+) -> list[_PlaylistEntry]:
+    """Walk the kept segments and splice each replay in at its insert
+    point. Kept segments that contain insert points get split into
+    sub-slices; replays drop in between. Returns a flat chronological
+    list ready to map to ffmpeg inputs.
+
+    When a replay's insert point lands exactly at a kept-segment
+    boundary, the splice falls between two existing slices — no extra
+    split is generated."""
+    entries: list[_PlaylistEntry] = []
+    accumulated_main = 0.0          # trimmed-main offset at start of current kept
+    accumulated_final = 0.0         # final-timeline cursor (incl. replay durations)
+    replay_idx = 0
+
+    for a, b in kept:
+        seg_len = b - a
+        kept_end_main = accumulated_main + seg_len
+        current_src = a
+
+        # Consume any replays whose insert point falls inside this kept
+        # segment's trimmed-main range. Equal-to-end is consumed here so
+        # the replay slots in before moving to the next kept.
+        while replay_idx < len(replays) and replays[replay_idx].insert_at_main <= kept_end_main:
+            r = replays[replay_idx]
+            offset_in_kept = max(0.0, r.insert_at_main - accumulated_main)
+            split_src = a + offset_in_kept
+            # Pre-split slice (may be empty if replay lands at the segment start).
+            if split_src > current_src:
+                slice_len = split_src - current_src
+                entries.append(_PlaylistEntry(
+                    kind="slice",
+                    src_start=current_src, src_end=split_src,
+                    final_start=accumulated_final,
+                    final_end=accumulated_final + slice_len,
+                ))
+                accumulated_final += slice_len
+            # Replay
+            r_len = r.replay_duration
+            entries.append(_PlaylistEntry(
+                kind="replay",
+                src_start=r.src_start, src_end=r.src_end,
+                final_start=accumulated_final,
+                final_end=accumulated_final + r_len,
+            ))
+            accumulated_final += r_len
+            current_src = split_src
+            replay_idx += 1
+
+        # Trailing slice of this kept segment.
+        if b > current_src:
+            slice_len = b - current_src
+            entries.append(_PlaylistEntry(
+                kind="slice",
+                src_start=current_src, src_end=b,
+                final_start=accumulated_final,
+                final_end=accumulated_final + slice_len,
+            ))
+            accumulated_final += slice_len
+
+        accumulated_main = kept_end_main
+
+    # Any replays whose insert point lands past every kept segment land
+    # at the very end (insert_at_main was snapped to past-end by remap).
+    while replay_idx < len(replays):
+        r = replays[replay_idx]
+        r_len = r.replay_duration
+        entries.append(_PlaylistEntry(
+            kind="replay",
+            src_start=r.src_start, src_end=r.src_end,
+            final_start=accumulated_final,
+            final_end=accumulated_final + r_len,
+        ))
+        accumulated_final += r_len
+        replay_idx += 1
+
+    return entries
 
 
 # ---------- stages ----------------------------------------------------------
@@ -417,7 +596,8 @@ def render_main_with_scoreboard(
     out_path: Path,
     ass_path: Path,
     full_match_badge_ass: Optional[Path],
-    kept: list[tuple[float, float]],
+    slow_motion_badge_ass: Optional[Path],
+    playlist: list[_PlaylistEntry],
     width: int,
     height: int,
     fps: float,
@@ -426,25 +606,32 @@ def render_main_with_scoreboard(
     cancel_check: Optional[Callable[[], bool]] = None,
 ) -> float:
     """
-    Open the source once per kept segment with input-side seeking
-    (`-ss BEFORE -i`), so ffmpeg jumps straight to each kept range
-    instead of demuxing the entire 10+ GB file. The kept segments are
-    then concatenated and the scoreboard .ass is burned in — all in one
-    NVDEC → CPU filter → NVENC pipeline.
+    Render the main match: open the source once per playlist entry with
+    input-side seeking (`-ss BEFORE -i`), apply slow-mo (setpts*2,
+    atempo=0.5) to replay entries, concat everything in chronological
+    order, then burn scoreboard + FULL MATCH badge + SLOW MOTION badge
+    — all in one NVDEC → CPU filter → NVENC pipeline.
+
+    Each playlist entry is one ffmpeg input slice. Slice entries are
+    processed normally; replay entries get setpts*2.0 / atempo=0.5 so
+    the spliced-in replay clip lands at 50% speed. The concat demuxer
+    can't do this rewind-inside-stream gymnastics, hence the single big
+    filter_complex.
     """
-    if not kept:
+    if not playlist:
         raise FFmpegError("No content kept after trim segments")
 
     args: list[str] = []
-    for a, b in kept:
+    for entry in playlist:
+        slice_len = entry.src_end - entry.src_start
         args += [
             *hwaccel_input_args(),
-            "-ss", f"{a:.3f}",
-            "-t", f"{(b - a):.3f}",
+            "-ss", f"{entry.src_start:.3f}",
+            "-t", f"{slice_len:.3f}",
             "-i", str(src),
         ]
-    n = len(kept)
-    expected_total = sum(b - a for a, b in kept)
+    n = len(playlist)
+    expected_total = sum(e.final_end - e.final_start for e in playlist)
 
     # If the source has no audio, we still need an audio stream in the
     # output (so the final concat-demuxer doesn't fail on stream mismatch).
@@ -454,19 +641,33 @@ def render_main_with_scoreboard(
         silent_idx = n
         args += ["-f", "lavfi", "-i", f"anullsrc=r={TARGET_AUDIO_RATE}:cl=stereo"]
 
-    # Build the concat + ass-burn filter graph.
+    # Build the per-entry processing chains. Replay entries stretch
+    # video PTS to 2× and halve audio tempo so they play at half speed.
+    inv_speed = 1.0 / REPLAY_SPEED
     v_parts: list[str] = []
     a_parts: list[str] = []
     concat_inputs: list[str] = []
-    for i in range(n):
-        v_parts.append(
-            f"[{i}:v]setpts=PTS-STARTPTS,scale={width}:{height},fps={fps}[vk{i}]"
-        )
-        if has_audio:
-            a_parts.append(
-                f"[{i}:a]asetpts=PTS-STARTPTS,"
-                f"aformat=sample_rates={TARGET_AUDIO_RATE}:channel_layouts=stereo[ak{i}]"
+    for i, entry in enumerate(playlist):
+        if entry.kind == "replay":
+            v_parts.append(
+                f"[{i}:v]setpts={inv_speed:.3f}*(PTS-STARTPTS),"
+                f"scale={width}:{height},fps={fps}[vk{i}]"
             )
+            if has_audio:
+                a_parts.append(
+                    f"[{i}:a]asetpts=PTS-STARTPTS,atempo={REPLAY_SPEED},"
+                    f"aformat=sample_rates={TARGET_AUDIO_RATE}:channel_layouts=stereo[ak{i}]"
+                )
+        else:
+            v_parts.append(
+                f"[{i}:v]setpts=PTS-STARTPTS,scale={width}:{height},fps={fps}[vk{i}]"
+            )
+            if has_audio:
+                a_parts.append(
+                    f"[{i}:a]asetpts=PTS-STARTPTS,"
+                    f"aformat=sample_rates={TARGET_AUDIO_RATE}:channel_layouts=stereo[ak{i}]"
+                )
+        if has_audio:
             concat_inputs.append(f"[vk{i}][ak{i}]")
         else:
             concat_inputs.append(f"[vk{i}]")
@@ -476,16 +677,27 @@ def render_main_with_scoreboard(
     else:
         concat_filter = "".join(concat_inputs) + f"concat=n={n}:v=1:a=0[vc]"
 
-    # Burn the scoreboard, then optionally chain the FULL MATCH badge as
-    # a second `ass=` filter so both overlays composite onto the same
-    # output stream.
+    # Chain overlay burns: scoreboard → FULL MATCH badge → SLOW MOTION
+    # badge. Each `ass=` filter runs over the previous output, so the
+    # composition order matches the visual stacking we want. Optional
+    # overlays just skip their link in the chain.
     ass_arg = escape_ffmpeg_filter_path(ass_path)
-    if full_match_badge_ass:
-        badge_arg = escape_ffmpeg_filter_path(full_match_badge_ass)
-        burn_filter = f"[vc]ass='{ass_arg}'[vbb];[vbb]ass='{badge_arg}'[vout]"
-    else:
-        burn_filter = f"[vc]ass='{ass_arg}'[vout]"
-    filter_complex = ";".join(v_parts + a_parts + [concat_filter, burn_filter])
+    burn_chain = [f"[vc]ass='{ass_arg}'[vb0]"]
+    cur_label = "vb0"
+    if full_match_badge_ass is not None:
+        next_label = "vb1"
+        fm_arg = escape_ffmpeg_filter_path(full_match_badge_ass)
+        burn_chain.append(f"[{cur_label}]ass='{fm_arg}'[{next_label}]")
+        cur_label = next_label
+    if slow_motion_badge_ass is not None:
+        next_label = "vb2"
+        sm_arg = escape_ffmpeg_filter_path(slow_motion_badge_ass)
+        burn_chain.append(f"[{cur_label}]ass='{sm_arg}'[{next_label}]")
+        cur_label = next_label
+    # Final rename so the map below is stable regardless of which
+    # optional badges were chained.
+    burn_chain.append(f"[{cur_label}]null[vout]")
+    filter_complex = ";".join(v_parts + a_parts + [concat_filter] + burn_chain)
 
     args += [
         "-filter_complex", filter_complex,
@@ -841,19 +1053,37 @@ def _bridge_stage(ctx: RenderContext, highlight_appended: bool) -> None:
 
 def _main_stage(ctx: RenderContext) -> None:
     """Render the main match (trims removed) with the scoreboard burned
-    in plus the FULL MATCH badge over the first ~15 s."""
+    in, the FULL MATCH badge over the first ~15 s, and slow-mo replays
+    of every highlight spliced in right after the highlight's real-time
+    occurrence. SLOW MOTION badge pulses on top-left during each
+    replay so the viewer reads the speed change instantly."""
     plan = ctx.plan
     if not plan.include_main:
         return
     ctx._bail_if_cancelled()
 
+    # Replays only when the operator is also producing a highlight reel
+    # — same checkbox controls both behaviours, keeps the UX consistent.
+    use_replays = bool(plan.include_highlights and plan.project.highlights)
+    replays = build_replay_plan(plan.project.highlights, ctx.kept) if use_replays else []
+    playlist = build_main_playlist(ctx.kept, replays)
+    if not playlist:
+        raise FFmpegError("No content kept after trim segments")
+
+    # Total final-render duration after replays splice in. The scoreboard
+    # has to span this so libass doesn't expire the panel before the
+    # last slow-mo finishes.
+    final_duration = playlist[-1].final_end
+
+    # Two-step event remap: trim already happened in _prepare_context,
+    # now shift each event by the replay durations that precede it.
+    final_events = remap_events_with_replays(ctx.remapped_events, replays)
+
     ass_path = ctx.job_dir / "scoreboard.ass"
-    # The trimmed main duration is the sum of kept segment lengths.
-    trimmed_duration = sum(b - a for a, b in ctx.kept)
     build_scoreboard_ass(
         output_path=ass_path,
         video_w=ctx.width, video_h=ctx.height,
-        total_duration=trimmed_duration,
+        total_duration=final_duration,
         tournament=plan.project.info.tournament,
         p1_name=plan.project.info.p1,
         p2_name=plan.project.info.p2,
@@ -862,7 +1092,7 @@ def _main_stage(ctx: RenderContext) -> None:
         match_type=plan.project.info.match_type,
         p3_name=plan.project.info.p3,
         p4_name=plan.project.info.p4,
-        score_events=ctx.remapped_events,
+        score_events=final_events,
         best_of=plan.project.info.best_of,
     )
     # FULL MATCH badge: shown for the first 15 seconds of the main
@@ -873,13 +1103,28 @@ def _main_stage(ctx: RenderContext) -> None:
         video_w=ctx.width, video_h=ctx.height,
         show_seconds=15.0,
     )
+    # SLOW MOTION badge: one Dialogue range per spliced-in replay, in
+    # final-render coords. Skipped when no replays were spliced — saves
+    # a no-op ass= filter from the chain.
+    sm_badge_path: Optional[Path] = None
+    if replays:
+        sm_badge_path = ctx.job_dir / "slow_motion_badge.ass"
+        build_slow_motion_badge_ass(
+            output_path=sm_badge_path,
+            video_w=ctx.width, video_h=ctx.height,
+            show_ranges=[
+                (e.final_start, e.final_end) for e in playlist if e.kind == "replay"
+            ],
+        )
+
     main_path = ctx.job_dir / "main.mp4"
     render_main_with_scoreboard(
         src=ctx.src,
         out_path=main_path,
         ass_path=ass_path,
         full_match_badge_ass=fm_badge_path,
-        kept=ctx.kept,
+        slow_motion_badge_ass=sm_badge_path,
+        playlist=playlist,
         width=ctx.width, height=ctx.height, fps=ctx.fps,
         has_audio=ctx.has_audio,
         on_progress=ctx.make_progress("main"),
