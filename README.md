@@ -60,10 +60,19 @@ browser.
    The referee logic is automatic: 11 points + 2-point lead wins a set,
    then the point score resets to 0-0 and the set counter increments.
 
+   Once a source video is loaded, a **scoreboard preview** overlays the
+   player area in real-time — same `.ass` file the renderer burns in,
+   composited in the browser via libass-WASM. Edit tournament / player
+   names or score points and the overlay updates instantly so you can
+   sanity-check the burned-in look before rendering.
+
 4. Save the project (right side `Save Project` button). It writes
    `projects/<name>.json` so you can resume later.
 5. Hit `Render`. The progress bar shows each stage (intro → highlight →
-   main → concat). Output is written to `output/<name>.mp4`.
+   main → concat). The `Cancel render` button below the bar terminates
+   the in-flight ffmpeg process if you spot a problem; the partial
+   intermediates stay in `temp/<job>/` for inspection. Output is written
+   to `output/<name>.mp4`.
 
 ## Folder layout
 
@@ -76,7 +85,7 @@ video_studio/
 ├── assets/            # for fonts/logos if you customise the .ass overlay
 ├── config.json        # encoder / paths / port
 ├── backend/           # FastAPI + ffmpeg pipeline
-└── frontend/          # HTML + JS + CSS
+└── frontend/          # HTML + JS + CSS + vendor/jassub (libass-WASM)
 ```
 
 ## Render pipeline

@@ -30,6 +30,16 @@ class FFmpegError(RuntimeError):
         self.returncode = returncode
 
 
+class FFmpegCancelled(FFmpegError):
+    """Raised when run_ffmpeg_with_progress is interrupted via cancel_check.
+    Subclasses FFmpegError so existing `except FFmpegError` blocks still
+    catch it; the renderer catches FFmpegCancelled first to flag the job
+    as 'cancelled' rather than 'error'."""
+
+    def __init__(self) -> None:
+        super().__init__("Render cancelled by user", stderr="", returncode=-1)
+
+
 def nvenc_args() -> list[str]:
     """Standard NVENC video-encode flags pulled from `config.json`. Used
     by every render stage so encoder / preset / cq stay consistent."""
@@ -127,6 +137,7 @@ def run_ffmpeg_with_progress(
     expected_out_seconds: float,
     on_progress: Optional[Callable[[float, str], None]] = None,
     log_prefix: str = "",
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> None:
     """
     Run an ffmpeg command. We append `-progress pipe:1 -nostats` so ffmpeg
@@ -134,6 +145,11 @@ def run_ffmpeg_with_progress(
 
     `expected_out_seconds` lets us turn the running `out_time_us` into a
     0..1 fraction.
+
+    `cancel_check`, if supplied, is called between progress lines; when it
+    returns True, the ffmpeg process is terminated and FFmpegCancelled is
+    raised. ffmpeg emits a progress line several times per second, so
+    cancellation latency is sub-second under normal load.
     """
     full_cmd = [config.ffmpeg, "-y", "-hide_banner", *args, "-progress", "pipe:1", "-nostats"]
     if on_progress:
@@ -162,9 +178,17 @@ def run_ffmpeg_with_progress(
     t = threading.Thread(target=_drain_stderr, daemon=True)
     t.start()
 
+    cancelled = False
     last_out_us = 0
     assert proc.stdout is not None
     for line in proc.stdout:
+        if cancel_check and cancel_check():
+            cancelled = True
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            break
         line = line.strip()
         if not line or "=" not in line:
             continue
@@ -183,6 +207,18 @@ def run_ffmpeg_with_progress(
         elif key == "progress" and value == "end":
             if on_progress:
                 on_progress(1.0, f"{log_prefix}done")
+
+    if cancelled:
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            proc.wait()
+        t.join(timeout=2)
+        raise FFmpegCancelled()
 
     rc = proc.wait()
     t.join(timeout=2)

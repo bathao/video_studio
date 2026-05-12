@@ -37,6 +37,7 @@ from .ass import (
 from .avatars import find_avatar_or_default
 from .config import config
 from .ffmpeg_runner import (
+    FFmpegCancelled,
     FFmpegError,
     TARGET_AUDIO_CHANNELS,
     TARGET_AUDIO_RATE,
@@ -149,6 +150,7 @@ def render_transition(
     height: int,
     fps: float,
     on_progress: Callable[[float, str], None],
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> float:
     """
     Render a 0.8 s bridge clip with a gold sweep line, used between
@@ -181,6 +183,7 @@ def render_transition(
         expected_out_seconds=duration,
         on_progress=on_progress,
         log_prefix="transition: ",
+        cancel_check=cancel_check,
     )
     return duration
 
@@ -195,6 +198,7 @@ def render_intro(
     p1: str,
     p2: str,
     on_progress: Callable[[float, str], None],
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> None:
     """
     3-second title card. Uses libass instead of drawtext so Vietnamese
@@ -231,6 +235,7 @@ def render_intro(
         expected_out_seconds=duration,
         on_progress=on_progress,
         log_prefix="intro: ",
+        cancel_check=cancel_check,
     )
 
 
@@ -245,6 +250,7 @@ def _render_one_highlight(
     has_audio: bool,
     badge_ass: Optional[Path],
     on_progress: Callable[[float, str], None],
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> float:
     """
     Render a single highlight clip with input-side seeking (`-ss BEFORE -i`),
@@ -329,6 +335,7 @@ def _render_one_highlight(
         args,
         expected_out_seconds=out_duration,
         on_progress=on_progress,
+        cancel_check=cancel_check,
     )
     return out_duration
 
@@ -344,6 +351,7 @@ def render_highlight_clip(
     fps: float,
     has_audio: bool,
     on_progress: Callable[[float, str], None],
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> Optional[float]:
     """
     Render each highlight as its own MP4 (with input seeking) then stitch
@@ -388,12 +396,17 @@ def render_highlight_clip(
             has_audio=has_audio,
             badge_ass=badge_path,
             on_progress=make_cb(i),
+            cancel_check=cancel_check,
         )
         parts.append(part_path)
         total += out_dur
 
     # Stitch into one highlight reel via concat demuxer (stream copy).
-    concat_parts(parts, out_path, on_progress=lambda f, m: on_progress(0.999, f"highlight stitch: {m}"))
+    concat_parts(
+        parts, out_path,
+        on_progress=lambda f, m: on_progress(0.999, f"highlight stitch: {m}"),
+        cancel_check=cancel_check,
+    )
     return total
 
 
@@ -409,6 +422,7 @@ def render_main_with_scoreboard(
     fps: float,
     has_audio: bool,
     on_progress: Callable[[float, str], None],
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> float:
     """
     Open the source once per kept segment with input-side seeking
@@ -487,13 +501,21 @@ def render_main_with_scoreboard(
         expected_out_seconds=expected_total,
         on_progress=on_progress,
         log_prefix="main: ",
+        cancel_check=cancel_check,
     )
     return expected_total
 
 
-def concat_parts(parts: list[Path], out_path: Path, on_progress: Callable[[float, str], None]) -> None:
+def concat_parts(
+    parts: list[Path],
+    out_path: Path,
+    on_progress: Callable[[float, str], None],
+    cancel_check: Optional[Callable[[], bool]] = None,
+) -> None:
     if not parts:
         raise FFmpegError("Nothing to concat")
+    if cancel_check and cancel_check():
+        raise FFmpegCancelled()
     if len(parts) == 1:
         shutil.copyfile(parts[0], out_path)
         on_progress(1.0, "concat: copied single part")
@@ -524,6 +546,7 @@ def concat_parts(parts: list[Path], out_path: Path, on_progress: Callable[[float
         expected_out_seconds=max(total, 1.0),
         on_progress=on_progress,
         log_prefix="concat: ",
+        cancel_check=cancel_check,
     )
     try:
         list_file.unlink()
@@ -586,6 +609,19 @@ class RenderContext:
             state.progress = ctx.completed_weight + weight * max(0.0, min(1.0, frac))
 
         return cb
+
+    def cancel_check(self) -> bool:
+        """Cancel predicate threaded through every ffmpeg invocation in
+        this render. When the user hits Cancel, `RenderState.cancel_requested`
+        flips True and the next ffmpeg progress line trips this check, which
+        terminates the process and raises FFmpegCancelled."""
+        return self.state.cancel_requested
+
+    def _bail_if_cancelled(self) -> None:
+        """Quick check between stages so we don't start a new ffmpeg
+        process after the user has already cancelled."""
+        if self.state.cancel_requested:
+            raise FFmpegCancelled()
 
 
 def _resolve_source(plan: RenderPlan) -> Path:
@@ -673,6 +709,7 @@ def _intro_stage(ctx: RenderContext) -> None:
     plan = ctx.plan
     if not plan.include_intro:
         return
+    ctx._bail_if_cancelled()
 
     intro_path = ctx.job_dir / "intro.mp4"
     style = (plan.intro_style or "cinematic").lower()
@@ -694,6 +731,7 @@ def _intro_stage(ctx: RenderContext) -> None:
             p1_team=plan.project.info.p1_team,
             p2_team=plan.project.info.p2_team,
             on_progress=ctx.make_progress("intro"),
+            cancel_check=ctx.cancel_check,
         )
         missing = []
         if p1_default: missing.append(plan.project.info.p1)
@@ -714,6 +752,7 @@ def _intro_stage(ctx: RenderContext) -> None:
             p1=plan.project.info.p1,
             p2=plan.project.info.p2,
             on_progress=ctx.make_progress("intro"),
+            cancel_check=ctx.cancel_check,
         )
     ctx.parts.append(intro_path)
     ctx.completed_weight += ctx.weight_lookup["intro"]
@@ -726,6 +765,7 @@ def _highlight_stage(ctx: RenderContext) -> bool:
     plan = ctx.plan
     if not (plan.include_highlights and plan.project.highlights):
         return False
+    ctx._bail_if_cancelled()
 
     hi_path = ctx.job_dir / "highlight.mp4"
     written = render_highlight_clip(
@@ -736,6 +776,7 @@ def _highlight_stage(ctx: RenderContext) -> bool:
         width=ctx.width, height=ctx.height, fps=ctx.fps,
         has_audio=ctx.has_audio,
         on_progress=ctx.make_progress("highlight"),
+        cancel_check=ctx.cancel_check,
     )
     if written:
         ctx.parts.append(hi_path)
@@ -755,11 +796,13 @@ def _bridge_stage(ctx: RenderContext, highlight_appended: bool) -> None:
     )
     if not wants_bridge:
         return
+    ctx._bail_if_cancelled()
     tr_path = ctx.job_dir / "transition.mp4"
     render_transition(
         out_path=tr_path,
         width=ctx.width, height=ctx.height, fps=ctx.fps,
         on_progress=lambda f, m: None,  # quick clip, no progress reporting
+        cancel_check=ctx.cancel_check,
     )
     ctx.parts.append(tr_path)
 
@@ -770,6 +813,7 @@ def _main_stage(ctx: RenderContext) -> None:
     plan = ctx.plan
     if not plan.include_main:
         return
+    ctx._bail_if_cancelled()
 
     ass_path = ctx.job_dir / "scoreboard.ass"
     # The trimmed main duration is the sum of kept segment lengths.
@@ -804,6 +848,7 @@ def _main_stage(ctx: RenderContext) -> None:
         width=ctx.width, height=ctx.height, fps=ctx.fps,
         has_audio=ctx.has_audio,
         on_progress=ctx.make_progress("main"),
+        cancel_check=ctx.cancel_check,
     )
     ctx.parts.append(main_path)
     ctx.completed_weight += ctx.weight_lookup["main"]
@@ -822,7 +867,11 @@ def _finalize(ctx: RenderContext) -> None:
         out_name += ".mp4"
     final_path = config.output_dir / out_name
 
-    concat_parts(ctx.parts, final_path, on_progress=ctx.make_progress("concat"))
+    concat_parts(
+        ctx.parts, final_path,
+        on_progress=ctx.make_progress("concat"),
+        cancel_check=ctx.cancel_check,
+    )
     ctx.completed_weight += ctx.weight_lookup["concat"]
 
     s.status = "done"
@@ -853,6 +902,14 @@ def run_render(plan: RenderPlan) -> None:
         _bridge_stage(ctx, highlight_appended)
         _main_stage(ctx)
         _finalize(ctx)
+    except FFmpegCancelled:
+        # User pulled the plug — flag distinctly so the UI can show
+        # "cancelled" instead of a red error banner. Leave temp/<job_id>
+        # in place: same policy as errors, so the partial intermediates
+        # are still inspectable.
+        s.status = "cancelled"
+        s.message = "Render cancelled by user"
+        s.error = ""
     except FFmpegError as e:
         s.status = "error"
         s.error = str(e)

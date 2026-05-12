@@ -21,9 +21,10 @@ in 1.74 s (20 s input). Real 2K / multi-GB validation is the next gate.
 Goal: comfortable for daily filming of regional tournaments.
 
 - Validate the pipeline on the user's actual 15 GB 2K source.
-- Cancel + resume renders.
-- Auto-cleanup of `temp/`.
-- Live scoreboard preview overlaid on the `<video>` element.
+- Cancel renders (done) + resume from last completed stage.
+- Auto-cleanup of `temp/` (done).
+- Live scoreboard preview overlaid on the `<video>` element (done — JASSUB
+   libass-WASM auto-attaches once the source video reports metadata).
 - Timeline markers for highlights and trims on the seek bar.
 - Bundled font + bundled fonts directory so `drawtext` and `ass` filters
    never fail because the system font lookup is misconfigured.

@@ -56,6 +56,15 @@ def test_trim_team_keeps_short_input():
     assert _trim_team("TP.HCM") == "TP.HCM"
 
 
+def test_trim_team_default_cap_is_20():
+    # Exactly 20 chars must pass through; 21 gets ellipsised. Pins
+    # down the cap so a tweak elsewhere doesn't silently shrink the
+    # team column's tolerance for longer names.
+    assert _trim_team("A" * 20) == "A" * 20
+    out = _trim_team("A" * 21)
+    assert len(out) == 20 and out.endswith("…")
+
+
 # ---------- _trim_title -----------------------------------------------------
 
 
@@ -73,6 +82,25 @@ def test_trim_title_unchanged_under_limit():
 def test_trim_title_returns_empty_for_blank():
     assert _trim_title("") == ""
     assert _trim_title("   ") == ""
+
+
+def test_trim_title_max_chars_truncates_long_input():
+    # Singles layout passes max_chars=45 to allow longer titles. Verify
+    # the cap fires when exceeded and stays inert when not.
+    fits = "A" * 45
+    assert _trim_title(fits, max_chars=45) == fits
+    over = "A" * 50
+    out = _trim_title(over, max_chars=45)
+    assert len(out) == 45 and out.endswith("…")
+
+
+def test_trim_title_word_cap_still_applies_with_max_chars():
+    # 14 words of two letters each = 41 chars — under the 45 char cap,
+    # but the word cap should still kick in if exceeded.
+    long_by_words = " ".join(["AB"] * 20)
+    out = _trim_title(long_by_words, max_chars=45)
+    assert out.endswith("…")
+    assert out.count(" ") == 13  # 14 words remaining = 13 spaces
 
 
 # ---------- _ass_escape -----------------------------------------------------

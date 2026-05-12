@@ -8,18 +8,25 @@ indicator: 🟢 quick (<1h), 🟡 medium (~half-day), 🔴 large (1+ day).
 - [ ] 🟢 **End-to-end test on real 2K match (`0418_Tu_3-1.MP4`)**
       Verify NVENC + NVDEC happy path on a 10–15 GB file. Measure render
       wall-clock time for 90-min footage.
-- [ ] 🟢 **Cancel render mid-flight**
-      `RenderState.cancel_requested` already exists but is never read by
-      `run_ffmpeg_with_progress`. Wire `proc.terminate()` when the flag flips.
-      Add `POST /api/render/{job_id}/cancel`.
+- [x] 🟢 **Cancel render mid-flight** — done.
+      `run_ffmpeg_with_progress` accepts a `cancel_check` predicate that
+      trips `proc.terminate()` on the next progress line; the renderer
+      threads it through every stage and raises `FFmpegCancelled`, which
+      flags the job as `cancelled`. UI exposes a Cancel button in the
+      render-status panel; `POST /api/render/{job_id}/cancel` flips the
+      flag.
 - [x] 🟢 **Cleanup `temp/<job_id>` after success** — done.
       `run_render` now `shutil.rmtree`s the job dir once the final mp4
       lands in `output/`. Errors still leave temp untouched so the
       operator can inspect the failed ffmpeg inputs.
-- [ ] 🟡 **Scoreboard preview in the UI**
-      A small toggle that overlays the current scoreboard graphic on the
-      live `<video>` element so the user can sanity-check the layout
-      before rendering.
+- [x] 🟡 **Scoreboard preview in the UI** — done.
+      Auto-attached as soon as the source video reports `loadedmetadata`;
+      feeds the exact `.ass` the render burns in to JASSUB (libass-WASM)
+      which composites a canvas over the `<video>` element. Single
+      source: `build_scoreboard_ass_text` in `backend/ass/scoreboard.py`
+      powers both the render and the preview, so they're byte-identical.
+      Updates live as the operator edits tournament / player names or
+      scores.
 
 ## Next (P1 — meaningful UX wins)
 

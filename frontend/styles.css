@@ -21,7 +21,7 @@
   @apply bg-ink-700 hover:bg-ink-600 px-3 py-1.5 rounded-md text-sm border border-ink-600;
 }
 .btn-score {
-  @apply bg-accent-500/20 border border-accent-500 hover:bg-accent-500/30 text-accent-400 font-bold px-2 py-2 rounded-md text-base;
+  @apply bg-accent-500/20 border border-accent-500 hover:bg-accent-500/30 text-accent-400 font-bold px-2 py-2 rounded-md text-base disabled:opacity-40 disabled:cursor-not-allowed;
 }
 kbd {
   @apply bg-ink-700 border border-ink-600 rounded px-1.5 py-0.5 font-mono text-xs;
@@ -50,7 +50,21 @@ input[type="range"] {
 .btn-ctl:hover { background:#2a3140; }
 .btn-score { background:rgba(74,200,255,0.15); border:1px solid #1ea7e6; color:#4ac8ff; font-weight:700; padding:0.5rem; border-radius:6px; font-size:1rem; }
 .btn-score:hover { background:rgba(74,200,255,0.25); }
+.btn-score:disabled { opacity:0.4; cursor:not-allowed; }
+.btn-score:disabled:hover { background:rgba(74,200,255,0.15); }
 kbd { background:#1c222d; border:1px solid #2a3140; border-radius:4px; padding:0.05rem 0.35rem; font-family:ui-monospace, monospace; font-size:0.7rem; }
 .list-row { display:flex; align-items:center; gap:0.4rem; background:#141821; padding:0.4rem 0.5rem; border-radius:6px; font-size:0.7rem; border:1px solid #1c222d; }
 .list-row:hover { background:#1c222d; }
 input[type="range"] { accent-color:#1ea7e6; }
+
+/* JASSUB inserts `<div class="JASSUB">` as a position:relative sibling
+   immediately after the <video> element, with a position:absolute
+   canvas inside that gets pulled up to overlap the video frame. Two
+   small CSS guards: keep clicks falling through to the video, and
+   stack the canvas above the player (later siblings already paint on
+   top in DOM order, but z-index makes the intent explicit). */
+.JASSUB,
+.JASSUB canvas {
+  pointer-events: none;
+  z-index: 2;
+}

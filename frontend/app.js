@@ -25,6 +25,7 @@ import {
 import { syncTrims, markTrimStart, markTrimEnd } from './trims.js';
 import { setSyncAllUI, setSyncInfoFromInputs as setProjectIoSync } from './project_io.js';
 import { setSyncInfoFromInputs as setRenderSync } from './render.js';
+import { syncScoreboardPreview } from './scoreboard_preview.js';
 import { syncTimeline } from './timeline.js';
 import { toast } from './toast.js';
 
@@ -40,6 +41,7 @@ function syncInfoFromInputs() {
   project.info.best_of = parseInt($('in-best-of').value, 10) || 5;
   $('lbl-p1').textContent = (project.info.p1 || 'P1').toUpperCase();
   $('lbl-p2').textContent = (project.info.p2 || 'P2').toUpperCase();
+  syncScoreboardPreview();
 }
 
 function syncAllUI() {

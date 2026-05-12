@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 from .ass import build_cinematic_intro_ass
 from .config import config
@@ -75,6 +75,7 @@ def render_cinematic_intro(
     duration: float | None = None,
     p1_team: str = "",
     p2_team: str = "",
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> float:
     """Render a cinematic intro clip and return its duration."""
     duration = duration if duration is not None else config.intro_duration_seconds
@@ -180,6 +181,7 @@ def render_cinematic_intro(
         expected_out_seconds=duration,
         on_progress=on_progress,
         log_prefix="cinematic intro: ",
+        cancel_check=cancel_check,
     )
 
     # Clean up the extracted bg frame; .ass stays alongside the mp4 for

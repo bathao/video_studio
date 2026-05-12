@@ -1,6 +1,6 @@
 # Progress Status
 
-Last update: 2026-05-12
+Last update: 2026-05-11
 
 ## Module map
 
@@ -10,7 +10,7 @@ Last update: 2026-05-12
 | Config loader | ✅ done | [backend/config.py](../backend/config.py) |
 | Pydantic models | ✅ done | [backend/models.py](../backend/models.py) |
 | FFmpeg / FFprobe wrapper | ✅ done | [backend/ffmpeg_runner.py](../backend/ffmpeg_runner.py) |
-| ASS scoreboard generator | ✅ done | [backend/ass_builder.py](../backend/ass_builder.py) |
+| ASS overlay builders | ✅ done | [backend/ass/](../backend/ass/) |
 | Render orchestrator | ✅ done | [backend/renderer.py](../backend/renderer.py) |
 | Frontend HTML + Tailwind | ✅ done | [frontend/index.html](../frontend/index.html) |
 | Frontend logic (player + state) | ✅ done | [frontend/app.js](../frontend/app.js) |
@@ -63,6 +63,12 @@ Last update: 2026-05-12
 - ✅ Trim segments (T/Y or manual)
 
 ### Render pipeline
+- ✅ Cancel a running render: backend's `run_ffmpeg_with_progress`
+      reads a `cancel_check` predicate on each progress line and
+      `proc.terminate()`s the child; `FFmpegCancelled` propagates to
+      `run_render` which flags the job `cancelled` (distinct from `error`).
+      `POST /api/render/{job_id}/cancel` flips the flag; the UI exposes
+      a Cancel button while a render is in flight.
 - ✅ Intro (4 s default; cinematic avatar card with blurred-source bg,
       circular-masked player photos sliding in from both sides, gold
       tournament line, slow Ken-Burns bg zoom, avatar bobbing, "VS"
@@ -93,6 +99,14 @@ Last update: 2026-05-12
       corner with identical fonts/colours/opacities; just adds one
       column per played set
 - ✅ Vietnamese diacritics (UTF-8 .ass + Arial fallback via libass + DirectWrite)
+- ✅ Pre-render scoreboard preview: same `build_scoreboard_ass_text` the
+      render pipeline burns in is streamed to JASSUB (libass-WASM) in the
+      browser, which auto-attaches a canvas to the `<video>` element as
+      soon as the source video loads its metadata. Overlay is
+      byte-identical to the final render — single source of truth,
+      animation states (recap cards, GP/MP/DEUCE flag pulse, set
+      transitions) all preview correctly. Refresh debounced 250 ms on
+      info / score edits so the overlay tracks every keystroke.
 
 ### Output & file management
 - ✅ Output saved to `output/<name>.mp4`

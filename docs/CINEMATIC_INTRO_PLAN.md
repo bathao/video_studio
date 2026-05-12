@@ -213,11 +213,12 @@ else:
 ```
 
 New file: [backend/intro_builder.py](../backend/intro_builder.py)
-(separate from `ass_builder.py` — different responsibility: builds the
-ffmpeg filter graph rather than the .ass file). The .ass for the
-cinematic intro's text overlays is built by an extended
-`build_intro_ass(..., cinematic=True)` so layout adapts (text below
-avatars instead of stacked in the centre).
+(separate from the `backend/ass/` package — different responsibility:
+builds the ffmpeg filter graph rather than the .ass file). The .ass for
+the cinematic intro's text overlays lives in
+[backend/ass/intro.py](../backend/ass/intro.py) as
+`build_cinematic_intro_ass`, with layout adapted (text below avatars
+instead of stacked in the centre).
 
 ## 9. Config additions
 
@@ -256,7 +257,7 @@ reserved for v2+; not in config until then.
 - [x] Filter graph: bg blur + Ken-Burns zoom (zoompan, `on/fps`) + 2
       avatars centre-cropped + circular alpha mask via `geq` + sin-bobbing
       y-position + libass text burn
-- [x] [backend/ass_builder.py](../backend/ass_builder.py)
+- [x] [backend/ass/intro.py](../backend/ass/intro.py)
       `build_cinematic_intro_ass`: tournament name + gold underline that
       wipes in @ t=2 s + player names with slow fade-out (~half duration)
       + "VS" with periodic 100 → 105 → 100 % pulse

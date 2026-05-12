@@ -37,7 +37,34 @@ async function startRender() {
   const data = await r.json();
   $('render-status').classList.remove('hidden');
   $('rs-output').classList.add('hidden');
+  // Reveal Cancel for the duration of the run; pollRender hides it on
+  // terminal status.
+  const cancelBtn = $('rs-cancel');
+  cancelBtn.classList.remove('hidden');
+  cancelBtn.disabled = false;
+  cancelBtn.textContent = 'Cancel render';
+  cancelBtn.onclick = () => cancelRender(data.job_id);
+  $('btn-render').disabled = true;
   pollRender(data.job_id);
+}
+
+async function cancelRender(jobId) {
+  const btn = $('rs-cancel');
+  btn.disabled = true;
+  btn.textContent = 'Cancelling…';
+  try {
+    const r = await fetch(`/api/render/${jobId}/cancel`, { method: 'POST' });
+    if (!r.ok) {
+      const err = await r.text();
+      toast(`Cancel failed: ${err}`);
+      btn.disabled = false;
+      btn.textContent = 'Cancel render';
+    }
+  } catch (e) {
+    toast('Cancel error');
+    btn.disabled = false;
+    btn.textContent = 'Cancel render';
+  }
 }
 
 function pollRender(jobId) {
@@ -52,8 +79,13 @@ function pollRender(jobId) {
       $('rs-pct').textContent = `${pct}%`;
       $('rs-bar').style.width = `${pct}%`;
       $('rs-msg').textContent = j.message || '';
-      if (j.status === 'done') {
+      const terminal = (j.status === 'done' || j.status === 'error' || j.status === 'cancelled');
+      if (terminal) {
         clearInterval(mut.pollTimer);
+        $('rs-cancel').classList.add('hidden');
+        $('btn-render').disabled = false;
+      }
+      if (j.status === 'done') {
         const out = j.output_path || '';
         const fname = out.replace(/\\/g, '/').split('/').pop();
         if (fname) {
@@ -66,8 +98,9 @@ function pollRender(jobId) {
         }
         toast('Render done');
       } else if (j.status === 'error') {
-        clearInterval(mut.pollTimer);
         toast('Render error');
+      } else if (j.status === 'cancelled') {
+        toast('Render cancelled');
       }
     } catch (e) {
       console.error(e);

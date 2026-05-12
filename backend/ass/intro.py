@@ -76,7 +76,10 @@ def build_intro_ass(
     p2_rise_from_y = p2_y + int(80 * scale)
 
     end_time   = _fmt_time(duration)
-    title_safe = _ass_escape(_trim_title(tournament)) if tournament.strip() else ""
+    # Text-only intro never shows a team column, so the tournament has
+    # the full middle band to itself — 45-char cap matches the singles
+    # layout used elsewhere.
+    title_safe = _ass_escape(_trim_title(tournament, max_chars=45)) if tournament.strip() else ""
     p1_safe    = _ass_escape(p1_name.strip() or "Player 1")
     p2_safe    = _ass_escape(p2_name.strip() or "Player 2")
 
@@ -191,16 +194,41 @@ def build_cinematic_intro_ass(
     # above and below that.
     avatar_cy = video_h // 2 + 80
     avatar_half = avatar_size_px // 2
+    avatar_bottom = avatar_cy + avatar_half
 
-    tournament_y = max(int(80 * scale), avatar_cy - avatar_half - int(70 * scale))
-    name_y       = avatar_cy + avatar_half + int(50 * scale)
+    # Team labels render between the avatar and the player name when
+    # BOTH players have a team set. That two-line stack needs noticeably
+    # more vertical room than the singles layout (single name line),
+    # otherwise the team label crowds the avatar bottom edge.
+    p1_team_safe = _trim_team(p1_team, max_len=20)
+    p2_team_safe = _trim_team(p2_team, max_len=20)
+    has_team = bool(p1_team_safe and p2_team_safe)
+
+    # Tournament title sits above the avatars; offset is generous enough
+    # that the avatar's ±7 px sin-bobbing never crowds the title text.
+    tournament_y = max(int(80 * scale), avatar_cy - avatar_half - int(150 * scale))
+    if has_team:
+        # Avatar bobs ±7 px (see `avatar_y` in `intro_builder.py`). The
+        # `+130` team offset leaves ~100 px of visible breathing room
+        # between the avatar's lowest point and the top of the team
+        # line, then ~25 px between team and player name.
+        team_y = avatar_bottom + max(90, int(130 * scale))
+        name_y = team_y + max(55, int(75 * scale))
+    else:
+        team_y = None
+        name_y = avatar_bottom + int(60 * scale)
     p1_cx        = int(video_w * 0.27)
     p2_cx        = int(video_w * 0.73)
     vs_cy        = avatar_cy
 
     end_time = _fmt_time(duration)
 
-    title_safe = _ass_escape(_trim_title(tournament)) if tournament.strip() else ""
+    # When team labels are drawn alongside the player names, the title
+    # has competing text below it and stays tighter (word cap only).
+    # In singles the title gets a generous 45-char cap to use the
+    # otherwise-empty horizontal band.
+    title_max_chars = None if has_team else 45
+    title_safe = _ass_escape(_trim_title(tournament, max_chars=title_max_chars)) if tournament.strip() else ""
     p1_safe    = _ass_escape(p1_name.strip() or "Player 1")
     p2_safe    = _ass_escape(p2_name.strip() or "Player 2")
 
@@ -252,12 +280,11 @@ def build_cinematic_intro_ass(
     # Team labels — only when BOTH players have a team affiliation set.
     # Renders gold-italic + non-bold just above each player name so the
     # team reads as elegant context, subordinate to the player. Skipped
-    # entirely for singles to keep the intro uncluttered.
-    p1_team_safe = _trim_team(p1_team, max_len=20)
-    p2_team_safe = _trim_team(p2_team, max_len=20)
-    if p1_team_safe and p2_team_safe:
+    # entirely for singles. Vertical placement (team_y) was computed
+    # alongside name_y at the top of the function so the two lines
+    # share consistent geometry.
+    if has_team:
         fs_team = max(22, int(36 * scale))
-        team_y = name_y - int(38 * scale)
         for cx_team, txt in (
             (p1_cx, _ass_escape(p1_team_safe)),
             (p2_cx, _ass_escape(p2_team_safe)),

@@ -50,6 +50,10 @@
             <div id="hud-hl" class="px-2 py-1 rounded bg-danger-500 text-xs font-bold hidden">● HIGHLIGHT</div>
             <div id="hud-trim" class="px-2 py-1 rounded bg-warn-400 text-ink-950 text-xs font-bold hidden">▶ TRIM START</div>
           </div>
+          <!-- JASSUB (libass-WASM) attaches its overlay canvas here at
+               toggle-time, fed by the same `build_scoreboard_ass_text`
+               output the render pipeline burns in. No DOM replica
+               needed — see frontend/scoreboard_preview.js. -->
         </div>
         <div class="px-3 py-2 flex items-center gap-1 flex-wrap text-sm">
           <button class="btn-ctl" data-skip="-10">-10s</button>
@@ -193,6 +197,7 @@
               <div id="rs-bar" class="h-full bg-accent-500 transition-all" style="width:0%"></div>
             </div>
             <div class="text-xs text-slate-400 break-all" id="rs-msg"></div>
+            <button id="rs-cancel" class="btn-secondary text-xs w-full mt-1 hidden">Cancel render</button>
             <div id="rs-output" class="hidden mt-2 space-y-1">
               <div class="text-xs text-slate-400">Saved to:</div>
               <div class="text-xs font-mono text-slate-200 break-all bg-ink-800 border border-ink-700 rounded px-2 py-1" id="rs-output-path"></div>

@@ -41,7 +41,7 @@ from typing import Iterable, Optional
 
 from .common import (
     C_ACCENT_HDR, C_ACCENT_P1, C_ACCENT_P2,
-    C_BG_HEADER, C_BG_ROWS, C_BG_SETS, C_BG_TEAM,
+    C_BG_HEADER, C_BG_ROWS, C_BG_SETS,
     C_DEUCE, C_GOLD, C_GOLD_BRIGHT, C_GP_RED, C_GREY, C_MP_RED, C_SEP, C_WHITE,
     _ass_escape, _ass_skeleton, _fmt_time, _rect,
     _trim_name, _trim_team, _trim_title,
@@ -60,6 +60,22 @@ class ScoreFrame:
 # ---------------------------------------------------------------------------
 # Internal helpers (geometry + per-section emitters)
 # ---------------------------------------------------------------------------
+
+
+def _title_fscx_tag(title_text: str, fs_header: int, available_w: int) -> str:
+    """Return a `\\fscx<NN>` tag that squishes the tournament title
+    horizontally to fit `available_w`, or "" if the natural width
+    already fits. The 0.55 multiplier is an empirical Arial-Bold mixed
+    Latin/Vietnamese width-per-em estimate at fs_header; the 55%
+    floor prevents pathological inputs from collapsing the text into
+    illegibility (a long single-token blob would just clip instead)."""
+    if not title_text:
+        return ""
+    needed_w = len(title_text) * fs_header * 0.55
+    if needed_w <= available_w:
+        return ""
+    fscx = max(55, int(available_w / needed_w * 100))
+    return f"\\fscx{fscx}"
 
 
 def _set_final_score(prev_p1: int, prev_p2: int, won_by: int) -> tuple[int, int]:
@@ -124,12 +140,13 @@ class _Geometry:
 @dataclass(frozen=True)
 class _AssetText:
     """Pre-trimmed + ASS-escaped text strings ready to splice into
-    Dialogue lines. Bundling them keeps emit-helper signatures short."""
+    Dialogue lines. Bundling them keeps emit-helper signatures short.
+    All fields are already trimmed; `tournament` is empty when unset."""
     p1: str
     p2: str
     p1_team: str
     p2_team: str
-    tournament: str   # raw (not yet trimmed); helpers run _trim_title
+    tournament: str
 
 
 def _compute_geometry(video_w: int, video_h: int,
@@ -272,9 +289,9 @@ def _emit_live_panel(lines: list[str], g: _Geometry, t: _AssetText,
     # Player rows background.
     add_static(_rect(g.x1, g.hdr_y2, g.bar_w, g.row_h * 2 + g.gap_rows, C_BG_ROWS, alpha_hex="0C"))
 
-    # Team column tint (only when a team affiliation is set on either player).
-    if g.has_team:
-        add_static(_rect(g.col_team_x, g.hdr_y2, g.team_col, g.row_h * 2 + g.gap_rows, C_BG_TEAM, alpha_hex="0C"))
+    # No team-column tint — the dark row background carries through and
+    # the vertical divider after the team text is enough to set the
+    # column apart visually. The gold tint here read too garish.
 
     # Set-point column tint.
     add_static(_rect(g.col_sets_x, g.hdr_y2, g.sets_col, g.row_h * 2 + g.gap_rows, C_BG_SETS, alpha_hex="0C"))
@@ -295,19 +312,26 @@ def _emit_live_panel(lines: list[str], g: _Geometry, t: _AssetText,
     add_static(_rect(g.col_pts_x,  div_y_top, g.sep_col, div_h, C_SEP, alpha_hex="00"))
 
     # Tournament name in the header strip — clipped to the strip
-    # rectangle so a long title can't overflow visually.
-    if t.tournament.strip():
-        title = _ass_escape(_trim_title(t.tournament))
+    # rectangle so a long title can't overflow visually. Already
+    # trimmed at build time per the layout's `has_team` mode. Long
+    # titles further auto-squish horizontally via `\fscx` so a 45-char
+    # tournament name stays readable inside the panel width.
+    if t.tournament:
+        title = _ass_escape(t.tournament)
         clip = f"\\clip({g.x1},{g.y1 + g.gold_line},{g.x2 - g.pad_x // 2},{g.hdr_y2})"
+        avail_w = g.bar_w - g.pad_x - g.pad_x // 2
+        fscx = _title_fscx_tag(t.tournament, g.fs_header, avail_w)
         lines.append(
             f"Dialogue: 1,{start},{end},Header,,0,0,0,,"
-            f"{{\\an4\\pos({g.x1 + g.pad_x},{g.y1 + g.header_h // 2 + g.gold_line // 2})\\q2{clip}}}{title}"
+            f"{{\\an4\\pos({g.x1 + g.pad_x},{g.y1 + g.header_h // 2 + g.gold_line // 2})\\q2{clip}{fscx}}}{title}"
         )
 
     # Team text — white + non-bold over the gold-tint cell. Skipped
     # cell-wise when one player has a team and the other doesn't.
+    # Anchored just after the accent strip so the text sits visually
+    # flush against the left of the cell (matches the team-tint extent).
     if g.has_team:
-        team_text_x = g.col_team_x + g.accent_w + 6
+        team_text_x = g.x1 + g.accent_w + max(6, int(8 * g.scale))
         for cy_row, txt in ((g.row1_cy, t.p1_team), (g.row2_cy, t.p2_team)):
             if not txt:
                 continue
@@ -317,8 +341,10 @@ def _emit_live_panel(lines: list[str], g: _Geometry, t: _AssetText,
             )
 
     # Player names — bold white. Anchor x shifts when the team column
-    # is present so names tuck inside the team divider.
-    name_text_x = (g.col_name_x + 6) if g.has_team else (g.col_team_x + g.accent_w + 6)
+    # is present so names tuck inside the team divider, with extra
+    # breathing room from the gold-tinted team cell.
+    name_pad = max(14, int(20 * g.scale))
+    name_text_x = (g.col_name_x + name_pad) if g.has_team else (g.col_team_x + g.accent_w + 6)
     lines.append(
         f"Dialogue: 1,{start},{end},Name,,0,0,0,,"
         f"{{\\an4\\pos({name_text_x},{g.row1_cy})\\q2}}{t.p1}"
@@ -514,8 +540,12 @@ def _emit_final_scoreboard(lines: list[str], g: _Geometry, t: _AssetText,
 
     F_team_x      = F_x1 + g.pad_x
     F_name_col_x  = F_team_x + g.team_col
-    F_team_text_x = F_team_x + g.accent_w + 6
-    F_name_text_x = (F_name_col_x + 6) if g.has_team else (F_team_x + g.accent_w + 6)
+    # Team text sits just after the accent strip (mirrors live panel),
+    # name text gets larger left padding to breathe away from the
+    # gold-tinted team cell.
+    F_team_text_x = F_x1 + g.accent_w + max(6, int(8 * g.scale))
+    F_name_pad = max(14, int(20 * g.scale))
+    F_name_text_x = (F_name_col_x + F_name_pad) if g.has_team else (F_team_x + g.accent_w + 6)
     F_total_x     = F_name_col_x + g.name_col
     F_total_cx    = F_total_x + F_TOTAL_COL // 2
     F_set_cxs = [
@@ -548,9 +578,7 @@ def _emit_final_scoreboard(lines: list[str], g: _Geometry, t: _AssetText,
 
     lines.append(fbox(F_x1, F_hdr_y2, F_BAR_W, g.row_h * 2 + g.gap_rows, C_BG_ROWS, alpha="0C"))
 
-    # Team column tint.
-    if g.has_team:
-        lines.append(fbox(F_team_x, F_hdr_y2, g.team_col, g.row_h * 2 + g.gap_rows, C_BG_TEAM, alpha="0C"))
+    # No team-column tint here either — see _emit_live_panel.
 
     # Totals column tint mirrors the live SETS-column highlight.
     lines.append(fbox(F_total_x, F_hdr_y2, F_TOTAL_COL, g.row_h * 2 + g.gap_rows, C_BG_SETS, alpha="0C"))
@@ -564,13 +592,15 @@ def _emit_final_scoreboard(lines: list[str], g: _Geometry, t: _AssetText,
     for dx in F_div_xs:
         lines.append(fbox(dx, F_div_y_top, g.sep_col, F_div_h, C_SEP))
 
-    if t.tournament.strip():
-        title = _ass_escape(_trim_title(t.tournament))
+    if t.tournament:
+        title = _ass_escape(t.tournament)
         clip = f"\\clip({F_x1},{F_y1 + g.gold_line},{F_x2 - g.pad_x // 2},{F_hdr_y2})"
+        F_avail_w = F_BAR_W - g.pad_x - g.pad_x // 2
+        F_fscx = _title_fscx_tag(t.tournament, g.fs_header, F_avail_w)
         lines.append(
             f"Dialogue: 7,{s_fmt},{e_fmt},Header,,0,0,0,,"
             f"{{\\an4\\pos({F_x1 + g.pad_x},{F_y1 + g.header_h // 2 + g.gold_line // 2})"
-            f"\\q2{clip}{fade}}}{title}"
+            f"\\q2{clip}{F_fscx}{fade}}}{title}"
         )
 
     if g.has_team:
@@ -614,9 +644,8 @@ def _emit_final_scoreboard(lines: list[str], g: _Geometry, t: _AssetText,
 # ---------------------------------------------------------------------------
 
 
-def build_scoreboard_ass(
+def build_scoreboard_ass_text(
     *,
-    output_path: Path,
     video_w: int,
     video_h: int,
     total_duration: float,
@@ -627,8 +656,8 @@ def build_scoreboard_ass(
     best_of: int = 5,
     p1_team: str = "",
     p2_team: str = "",
-) -> Path:
-    """Write a scoreboard ASS for the entire match. Six sections:
+) -> str:
+    """Build the scoreboard ASS content as a string. Six sections:
 
       1. Static live panel (header, rows, accents, dividers, names)
       2. Per-event live numbers (sets / pts updates)
@@ -638,6 +667,13 @@ def build_scoreboard_ass(
 
     Each section emits Dialogue lines with non-overlapping layer + time
     ranges, so libass composites them in a deterministic z-order.
+
+    Two consumers share this function: the render pipeline (via
+    `build_scoreboard_ass`, which writes to disk for ffmpeg's `ass=`
+    filter) and the live preview endpoint (which streams the text
+    straight to the JASSUB-in-browser renderer). Sharing this single
+    source guarantees the preview overlay is byte-identical to the
+    burned-in scoreboard.
     """
     events = sorted(score_events, key=lambda e: e.timestamp)
     if not events or events[0].timestamp > 0.0:
@@ -647,12 +683,16 @@ def build_scoreboard_ass(
     g = _compute_geometry(video_w, video_h, has_team, tournament)
 
     end_ts = total_duration + 1
+    # Tournament gets a generous 45-char cap when no team column is
+    # drawn — the wider singles layout has visible room for a longer
+    # title. With a team column the word cap (14) is enough.
+    title_trimmed = _trim_title(tournament, max_chars=None if has_team else 45)
     text = _AssetText(
         p1=_ass_escape(_trim_name(p1_name)),
         p2=_ass_escape(_trim_name(p2_name)),
         p1_team=_ass_escape(_trim_team(p1_team)),
         p2_team=_ass_escape(_trim_team(p2_team)),
-        tournament=tournament,
+        tournament=title_trimmed,
     )
 
     sets_to_win = (best_of + 1) // 2
@@ -678,5 +718,36 @@ def build_scoreboard_ass(
             match_end_t, end_ts,
         )
 
-    output_path.write_text("\n".join(lines), encoding="utf-8")
+    return "\n".join(lines)
+
+
+def build_scoreboard_ass(
+    *,
+    output_path: Path,
+    video_w: int,
+    video_h: int,
+    total_duration: float,
+    tournament: str,
+    p1_name: str,
+    p2_name: str,
+    score_events: Iterable[ScoreFrame],
+    best_of: int = 5,
+    p1_team: str = "",
+    p2_team: str = "",
+) -> Path:
+    """Write the scoreboard ASS to disk. Thin wrapper around
+    `build_scoreboard_ass_text` — kept for the render pipeline which
+    needs an on-disk file for ffmpeg's `ass=` filter."""
+    output_path.write_text(
+        build_scoreboard_ass_text(
+            video_w=video_w, video_h=video_h,
+            total_duration=total_duration,
+            tournament=tournament,
+            p1_name=p1_name, p2_name=p2_name,
+            score_events=score_events,
+            best_of=best_of,
+            p1_team=p1_team, p2_team=p2_team,
+        ),
+        encoding="utf-8",
+    )
     return output_path

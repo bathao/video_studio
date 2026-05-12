@@ -79,8 +79,22 @@ frontend/
   highlights.js      All highlight ops + list UI.
   trims.js           All trim ops + list UI.
   project_io.js      Save / Load Project + load modal.
-  render.js          startRender + pollRender + intro-style mutual
-                     exclusion + Open output folder.
+  render.js          startRender + pollRender + cancel + intro-style
+                     mutual exclusion + Open output folder.
+  scoreboard_preview.js
+                     Auto-attaches JASSUB (libass-WASM) to the `<video>`
+                     element as soon as the source reports
+                     `loadedmetadata`. Feeds it the *same* .ass file the
+                     render pipeline burns in (fetched from
+                     `POST /api/preview/scoreboard.ass`), so the preview
+                     overlay is byte-identical to the final output.
+                     Refresh is debounced 250 ms on info / score changes
+                     via `syncScoreboardPreview` — name keystrokes
+                     collapse to a single fetch.
+  vendor/jassub/     Vendored JASSUB build (libass via WebAssembly,
+                     ~4.4 MB) — loader, worker, two WASM variants,
+                     default.woff2 (Liberation Sans, Arial metric clone
+                     w/ Vietnamese coverage). Served as static files.
   styles.css         A few @apply shorthands plus plain-CSS fallbacks
                      for the Tailwind classes (the CDN's @apply support
                      is patchy on older builds).
@@ -142,6 +156,14 @@ progress fraction stays correct as stages advance.
   missing the cinematic intro substitutes the shipped silhouette and
   stamps a hint into `RenderState.message`. Only when EVEN the
   default is missing do we fall back to the text intro.
+
+- **Scoreboard has one source of truth.** Both the burned-in render
+  AND the live preview overlay call `build_scoreboard_ass_text` in
+  `backend/ass/scoreboard.py`. The render pipeline writes it to a file
+  for ffmpeg's `ass=` filter; the preview endpoint streams it to
+  JASSUB-in-browser. If you change how the scoreboard looks, change
+  `scoreboard.py` and both paths update — never duplicate the layout
+  logic on the frontend.
 
 - **Temp survives errors.** `_finalize` deletes `temp/<job_id>/` ONLY
   on success. Failed renders leave the .ass / .mp4 / .concat.txt

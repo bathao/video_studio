@@ -8,6 +8,7 @@
 import { $ } from './dom.js';
 import { fmt } from './timecode.js';
 import { live, project, snapshot } from './state.js';
+import { syncScoreboardPreview } from './scoreboard_preview.js';
 import { toast } from './toast.js';
 
 const POINTS_TO_WIN = 11;
@@ -91,6 +92,14 @@ export function scorePoint(who) {
     toast('Load a video first');
     return;
   }
+  // Block scoring after the match recording has ended — any event
+  // pushed here would land at `timestamp = duration` and never appear
+  // in the rendered scoreboard's time range. The operator should seek
+  // back into the video first if they need to correct a late point.
+  if (player.ended) {
+    toast('Video ended — seek back to score');
+    return;
+  }
   snapshot();
   // Insert action at current playback time.
   project.score_events.push({
@@ -131,6 +140,7 @@ export function syncScore() {
   $('score-p2').textContent = live.p2;
   $('set-p1').textContent = live.p1_set;
   $('set-p2').textContent = live.p2_set;
+  syncScoreboardPreview();
 }
 
 export function syncEvents() {
@@ -171,3 +181,21 @@ export function syncEvents() {
 // Wire score-panel buttons.
 $('btn-p1').addEventListener('click', () => scorePoint(1));
 $('btn-p2').addEventListener('click', () => scorePoint(2));
+
+// Disable the score buttons once the video has played to the end —
+// scoring there pushes an event at `timestamp = duration` which never
+// appears in the burned-in scoreboard. The `seeked` / `play` events
+// re-enable them once the cursor moves back inside the video. The
+// keyboard A / D shortcuts are guarded inside `scorePoint` itself,
+// so they stay covered without listening here.
+(function wireEndedGuard() {
+  const player = $('player');
+  const refresh = () => {
+    const blocked = player.ended;
+    $('btn-p1').disabled = blocked;
+    $('btn-p2').disabled = blocked;
+  };
+  ['ended', 'seeked', 'seeking', 'play', 'pause', 'loadeddata', 'emptied'].forEach((ev) =>
+    player.addEventListener(ev, refresh)
+  );
+})();

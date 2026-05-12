@@ -36,10 +36,11 @@ def _trim_name(text: str, max_len: int = 22) -> str:
     return text
 
 
-def _trim_team(text: str, max_len: int = 14) -> str:
+def _trim_team(text: str, max_len: int = 20) -> str:
     """Like `_trim_name` but returns an empty string for empty input
     instead of a placeholder, so an unset team renders as a blank cell
-    rather than the literal word PLAYER."""
+    rather than the literal word PLAYER. The 20-char cap fits the
+    longest team-column width the scoreboard auto-sizes to."""
     text = (text or "").strip()
     if not text:
         return ""
@@ -48,17 +49,23 @@ def _trim_team(text: str, max_len: int = 14) -> str:
     return text
 
 
-def _trim_title(text: str, max_words: int = 14) -> str:
-    """Tournament title: cap at 14 whitespace-separated tokens. Anything
-    longer gets truncated with an ellipsis. Keeps the panel layout
-    predictable regardless of how chatty the user is."""
+def _trim_title(text: str, max_words: int = 14, max_chars: int | None = None) -> str:
+    """Tournament title: cap at `max_words` whitespace-separated tokens,
+    plus an optional character cap via `max_chars`. Callers that have
+    more horizontal room (e.g. singles layout with no team column)
+    typically pass a generous `max_chars=45` to let longer titles
+    through; the word cap stays as a safety net against pathological
+    inputs (one comma-glued blob, etc.). Anything over either cap is
+    truncated with an ellipsis."""
     text = (text or "").strip()
     if not text:
         return ""
     tokens = text.split()
-    if len(tokens) <= max_words:
-        return text
-    return " ".join(tokens[:max_words]) + "…"
+    if len(tokens) > max_words:
+        text = " ".join(tokens[:max_words]) + "…"
+    if max_chars is not None and len(text) > max_chars:
+        text = text[: max_chars - 1].rstrip() + "…"
+    return text
 
 
 # ASS colours are written &H00BBGGRR& (alpha BB GG RR). We pre-convert
@@ -83,7 +90,6 @@ C_SEP         = _ass_rgb( 75,  75,  75)   # divider lines
 C_BG_HEADER   = _ass_rgb( 35,  35,  35)   # near-black header strip
 C_BG_ROWS     = _ass_rgb( 18,  18,  18)   # near-black player rows
 C_BG_SETS     = _ass_rgb(102,  76,  24)   # gold-tinted dark for the sets (set-point) column
-C_BG_TEAM     = _ass_rgb( 70,  58,  32)   # muted gold for the optional team column (sibling of C_BG_SETS, desaturated)
 C_ACCENT_HDR  = _ass_rgb(180, 140,  40)   # gold accent for tournament header
 C_ACCENT_P1   = _ass_rgb(165, 100, 220)   # purple (player A)
 C_ACCENT_P2   = _ass_rgb( 50, 140, 220)   # sky blue (player B)
