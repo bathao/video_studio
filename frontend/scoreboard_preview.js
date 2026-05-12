@@ -14,6 +14,7 @@
 import { $ } from './dom.js';
 import { project } from './state.js';
 import { player } from './player.js';
+import { fmt } from './timecode.js';
 import { toast } from './toast.js';
 
 const DEBOUNCE_MS = 250;
@@ -70,7 +71,7 @@ async function initJassub() {
   if (!(player.videoWidth > 0 && player.videoHeight > 0)) return;
   initInFlight = true;
   try {
-    console.log(`[scoreboard-preview] video ready: ${player.videoWidth}×${player.videoHeight} · ${player.duration?.toFixed(1)}s`);
+    console.log(`[scoreboard-preview] video ready: ${player.videoWidth}×${player.videoHeight} · ${fmt(player.duration || 0)}`);
     const JASSUB = await loadJassubClass();
     const initialAss = await fetchAss();
     jassub = new JASSUB({

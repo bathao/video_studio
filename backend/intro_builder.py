@@ -76,10 +76,28 @@ def render_cinematic_intro(
     p1_team: str = "",
     p2_team: str = "",
     cancel_check: Optional[Callable[[], bool]] = None,
+    # Doubles: when match_type == "double" AND both p3/p4 avatars
+    # resolve, lay out four smaller avatars (two per side) instead of
+    # two large ones. The caller is responsible for combining the four
+    # player names into the two team-row labels before passing them as
+    # p1_name / p2_name — this function only owns the visual layout.
+    match_type: str = "single",
+    p3_avatar: Optional[Path] = None,
+    p4_avatar: Optional[Path] = None,
 ) -> float:
     """Render a cinematic intro clip and return its duration."""
     duration = duration if duration is not None else config.intro_duration_seconds
-    asize = config.intro_avatar_size_px
+    is_doubles = (
+        (match_type or "single").lower() == "double"
+        and p3_avatar is not None and p4_avatar is not None
+    )
+    # Doubles needs to fit two avatars per side, so each shrinks to
+    # ~60% of the singles size — keeps the pair within W*0.27 ± 200 px
+    # and well clear of the centre 'VS'.
+    asize = (
+        int(config.intro_avatar_size_px * 0.6) if is_doubles
+        else config.intro_avatar_size_px
+    )
     blur_sigma = config.intro_blur_sigma
 
     # Pull the background frame from the middle of the source so the
@@ -114,67 +132,125 @@ def render_cinematic_intro(
         f"a='min(255\\,max(0\\,(W/2-2-hypot(X-W/2\\,Y-H/2))*255))'"
     )
 
-    # Slide-in (ease-out cubic over 1.0 s):
-    #   x(t) = start + (target - start) * (1 - (1 - t)^3)
-    # P1 enters from the left edge, P2 from the right. After t=1.0 each
-    # holds at its target so the rest of the intro is static.
-    p1_x = (
-        "if(lt(t\\,1.0)\\,"
-        "(-w)+(W*0.27+w/2)*(1-(1-t)*(1-t)*(1-t))\\,"
-        "W*0.27-w/2)"
-    )
-    p2_x = (
-        "if(lt(t\\,1.0)\\,"
-        "W-(W*0.27+w/2)*(1-(1-t)*(1-t)*(1-t))\\,"
-        "W*0.73-w/2)"
-    )
     # Avatars bob ±7 px on a ~1.8 s sine cycle — fast enough to read as
     # deliberate motion (not just camera shake) and clearly visible at
-    # 1080p. Both avatars share the same expression so they breathe in
-    # sync.
+    # 1080p. All avatars share the same expression so they breathe in
+    # sync, even when there are four of them in a doubles pair.
     avatar_y = "(H-h)/2+80+sin(t*3.5)*7"
 
     # zoompan's z expression only supports `on` (output frame index),
     # not `t`. Pre-compute zoom-per-output-frame so the bg lands at
     # ~1.08x by the end of the intro regardless of fps.
     zoom_per_frame = 0.012 / fps  # → ~1.0 + 0.084 over a 7 s @ 60 fps run
-    filter_complex = ";".join([
-        # Background: scale → blur → dim → slow Ken-Burns zoom. The zoom
-        # is what keeps the still backdrop from feeling frozen after the
-        # avatars settle.
+    bg_chain = (
         f"[0:v]scale={width}:{height},gblur=sigma={blur_sigma},"
         f"eq=brightness=-0.20,"
         f"zoompan=z='1+{zoom_per_frame:.6f}*on':"
         f"x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':"
         f"d=1:s={width}x{height}:fps={fps},"
-        f"format=yuv420p[bg]",
-        # Avatars.
-        f"[1:v]{avatar_chain}[av1]",
-        f"[2:v]{avatar_chain}[av2]",
-        # Composite.
-        f"[bg][av1]overlay=x='{p1_x}':y='{avatar_y}'[s1]",
-        f"[s1][av2]overlay=x='{p2_x}':y='{avatar_y}'[s2]",
-        # Text overlay (libass) + force yuv420p for NVENC.
-        f"[s2]ass='{ass_arg}',format=yuv420p[vout]",
-    ])
+        f"format=yuv420p[bg]"
+    )
 
-    args = [
-        # 0: looped bg frame
-        "-loop", "1", "-t", f"{duration:.3f}", "-i", str(bg_png),
-        # 1: looped P1 avatar
-        "-loop", "1", "-t", f"{duration:.3f}", "-i", str(p1_avatar),
-        # 2: looped P2 avatar
-        "-loop", "1", "-t", f"{duration:.3f}", "-i", str(p2_avatar),
-        # 3: silent audio so the concat demuxer downstream stays happy
-        "-f", "lavfi", "-t", f"{duration:.3f}",
-        "-i", f"anullsrc=r={TARGET_AUDIO_RATE}:cl=stereo",
-        "-filter_complex", filter_complex,
-        "-map", "[vout]", "-map", "3:a",
-        *nvenc_args(),
-        *aac_args(),
-        "-shortest",
-        str(out_path),
-    ]
+    if is_doubles:
+        # Doubles: two avatars per side, sliding in as a pair. gap_half
+        # scales with video width so 4K (3840p) gets a proportionally
+        # wider gap than 1080p (1920p).
+        gap_half = max(8, int(width * 0.008))
+        # Slide-in (ease-out cubic over 1.0 s) for four avatars. Each
+        # expression interpolates the per-frame x position from off-
+        # screen to its final target. After t=1.0 every avatar locks
+        # into its target so the rest of the intro is static.
+        # Pair 1 (left side, slides in from left edge):
+        p1a_x = (
+            f"if(lt(t\\,1.0)\\,"
+            f"(-w)+(W*0.27-{gap_half})*(1-(1-t)*(1-t)*(1-t))\\,"
+            f"W*0.27-w-{gap_half})"
+        )
+        p1b_x = (
+            f"if(lt(t\\,1.0)\\,"
+            f"(-w)+(W*0.27+{gap_half}+w)*(1-(1-t)*(1-t)*(1-t))\\,"
+            f"W*0.27+{gap_half})"
+        )
+        # Pair 2 (right side, slides in from right edge):
+        p2a_x = (
+            f"if(lt(t\\,1.0)\\,"
+            f"W-(W*0.27+w+{gap_half})*(1-(1-t)*(1-t)*(1-t))\\,"
+            f"W*0.73-w-{gap_half})"
+        )
+        p2b_x = (
+            f"if(lt(t\\,1.0)\\,"
+            f"W-(W*0.27-{gap_half})*(1-(1-t)*(1-t)*(1-t))\\,"
+            f"W*0.73+{gap_half})"
+        )
+        filter_complex = ";".join([
+            bg_chain,
+            f"[1:v]{avatar_chain}[av1]",
+            f"[2:v]{avatar_chain}[av2]",
+            f"[3:v]{avatar_chain}[av3]",
+            f"[4:v]{avatar_chain}[av4]",
+            f"[bg][av1]overlay=x='{p1a_x}':y='{avatar_y}'[s1]",
+            f"[s1][av2]overlay=x='{p1b_x}':y='{avatar_y}'[s2]",
+            f"[s2][av3]overlay=x='{p2a_x}':y='{avatar_y}'[s3]",
+            f"[s3][av4]overlay=x='{p2b_x}':y='{avatar_y}'[s4]",
+            f"[s4]ass='{ass_arg}',format=yuv420p[vout]",
+        ])
+        # Input order is wired to the overlay chain below: [1:v] → av1
+        # ends up at p1a_x (team 1 left), [2:v] → av2 at p1b_x (team 1
+        # right), [3:v] → av3 at p2a_x (team 2 left), [4:v] → av4 at
+        # p2b_x (team 2 right). Team 1 = P1+P3, Team 2 = P2+P4, so we
+        # feed P3 before P2 here even though the caller passes them in
+        # numerical order. Swapping the avatars at the filter-graph
+        # boundary keeps the overlay chain free of an extra label
+        # rename step.
+        args = [
+            "-loop", "1", "-t", f"{duration:.3f}", "-i", str(bg_png),
+            "-loop", "1", "-t", f"{duration:.3f}", "-i", str(p1_avatar),
+            "-loop", "1", "-t", f"{duration:.3f}", "-i", str(p3_avatar),
+            "-loop", "1", "-t", f"{duration:.3f}", "-i", str(p2_avatar),
+            "-loop", "1", "-t", f"{duration:.3f}", "-i", str(p4_avatar),
+            "-f", "lavfi", "-t", f"{duration:.3f}",
+            "-i", f"anullsrc=r={TARGET_AUDIO_RATE}:cl=stereo",
+            "-filter_complex", filter_complex,
+            "-map", "[vout]", "-map", "5:a",
+            *nvenc_args(),
+            *aac_args(),
+            "-shortest",
+            str(out_path),
+        ]
+    else:
+        # Singles: original two-avatar layout. P1 enters from the left
+        # edge, P2 from the right.
+        p1_x = (
+            "if(lt(t\\,1.0)\\,"
+            "(-w)+(W*0.27+w/2)*(1-(1-t)*(1-t)*(1-t))\\,"
+            "W*0.27-w/2)"
+        )
+        p2_x = (
+            "if(lt(t\\,1.0)\\,"
+            "W-(W*0.27+w/2)*(1-(1-t)*(1-t)*(1-t))\\,"
+            "W*0.73-w/2)"
+        )
+        filter_complex = ";".join([
+            bg_chain,
+            f"[1:v]{avatar_chain}[av1]",
+            f"[2:v]{avatar_chain}[av2]",
+            f"[bg][av1]overlay=x='{p1_x}':y='{avatar_y}'[s1]",
+            f"[s1][av2]overlay=x='{p2_x}':y='{avatar_y}'[s2]",
+            f"[s2]ass='{ass_arg}',format=yuv420p[vout]",
+        ])
+        args = [
+            "-loop", "1", "-t", f"{duration:.3f}", "-i", str(bg_png),
+            "-loop", "1", "-t", f"{duration:.3f}", "-i", str(p1_avatar),
+            "-loop", "1", "-t", f"{duration:.3f}", "-i", str(p2_avatar),
+            "-f", "lavfi", "-t", f"{duration:.3f}",
+            "-i", f"anullsrc=r={TARGET_AUDIO_RATE}:cl=stereo",
+            "-filter_complex", filter_complex,
+            "-map", "[vout]", "-map", "3:a",
+            *nvenc_args(),
+            *aac_args(),
+            "-shortest",
+            str(out_path),
+        ]
 
     run_ffmpeg_with_progress(
         args,

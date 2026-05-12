@@ -40,6 +40,20 @@ class FFmpegCancelled(FFmpegError):
         super().__init__("Render cancelled by user", stderr="", returncode=-1)
 
 
+def _fmt_mmss(seconds: float) -> str:
+    """Compact m:ss / h:mm:ss formatter for progress messages. Pure
+    seconds (e.g. '612.8s') are hard to read at a glance; '10:12' tells
+    the operator how much main-stage video is left without mental math."""
+    if seconds < 0 or seconds != seconds:  # NaN guard
+        seconds = 0.0
+    total = int(seconds)
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h:d}:{m:02d}:{s:02d}"
+    return f"{m:d}:{s:02d}"
+
+
 def nvenc_args() -> list[str]:
     """Standard NVENC video-encode flags pulled from `config.json`. Used
     by every render stage so encoder / preset / cq stay consistent."""
@@ -203,7 +217,10 @@ def run_ffmpeg_with_progress(
                 # actually microseconds (legacy naming). Both treated the same.
                 seconds = last_out_us / 1_000_000.0
                 frac = max(0.0, min(0.999, seconds / expected_out_seconds))
-                on_progress(frac, f"{log_prefix}{seconds:.1f}s / {expected_out_seconds:.1f}s")
+                on_progress(
+                    frac,
+                    f"{log_prefix}{_fmt_mmss(seconds)} / {_fmt_mmss(expected_out_seconds)}",
+                )
         elif key == "progress" and value == "end":
             if on_progress:
                 on_progress(1.0, f"{log_prefix}done")

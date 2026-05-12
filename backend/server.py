@@ -437,6 +437,8 @@ def preview_scoreboard(req: ScoreboardPreviewRequest) -> str:
         tournament=p.info.tournament,
         p1_name=p.info.p1, p2_name=p.info.p2,
         p1_team=p.info.p1_team, p2_team=p.info.p2_team,
+        match_type=p.info.match_type,
+        p3_name=p.info.p3, p4_name=p.info.p4,
         score_events=events,
         best_of=p.info.best_of,
     )

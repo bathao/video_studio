@@ -36,6 +36,38 @@ def _trim_name(text: str, max_len: int = 22) -> str:
     return text
 
 
+def _last_two_words(name: str) -> str:
+    """Last 2 whitespace-separated tokens of a player's name. Used to
+    compose the combined doubles label (e.g. 'Nguyễn Văn An' →
+    'Văn An'). 1-token names pass through unchanged so 'Tommy' doesn't
+    get padded. Empty input returns empty so the doubles join can
+    short-circuit (no stray ' + ' for missing partner).
+
+    Why: in doubles each row of the scoreboard fits ~22 chars (name
+    column width). Combining two full Vietnamese 3-token names blows
+    that budget; the last-2 convention keeps the personal-name part
+    (which is what locals refer to each other by) and drops only the
+    family prefix that all four players might share."""
+    text = (name or "").strip()
+    if not text:
+        return ""
+    tokens = text.split()
+    if len(tokens) <= 2:
+        return text
+    return " ".join(tokens[-2:])
+
+
+def _combine_doubles_name(a: str, b: str) -> str:
+    """Join two player names into the doubles row label. Empty halves
+    are dropped, so the label gracefully degrades when only one partner
+    is filled in."""
+    parts = [_last_two_words(a), _last_two_words(b)]
+    parts = [p for p in parts if p]
+    if not parts:
+        return ""
+    return " + ".join(parts)
+
+
 def _trim_team(text: str, max_len: int = 20) -> str:
     """Like `_trim_name` but returns an empty string for empty input
     instead of a placeholder, so an unset team renders as a blank cell

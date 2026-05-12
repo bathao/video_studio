@@ -93,19 +93,48 @@
             <label class="lbl">Tournament
               <input id="in-tournament" class="ipt" placeholder="Spring Open 2026" />
             </label>
-            <label class="lbl">Player 1 (Left, key A)
+
+            <!-- Match-type tabs. Single = 1 vs 1 (current behaviour);
+                 Double = 2 vs 2 with combined names on the scoreboard.
+                 The pair of buttons is wired in app.js to set
+                 project.info.match_type + toggle the .hidden class on
+                 #setup-doubles-fields. -->
+            <div class="flex bg-ink-800 border border-ink-700 rounded-md p-0.5 mt-1" role="tablist">
+              <button id="tab-single" type="button" role="tab"
+                class="flex-1 px-2 py-1 text-xs rounded transition-colors bg-accent-500 text-white"
+                data-match-type="single">Single</button>
+              <button id="tab-double" type="button" role="tab"
+                class="flex-1 px-2 py-1 text-xs rounded transition-colors text-slate-300 hover:text-white"
+                data-match-type="double">Double</button>
+            </div>
+
+            <label class="lbl" id="lbl-in-p1">Player 1 (Left, key A)
               <div class="flex items-center gap-2">
                 <input id="in-p1" class="ipt flex-1 min-w-0" placeholder="Player 1" value="Player 1" />
                 <img id="thumb-p1" alt="" class="w-10 h-10 rounded-full object-cover bg-ink-800 border border-ink-700 opacity-30 shrink-0" />
               </div>
             </label>
+            <!-- Doubles partner for team 1 (P1 + P3). Hidden in single mode. -->
+            <label class="lbl hidden setup-doubles" id="lbl-in-p3">Player 3 (Team 1 partner)
+              <div class="flex items-center gap-2">
+                <input id="in-p3" class="ipt flex-1 min-w-0" placeholder="Player 3" />
+                <img id="thumb-p3" alt="" class="w-10 h-10 rounded-full object-cover bg-ink-800 border border-ink-700 opacity-30 shrink-0" />
+              </div>
+            </label>
             <label class="lbl">Team 1 (optional, for team matches)
               <input id="in-p1-team" class="ipt" placeholder="—" />
             </label>
-            <label class="lbl">Player 2 (Right, key D)
+            <label class="lbl" id="lbl-in-p2">Player 2 (Right, key D)
               <div class="flex items-center gap-2">
                 <input id="in-p2" class="ipt flex-1 min-w-0" placeholder="Player 2" value="Player 2" />
                 <img id="thumb-p2" alt="" class="w-10 h-10 rounded-full object-cover bg-ink-800 border border-ink-700 opacity-30 shrink-0" />
+              </div>
+            </label>
+            <!-- Doubles partner for team 2 (P2 + P4). Hidden in single mode. -->
+            <label class="lbl hidden setup-doubles" id="lbl-in-p4">Player 4 (Team 2 partner)
+              <div class="flex items-center gap-2">
+                <input id="in-p4" class="ipt flex-1 min-w-0" placeholder="Player 4" />
+                <img id="thumb-p4" alt="" class="w-10 h-10 rounded-full object-cover bg-ink-800 border border-ink-700 opacity-30 shrink-0" />
               </div>
             </label>
             <label class="lbl">Team 2 (optional, for team matches)

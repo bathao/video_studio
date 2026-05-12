@@ -5,7 +5,7 @@
 // without restarting the server.
 import { $ } from './dom.js';
 
-const _thumbDebounce = { p1: 0, p2: 0 };
+const _thumbDebounce = { p1: 0, p2: 0, p3: 0, p4: 0 };
 
 export function refreshAvatarThumb(slot) {
   const input = $(`in-${slot}`);

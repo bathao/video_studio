@@ -34,6 +34,7 @@ from .ass import (
     build_scoreboard_ass,
     build_transition_ass,
 )
+from .ass.scoreboard import resolve_row_names
 from .avatars import find_avatar_or_default
 from .config import config
 from .ffmpeg_runner import (
@@ -703,9 +704,12 @@ def _prepare_context(plan: RenderPlan) -> RenderContext:
 
 
 def _intro_stage(ctx: RenderContext) -> None:
-    """Render the intro card. Cinematic when both players have an avatar
-    on disk (or fall back to the shipped placeholder) and intro_style is
-    not 'text'; otherwise the libass-only title card."""
+    """Render the intro card. Cinematic when every player has an avatar
+    on disk (or falls back to the shipped placeholder) and intro_style
+    is not 'text'; otherwise the libass-only title card. Doubles needs
+    all four photos to resolve before it can use the 4-avatar layout —
+    when one is missing even after the default fallback, we drop back
+    to the text intro instead of rendering a lopsided card."""
     plan = ctx.plan
     if not plan.include_intro:
         return
@@ -714,28 +718,54 @@ def _intro_stage(ctx: RenderContext) -> None:
     intro_path = ctx.job_dir / "intro.mp4"
     style = (plan.intro_style or "cinematic").lower()
     use_cinematic = style != "text"
-    p1_photo = p2_photo = None
-    p1_default = p2_default = False
-    if use_cinematic:
-        p1_photo, p1_default = find_avatar_or_default(plan.project.info.p1)
-        p2_photo, p2_default = find_avatar_or_default(plan.project.info.p2)
+    info = plan.project.info
+    is_doubles = (info.match_type or "single").lower() == "double"
 
-    if use_cinematic and p1_photo and p2_photo:
+    # Names on each scoreboard row — used for the libass label below
+    # each avatar pair in doubles, and as plain p1/p2 names in singles.
+    top_label, bot_label = resolve_row_names(
+        info.match_type, info.p1, info.p2, info.p3, info.p4,
+    )
+
+    photos: dict[str, tuple[Optional[Path], bool]] = {}
+    if use_cinematic:
+        photos["p1"] = find_avatar_or_default(info.p1)
+        photos["p2"] = find_avatar_or_default(info.p2)
+        if is_doubles:
+            photos["p3"] = find_avatar_or_default(info.p3)
+            photos["p4"] = find_avatar_or_default(info.p4)
+
+    required_slots = ("p1", "p2", "p3", "p4") if is_doubles else ("p1", "p2")
+    have_all_photos = use_cinematic and all(
+        photos.get(slot, (None, False))[0] is not None for slot in required_slots
+    )
+
+    if use_cinematic and have_all_photos:
         render_cinematic_intro(
             out_path=intro_path,
             src=ctx.src,
             width=ctx.width, height=ctx.height, fps=ctx.fps,
-            tournament=plan.project.info.tournament,
-            p1_name=plan.project.info.p1, p1_avatar=p1_photo,
-            p2_name=plan.project.info.p2, p2_avatar=p2_photo,
-            p1_team=plan.project.info.p1_team,
-            p2_team=plan.project.info.p2_team,
+            tournament=info.tournament,
+            p1_name=top_label, p1_avatar=photos["p1"][0],
+            p2_name=bot_label, p2_avatar=photos["p2"][0],
+            p1_team=info.p1_team,
+            p2_team=info.p2_team,
+            match_type=info.match_type,
+            p3_avatar=photos.get("p3", (None, False))[0],
+            p4_avatar=photos.get("p4", (None, False))[0],
             on_progress=ctx.make_progress("intro"),
             cancel_check=ctx.cancel_check,
         )
-        missing = []
-        if p1_default: missing.append(plan.project.info.p1)
-        if p2_default: missing.append(plan.project.info.p2)
+        # Build the "used default placeholder for …" message from
+        # whichever slots fell back to the shipped silhouette.
+        missing: list[str] = []
+        for slot, raw_name in (
+            ("p1", info.p1), ("p2", info.p2),
+            ("p3", info.p3), ("p4", info.p4),
+        ):
+            entry = photos.get(slot)
+            if entry and entry[1] and raw_name:
+                missing.append(raw_name)
         if missing:
             ctx.state.message = (
                 f"Cinematic intro used the default placeholder for "
@@ -743,14 +773,16 @@ def _intro_stage(ctx: RenderContext) -> None:
                 f"assets/avatars/ when you have one."
             )
     else:
-        # User picked text intro, OR cinematic was requested but the
-        # default placeholder is missing too.
+        # User picked text intro, OR cinematic was requested but at
+        # least one required photo (and the default fallback) is
+        # missing. The text card uses the row labels so doubles still
+        # shows the combined pair names.
         render_intro(
             out_path=intro_path,
             width=ctx.width, height=ctx.height, fps=ctx.fps,
-            tournament=plan.project.info.tournament,
-            p1=plan.project.info.p1,
-            p2=plan.project.info.p2,
+            tournament=info.tournament,
+            p1=top_label,
+            p2=bot_label,
             on_progress=ctx.make_progress("intro"),
             cancel_check=ctx.cancel_check,
         )
@@ -827,6 +859,9 @@ def _main_stage(ctx: RenderContext) -> None:
         p2_name=plan.project.info.p2,
         p1_team=plan.project.info.p1_team,
         p2_team=plan.project.info.p2_team,
+        match_type=plan.project.info.match_type,
+        p3_name=plan.project.info.p3,
+        p4_name=plan.project.info.p4,
         score_events=ctx.remapped_events,
         best_of=plan.project.info.best_of,
     )

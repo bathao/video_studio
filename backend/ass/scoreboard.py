@@ -43,9 +43,28 @@ from .common import (
     C_ACCENT_HDR, C_ACCENT_P1, C_ACCENT_P2,
     C_BG_HEADER, C_BG_ROWS, C_BG_SETS,
     C_DEUCE, C_GOLD, C_GOLD_BRIGHT, C_GP_RED, C_GREY, C_MP_RED, C_SEP, C_WHITE,
-    _ass_escape, _ass_skeleton, _fmt_time, _rect,
+    _ass_escape, _ass_skeleton, _combine_doubles_name, _fmt_time, _rect,
     _trim_name, _trim_team, _trim_title,
 )
+
+
+def resolve_row_names(
+    match_type: str,
+    p1: str, p2: str, p3: str, p4: str,
+) -> tuple[str, str]:
+    """Map raw setup fields to the two scoreboard row labels.
+
+    Singles uses (p1, p2) directly. Doubles combines partners with
+    `_combine_doubles_name` so each row reads e.g. 'Văn An + Hoàng Nam'
+    — short enough to fit the name column at 1080p. Exported so the
+    server-side preview, the renderer, AND any future frontend mirror
+    can share the same rule rather than re-deriving it three places."""
+    if (match_type or "single").lower() == "double":
+        return (
+            _combine_doubles_name(p1, p3),
+            _combine_doubles_name(p2, p4),
+        )
+    return (p1 or "", p2 or "")
 
 
 @dataclass
@@ -656,6 +675,9 @@ def build_scoreboard_ass_text(
     best_of: int = 5,
     p1_team: str = "",
     p2_team: str = "",
+    match_type: str = "single",
+    p3_name: str = "",
+    p4_name: str = "",
 ) -> str:
     """Build the scoreboard ASS content as a string. Six sections:
 
@@ -683,13 +705,17 @@ def build_scoreboard_ass_text(
     g = _compute_geometry(video_w, video_h, has_team, tournament)
 
     end_ts = total_duration + 1
+    # Resolve doubles row labels here so every downstream emitter
+    # (_emit_live_panel, _emit_final_scoreboard) just sees one name per
+    # row and doesn't need a separate doubles branch.
+    row_top, row_bot = resolve_row_names(match_type, p1_name, p2_name, p3_name, p4_name)
     # Tournament gets a generous 45-char cap when no team column is
     # drawn — the wider singles layout has visible room for a longer
     # title. With a team column the word cap (14) is enough.
     title_trimmed = _trim_title(tournament, max_chars=None if has_team else 45)
     text = _AssetText(
-        p1=_ass_escape(_trim_name(p1_name)),
-        p2=_ass_escape(_trim_name(p2_name)),
+        p1=_ass_escape(_trim_name(row_top)),
+        p2=_ass_escape(_trim_name(row_bot)),
         p1_team=_ass_escape(_trim_team(p1_team)),
         p2_team=_ass_escape(_trim_team(p2_team)),
         tournament=title_trimmed,
@@ -734,6 +760,9 @@ def build_scoreboard_ass(
     best_of: int = 5,
     p1_team: str = "",
     p2_team: str = "",
+    match_type: str = "single",
+    p3_name: str = "",
+    p4_name: str = "",
 ) -> Path:
     """Write the scoreboard ASS to disk. Thin wrapper around
     `build_scoreboard_ass_text` — kept for the render pipeline which
@@ -747,6 +776,8 @@ def build_scoreboard_ass(
             score_events=score_events,
             best_of=best_of,
             p1_team=p1_team, p2_team=p2_team,
+            match_type=match_type,
+            p3_name=p3_name, p4_name=p4_name,
         ),
         encoding="utf-8",
     )

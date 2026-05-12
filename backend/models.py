@@ -6,11 +6,20 @@ from pydantic import BaseModel, Field
 
 class ProjectInfo(BaseModel):
     tournament: str = ""
+    # "single" → 1 vs 1; "double" → 2 vs 2 (P1+P2 vs P3+P4). The render
+    # pipeline + preview branch on this to combine player names and to
+    # decide how many avatars to lay out in the cinematic intro.
+    match_type: str = "single"
     p1: str = "Player 1"
     p2: str = "Player 2"
-    # Optional team / club affiliation per player. Empty by default;
-    # when both are empty the scoreboard hides the team column entirely
-    # so singles matches keep the compact two-column layout.
+    # Doubles partners. Empty in singles mode. p3 partners p1 on team 1,
+    # p4 partners p2 on team 2.
+    p3: str = ""
+    p4: str = ""
+    # Optional team / club affiliation per side. In singles this is per
+    # player; in doubles each side has ONE team that covers both players
+    # (so p1_team covers p1+p3, p2_team covers p2+p4). Empty hides the
+    # team column entirely.
     p1_team: str = ""
     p2_team: str = ""
     video_file: str = ""
