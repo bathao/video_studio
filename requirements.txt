@@ -1,4 +1,10 @@
+# Runtime dependencies.
 fastapi==0.115.0
 uvicorn[standard]==0.32.0
 python-multipart==0.0.12
 pydantic==2.9.2
+
+# Dev / test runner. Only needed when running the pytest suite; safe
+# to install everywhere since this is a single-operator tool with no
+# separate production deployment.
+pytest>=8.0

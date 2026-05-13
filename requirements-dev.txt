@@ -1,7 +1,0 @@
-# Dev-only dependencies (test runner). Install alongside requirements.txt
-# when working on the codebase:
-#
-#   venv/Scripts/python.exe -m pip install -r requirements-dev.txt
-#
-# Not needed for production / end-user deployment.
-pytest>=8.0
