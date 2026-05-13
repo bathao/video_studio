@@ -29,8 +29,7 @@
   "outro_bg_path": "assets/backgrounds/outro_bg.jpg",
   "outro_sound_path": "assets/sounds/intro.mp3",
   "outro_sound_volume": 0.7,
-  "replay_sound_path_a": "assets/sounds/slow_motion.mp3",
-  "replay_sound_path_b": "assets/sounds/slow_motion2.mp3",
+  "replay_sound_path": "assets/sounds/slow_motion.mp3",
   "replay_sound_volume": 0.7,
   "host": "127.0.0.1",
   "port": 8765

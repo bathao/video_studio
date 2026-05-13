@@ -810,7 +810,7 @@ def render_main_with_scoreboard(
     has_audio: bool,
     on_progress: Callable[[float, str], None],
     cancel_check: Optional[Callable[[], bool]] = None,
-    replay_sound_paths: Optional[list[Path]] = None,
+    replay_sound_path: Optional[Path] = None,
     replay_sound_volume: float = 0.7,
 ) -> float:
     """
@@ -841,31 +841,27 @@ def render_main_with_scoreboard(
     n = len(playlist)
     expected_total = sum(e.final_end - e.final_start for e in playlist)
 
-    # Per-replay music inputs (alternating A / B / A / B ...). Each one
-    # is `-stream_loop -1` looped and `-t` capped so an mp3 shorter than
-    # the replay loops to fill, and a longer mp3 gets trimmed. Indexed
-    # right after the n source clip inputs. Disabled when the source
-    # has no audio track — the concat=a=1 path needs every entry to
-    # produce audio, and synthesising silence per slice just to keep
-    # one branch alive isn't worth the filter-complex noise.
-    replay_music_files: list[Path] = list(replay_sound_paths or [])
+    # Per-replay music inputs — one `-stream_loop -1 -t r_dur -i <file>`
+    # per replay so a short mp3 loops to fill and a long mp3 gets
+    # trimmed. Indexed right after the n source clip inputs. Disabled
+    # when the source has no audio track — the concat=a=1 path needs
+    # every entry to produce audio, and synthesising silence per slice
+    # just to keep one branch alive isn't worth the filter-complex
+    # noise.
     replay_music_idx_map: dict[int, int] = {}
     next_input_idx = n
-    if has_audio and replay_music_files:
-        replay_seen = 0
+    if has_audio and replay_sound_path is not None:
         for i, entry in enumerate(playlist):
             if entry.kind != "replay":
                 continue
-            chosen = replay_music_files[replay_seen % len(replay_music_files)]
             r_dur = entry.final_end - entry.final_start
             args += [
                 "-stream_loop", "-1",
                 "-t", f"{r_dur:.3f}",
-                "-i", str(chosen),
+                "-i", str(replay_sound_path),
             ]
             replay_music_idx_map[i] = next_input_idx
             next_input_idx += 1
-            replay_seen += 1
 
     # If the source has no audio, we still need an audio stream in the
     # output (so the final concat-demuxer doesn't fail on stream mismatch).
@@ -1428,7 +1424,7 @@ def _main_stage(ctx: RenderContext) -> None:
         has_audio=ctx.has_audio,
         on_progress=ctx.make_progress("main"),
         cancel_check=ctx.cancel_check,
-        replay_sound_paths=config.replay_sound_paths,
+        replay_sound_path=config.replay_sound_path,
         replay_sound_volume=config.replay_sound_volume,
     )
     ctx.parts.append(main_path)

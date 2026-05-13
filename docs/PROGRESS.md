@@ -116,14 +116,13 @@ render started splicing a full 50% replay after every highlight.)
       old one-shot `-i sound_path` so a longer music bed sinks cleanly
       into the main render instead of being cut hard at 3 s. New config
       key `intermission_sound_volume` (default 0.7).
-- ✅ Slow-mo replay music: two mp3s
-      (`replay_sound_path_a` / `replay_sound_path_b`, defaults to
-      `assets/sounds/slow_motion.mp3` + `slow_motion2.mp3`) alternated
-      A/B/A/B across the spliced-in replays. Each replay gets its own
-      `-stream_loop -1 -t r_dur -i <file>` input so a short mp3 loops
-      to fill the replay and a long mp3 gets trimmed. Volume + afade
-      in/out match the surrounding slice transitions; missing files →
-      original muted-replay path (REPLAY_VOLUME=0) as fallback.
+- ✅ Slow-mo replay music: single mp3 (`replay_sound_path`, defaults
+      to `assets/sounds/slow_motion.mp3`) reused for every spliced-in
+      replay. Each replay gets its own `-stream_loop -1 -t r_dur -i
+      <file>` input so a short mp3 loops to fill the replay and a long
+      mp3 gets trimmed. Volume + afade in/out match the surrounding
+      slice transitions; missing file → original muted-replay path
+      (REPLAY_VOLUME=0) as fallback.
 - ✅ Optional music beds for intro + outro (`intro_sound_path` /
       `outro_sound_path` in config — defaults to shared
       `assets/sounds/intro.mp3`). `music_input_args` +

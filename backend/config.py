@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 CONFIG_FILE = ROOT_DIR / "config.json"
@@ -173,23 +173,14 @@ class Config:
         return float(self._data.get("outro_sound_volume", 0.7))
 
     # ------------------------------------------------------------------
-    # Slow-mo replay music — A / B mp3 alternated across the replays
-    # spliced into the main render. Two files are enough to keep a long
-    # match's replays from getting repetitive; the alternation order is
-    # A, B, A, B, ... so a single replay still has a deterministic clip.
+    # Slow-mo replay music — single mp3 reused for every replay spliced
+    # into the main render. Missing file → main render falls back to the
+    # original muted-replay path.
     # ------------------------------------------------------------------
 
     @property
-    def replay_sound_paths(self) -> list[Path]:
-        """Resolved replay music files in alternation order. Missing
-        files are filtered out; an empty list disables replay music and
-        the main render falls back to the original muted-replay path."""
-        out: list[Path] = []
-        for key in ("replay_sound_path_a", "replay_sound_path_b"):
-            p = self._optional_asset(key)
-            if p is not None:
-                out.append(p)
-        return out
+    def replay_sound_path(self) -> Optional[Path]:
+        return self._optional_asset("replay_sound_path")
 
     @property
     def replay_sound_volume(self) -> float:

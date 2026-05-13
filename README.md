@@ -172,14 +172,14 @@ Edit `config.json`:
   bookends; set different paths to differentiate.
 - `intro_sound_volume` / `outro_sound_volume` — 0..1, default `0.7`.
   Lower if music drowns out the "VS" pulse / fade-to-black moment.
-- `replay_sound_path_a` / `replay_sound_path_b` — optional mp3s
-  alternated across the slow-mo replays spliced into the main render.
-  Each replay's clip is `-stream_loop`-looped and `-t`-capped to the
-  replay's final duration, so a short mp3 loops to fill and a long
-  mp3 gets trimmed. Defaults to `assets/sounds/slow_motion.mp3` +
-  `slow_motion2.mp3`. Missing files → muted replay fallback (the
-  original behaviour). `replay_sound_volume` (0..1, default `0.7`)
-  scales the music against the surrounding real-time slice audio.
+- `replay_sound_path` — optional mp3 used for every slow-mo replay
+  spliced into the main render. Each replay's clip is
+  `-stream_loop`-looped and `-t`-capped to the replay's final
+  duration, so a short mp3 loops to fill and a long mp3 gets trimmed.
+  Defaults to `assets/sounds/slow_motion.mp3`. Missing file → muted
+  replay fallback (the original behaviour). `replay_sound_volume`
+  (0..1, default `0.7`) scales the music against the surrounding
+  real-time slice audio.
 
 ## Project docs
 

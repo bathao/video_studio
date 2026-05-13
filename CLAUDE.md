@@ -126,9 +126,9 @@ assets/sounds/       Optional music beds, all wired through the shared
                      (short 0.05 s fade-in to preserve impact punch);
                      `intro.mp3` for the cinematic intro AND the outro
                      (0.3/0.5 s and 0.5/1.0 s fades respectively);
-                     `slow_motion.mp3` + `slow_motion2.mp3` alternated
-                     A/B across the slow-mo replays spliced into main.
-                     Any missing file → silent fallback for that slot.
+                     `slow_motion.mp3` reused for every slow-mo replay
+                     spliced into main. Any missing file → silent
+                     fallback for that slot.
 assets/backgrounds/  Also accepts an optional `outro_bg.jpg` used when
                      `_outro_stage` can't extract main's last frame
                      (or when the operator wants a fixed bg).
@@ -325,7 +325,7 @@ progress fraction stays correct as stages advance.
 | Outro card layout                    | `build_outro_card_ass` in [backend/ass/outro.py](backend/ass/outro.py); ffmpeg side in `render_outro_card` in [backend/renderer.py](backend/renderer.py) |
 | Highlight reel rendering             | `render_highlight_clip` in [backend/renderer.py](backend/renderer.py) |
 | Slow-mo replay plan / playlist       | `build_replay_plan` / `build_main_playlist` / `remap_events_with_replays` in [backend/renderer.py](backend/renderer.py) |
-| Slow-mo replay music (alternating A/B) | `replay_sound_path_a` / `replay_sound_path_b` / `replay_sound_volume` in [config.json](config.json); resolved via `config.replay_sound_paths` and consumed by `render_main_with_scoreboard` in [backend/renderer.py](backend/renderer.py) |
+| Slow-mo replay music                 | `replay_sound_path` / `replay_sound_volume` in [config.json](config.json); resolved via `config.replay_sound_path` and consumed by `render_main_with_scoreboard` in [backend/renderer.py](backend/renderer.py) |
 | Slow-mo / HIGHLIGHT / FULL MATCH badge | [backend/ass/badges.py](backend/ass/badges.py) |
 | Score logic (replay, set wins)       | [frontend/score.js](frontend/score.js) — `recomputeAllEvents`, `scorePoint` |
 | Avatar lookup rules                  | [backend/avatars.py](backend/avatars.py) |
