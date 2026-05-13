@@ -248,6 +248,28 @@ def run_ffmpeg_with_progress(
         )
 
 
+def extract_frame_at(src: Path, t_seconds: float, out_png: Path) -> None:
+    """Pull a single frame from `src` at `t_seconds` to `out_png`. Used
+    by the cinematic intro (mid-source frame for the blurred bg) and the
+    outro (last-frame freeze). `-q:v 2` is the JPEG-equivalent quality
+    setting libavutil applies to PNG output too — high enough that the
+    blurred result is indistinguishable from a lossless capture."""
+    args = [
+        config.ffmpeg, "-y",
+        "-ss", f"{max(0.0, t_seconds):.3f}",
+        "-i", str(src),
+        "-frames:v", "1",
+        "-q:v", "2",
+        str(out_png),
+    ]
+    proc = subprocess.run(args, capture_output=True, text=True, encoding="utf-8")
+    if proc.returncode != 0 or not out_png.exists():
+        raise FFmpegError(
+            f"frame extract failed for {src.name} @ {t_seconds:.2f}s",
+            stderr=proc.stderr,
+        )
+
+
 def escape_ffmpeg_filter_path(p: Path) -> str:
     """
     Escape a path for use inside an ffmpeg filtergraph value (e.g. ass=...).

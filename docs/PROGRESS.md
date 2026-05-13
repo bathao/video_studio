@@ -110,6 +110,20 @@ render started splicing a full 50% replay after every highlight.)
       `sum(highlight_dur) × (1 / 0.5)` and the scoreboard's
       `total_duration` is recomputed from the playlist's final
       timeline so libass doesn't expire mid-clip.
+- ✅ Cinematic outro card at the very end of the final cut: extract
+      the last frame of `main.mp4`, blur (`gblur=sigma=30`) and dim
+      (`eq=brightness=-0.3`) it into a static background, then libass
+      overlay the configured headline (default
+      "THANK YOU FOR WATCHING") centred with a 1 s fade-in. The last
+      1 s of the 5 s clip fades a full-frame black box in on top so
+      the video sinks to black before EOF — no xfade at the concat
+      boundary because the outro's first frame matches main's last
+      frame visually, so the cut is invisible. Audio stream is
+      `anullsrc` (silent) — concat demuxer needs matching stream
+      layout, so `-an` is the wrong tool here. Optional
+      `outro_bg_path` in config acts as a fallback / override when
+      frame extraction fails (e.g. main didn't render) or the
+      operator wants a fixed bg.
 - ✅ Final concat (concat demuxer, no re-encode)
 - ✅ NVENC h264 (configurable to hevc / av1)
 - ✅ NVDEC via `-hwaccel cuda`

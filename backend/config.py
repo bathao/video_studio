@@ -128,5 +128,29 @@ class Config:
     def intermission_sound_path(self) -> Path | None:
         return self._optional_asset("intermission_sound_path")
 
+    # ------------------------------------------------------------------
+    # Outro card — 5-second closing card appended after main.mp4. The
+    # background is the last frame of main.mp4 blurred + dimmed; the
+    # optional `outro_bg_path` is a fallback for when frame extraction
+    # fails (e.g. main was disabled) or the operator wants a fixed bg.
+    # ------------------------------------------------------------------
+
+    @property
+    def outro_enabled(self) -> bool:
+        return bool(self._data.get("outro_enabled", True))
+
+    @property
+    def outro_text(self) -> str:
+        return (self._data.get("outro_text") or "THANK YOU FOR WATCHING").strip() \
+            or "THANK YOU FOR WATCHING"
+
+    @property
+    def outro_duration_seconds(self) -> float:
+        return float(self._data.get("outro_duration_seconds", 5.0))
+
+    @property
+    def outro_bg_path(self) -> Path | None:
+        return self._optional_asset("outro_bg_path")
+
 
 config = Config()

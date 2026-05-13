@@ -34,6 +34,7 @@ from .ass import (
     build_highlight_badge_ass,
     build_intermission_card_ass,
     build_intro_ass,
+    build_outro_card_ass,
     build_scoreboard_ass,
     build_slow_motion_badge_ass,
     build_transition_ass,
@@ -48,6 +49,7 @@ from .ffmpeg_runner import (
     TARGET_AUDIO_RATE,
     aac_args,
     escape_ffmpeg_filter_path,
+    extract_frame_at,
     hwaccel_input_args,
     nvenc_args,
     probe_video,
@@ -148,6 +150,22 @@ def remap_score_event_to_trimmed(
 # atempo=0.5 audio. Picked to match what's visually readable for a table-
 # tennis rally and to align with the highlight-reel tail-slow-mo idiom.
 REPLAY_SPEED = 0.5
+
+# Volume scale applied to the replay clip's audio. atempo=0.5 leaves the
+# pitch intact but smears the rally noises (ball-hits, crowd) into a
+# muddy drone that's worse than helpful — half the volume keeps the
+# slow-mo feeling immersive without making it the loudest thing on the
+# track.
+REPLAY_VOLUME = 0.0
+
+# Linear fade window (seconds) applied to BOTH ends of the replay audio.
+# Smooths the snap between real-time main slice (full volume) and the
+# slow-mo audio (REPLAY_VOLUME) at the concat boundaries — the dip to
+# silence reads as a deliberate "wow moment" beat before/after the
+# slow-mo, instead of an audible level cut. Capped to 1/4 of the
+# replay's final duration so very short replays don't overlap the
+# two fades into each other.
+REPLAY_FADE_SECONDS = 0.3
 
 
 @dataclass(frozen=True)
@@ -414,7 +432,16 @@ def render_intermission_card(
     # type stays the focal point; the lavfi fallback is already dark
     # so we only apply the dim on the image branch.
     if bg_path is not None:
-        args += ["-loop", "1", "-t", f"{duration:.3f}", "-i", str(bg_path)]
+        # `-framerate` before `-loop 1 -i` is mandatory: image2 demuxer
+        # defaults to 25 fps, which mismatches the source-native fps used
+        # by every other stage and breaks the concat demuxer (silently
+        # drops the section's video track).
+        args += [
+            "-loop", "1",
+            "-framerate", f"{fps}",
+            "-t", f"{duration:.3f}",
+            "-i", str(bg_path),
+        ]
         bg_chain = (
             f"[0:v]scale={width}:{height},eq=brightness=-0.2,"
             f"format=yuv420p[bg]"
@@ -458,6 +485,97 @@ def render_intermission_card(
         expected_out_seconds=duration,
         on_progress=on_progress,
         log_prefix="intermission: ",
+        cancel_check=cancel_check,
+    )
+    return duration
+
+
+def render_outro_card(
+    *,
+    out_path: Path,
+    width: int,
+    height: int,
+    fps: float,
+    duration: float,
+    text: str,
+    bg_path: Optional[Path],
+    on_progress: Callable[[float, str], None],
+    cancel_check: Optional[Callable[[], bool]] = None,
+) -> float:
+    """Render the closing outro card.
+
+    Background is `bg_path` (typically the extracted last frame of
+    main.mp4, blurred and dimmed by this filter graph); when None or
+    missing, falls back to a solid dark colour from lavfi. The libass
+    overlay carries the headline + a full-frame black box that fades
+    in over the final second of the clip.
+
+    Audio is `anullsrc` (silent) — `-an` would break the concat
+    demuxer's stream-layout check since every other rendered part has
+    an audio track. Returns the clip duration.
+    """
+    ass_path = out_path.with_suffix(".outro.ass")
+    build_outro_card_ass(
+        output_path=ass_path,
+        video_w=width, video_h=height,
+        duration=duration,
+        text=text,
+    )
+
+    args: list[str] = []
+    # Input 0: background frame. Real image when available — gblur +
+    # eq turn the action shot into a static artistic backdrop. lavfi
+    # color is the no-asset fallback; already flat so no blur applied.
+    if bg_path is not None:
+        # `-framerate` before `-loop 1 -i` is mandatory: image2 demuxer
+        # defaults to 25 fps, which mismatches the source-native fps used
+        # by every other stage and breaks the concat demuxer (silently
+        # drops the section's video track — outro plays as black).
+        args += [
+            "-loop", "1",
+            "-framerate", f"{fps}",
+            "-t", f"{duration:.3f}",
+            "-i", str(bg_path),
+        ]
+        bg_chain = (
+            f"[0:v]scale={width}:{height},gblur=sigma=30,"
+            f"eq=brightness=-0.3,format=yuv420p[bg]"
+        )
+    else:
+        args += [
+            "-f", "lavfi", "-t", f"{duration:.3f}",
+            "-i", f"color=c=0x0a0c10:s={width}x{height}:r={fps}",
+        ]
+        bg_chain = f"[0:v]format=yuv420p[bg]"
+
+    # Input 1: silent audio (anullsrc) so the concat demuxer sees a
+    # matching stream layout vs main / intro / intermission.
+    args += [
+        "-f", "lavfi", "-t", f"{duration:.3f}",
+        "-i", f"anullsrc=r={TARGET_AUDIO_RATE}:cl=stereo",
+    ]
+
+    ass_arg = escape_ffmpeg_filter_path(ass_path)
+    filter_complex = (
+        f"{bg_chain};"
+        f"[bg]ass='{ass_arg}',format=yuv420p[vout]"
+    )
+
+    args += [
+        "-filter_complex", filter_complex,
+        "-map", "[vout]",
+        "-map", "1:a",
+        *nvenc_args(),
+        *aac_args(),
+        "-shortest",
+        str(out_path),
+    ]
+
+    run_ffmpeg_with_progress(
+        args,
+        expected_out_seconds=duration,
+        on_progress=on_progress,
+        log_prefix="outro: ",
         cancel_check=cancel_check,
     )
     return duration
@@ -719,8 +837,18 @@ def render_main_with_scoreboard(
                 f"scale={width}:{height},fps={fps}[vk{i}]"
             )
             if has_audio:
+                # Time-stretched replay duration in the FINAL timeline
+                # (atempo=0.5 doubles the audio length, matching the
+                # video setpts*2). Fade window is capped so back-to-back
+                # in/out don't overlap on tiny replays.
+                r_dur = entry.final_end - entry.final_start
+                fade_d = max(0.05, min(REPLAY_FADE_SECONDS, r_dur / 4.0))
+                fade_out_st = max(0.0, r_dur - fade_d)
                 a_parts.append(
                     f"[{i}:a]asetpts=PTS-STARTPTS,atempo={REPLAY_SPEED},"
+                    f"volume={REPLAY_VOLUME},"
+                    f"afade=t=in:st=0:d={fade_d:.3f},"
+                    f"afade=t=out:st={fade_out_st:.3f}:d={fade_d:.3f},"
                     f"aformat=sample_rates={TARGET_AUDIO_RATE}:channel_layouts=stereo[ak{i}]"
                 )
         else:
@@ -1238,6 +1366,63 @@ def _main_stage(ctx: RenderContext) -> None:
     ctx.completed_weight += ctx.weight_lookup["main"]
 
 
+def _outro_stage(ctx: RenderContext) -> None:
+    """Render the cinematic outro card that closes the final cut.
+
+    Only runs when the main render is part of the output AND outro is
+    enabled in config — without a main.mp4 there's no last frame to
+    extract (the configured `outro_bg_path` still acts as a fallback if
+    the operator wants an outro on intro/highlight-only renders, but
+    that's not the common path).
+
+    Failure to extract the last frame falls back to `outro_bg_path` if
+    set, else lavfi solid colour. Errors here never abort the render —
+    the rest of the cut is already on disk in `ctx.parts`.
+    """
+    plan = ctx.plan
+    if not plan.include_main:
+        return
+    if not config.outro_enabled:
+        return
+    ctx._bail_if_cancelled()
+
+    main_path = ctx.job_dir / "main.mp4"
+    bg_png = ctx.job_dir / "outro_bg.png"
+    bg_path: Optional[Path] = None
+
+    if main_path.exists():
+        try:
+            probe = probe_video(main_path)
+            main_dur = float(probe.get("duration", 0.0))
+            if main_dur > 0.1:
+                # Pull a frame just shy of EOF so we land on real
+                # content, not the trailing nothing that some encoders
+                # leave at the very last timestamp.
+                extract_frame_at(main_path, max(0.0, main_dur - 0.1), bg_png)
+                if bg_png.exists():
+                    bg_path = bg_png
+        except FFmpegError:
+            bg_path = None
+
+    # Operator-supplied fallback / override. Useful when main render
+    # failed the frame extraction OR the operator wants a fixed shot
+    # (tournament logo, sponsor card) instead of the freeze-frame.
+    if bg_path is None:
+        bg_path = config.outro_bg_path
+
+    out_path = ctx.job_dir / "outro.mp4"
+    render_outro_card(
+        out_path=out_path,
+        width=ctx.width, height=ctx.height, fps=ctx.fps,
+        duration=config.outro_duration_seconds,
+        text=config.outro_text,
+        bg_path=bg_path,
+        on_progress=lambda f, m: None,  # short clip, no progress reporting
+        cancel_check=ctx.cancel_check,
+    )
+    ctx.parts.append(out_path)
+
+
 def _finalize(ctx: RenderContext) -> None:
     """Concat all rendered parts into the final output mp4, mark the
     render done, and drop the per-job temp directory."""
@@ -1285,6 +1470,7 @@ def run_render(plan: RenderPlan) -> None:
         highlight_appended = _highlight_stage(ctx)
         _bridge_stage(ctx, highlight_appended)
         _main_stage(ctx)
+        _outro_stage(ctx)
         _finalize(ctx)
     except FFmpegCancelled:
         # User pulled the plug — flag distinctly so the UI can show

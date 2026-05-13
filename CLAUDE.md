@@ -65,6 +65,10 @@ backend/
                      and main match (when `intermission_enabled` is
                      true). Headline + tournament + players over a
                      dim bg image (optional, falls back to lavfi color).
+    outro.py         5-second closing card after main match. libass
+                     overlay over the blurred + dimmed last frame of
+                     main.mp4; fades to black in the final second.
+                     Silent audio for concat-demuxer compatibility.
     transition.py    Gold-sweep bridge — fallback when intermission is
                      disabled in config.
 
@@ -117,6 +121,10 @@ assets/backgrounds/  Optional `intermission_bg.jpg` for the intermission
                      card. Missing → renderer falls back to lavfi color.
 assets/sounds/       Optional `intermission_boom.mp3` impact sound for
                      the intermission card. Missing → silent audio.
+                     (Outro is always silent — no sound asset.)
+assets/backgrounds/  Also accepts an optional `outro_bg.jpg` used when
+                     `_outro_stage` can't extract main's last frame
+                     (or when the operator wants a fixed bg).
 videos/              Source MP4s (gitignored).
 projects/            Saved project JSON files (gitignored).
 output/              Final rendered MP4s.
@@ -151,6 +159,10 @@ run_render(plan):
                                        # replay spliced after each real-time
                                        # occurrence, with SLOW MOTION badge
                                        # → main.mp4
+  _outro_stage(ctx)                   # extract last frame of main.mp4,
+                                       # blur + dim → bg; THANK YOU card
+                                       # over it; fade-to-black tail → outro.mp4
+                                       # (skipped when main is disabled)
   _finalize(ctx)                      # concat → output/<name>.mp4
                                        # then shutil.rmtree(job_dir) on success
 ```
@@ -296,16 +308,18 @@ progress fraction stays correct as stages advance.
 | Encoder, preset, quality             | [config.json](config.json) |
 | Intro duration / avatar size / blur  | [config.json](config.json) (`intro_*` keys) |
 | Intermission on/off, text, bg, sound | [config.json](config.json) (`intermission_*` keys) |
+| Outro on/off, text, duration, bg     | [config.json](config.json) (`outro_*` keys) |
 | Scoreboard layout / colours          | [backend/ass/scoreboard.py](backend/ass/scoreboard.py) |
 | Doubles combined-name rule           | `resolve_row_names` / `_combine_doubles_name` in [backend/ass/scoreboard.py](backend/ass/scoreboard.py) + [backend/ass/common.py](backend/ass/common.py) |
 | Cinematic intro filter graph         | [backend/intro_builder.py](backend/intro_builder.py) — branches on `is_doubles` for the 4-avatar layout |
 | Cinematic intro text overlays        | `build_cinematic_intro_ass` in [backend/ass/intro.py](backend/ass/intro.py) |
 | Intermission card layout             | `build_intermission_card_ass` in [backend/ass/intermission.py](backend/ass/intermission.py); ffmpeg side in `render_intermission_card` in [backend/renderer.py](backend/renderer.py) |
+| Outro card layout                    | `build_outro_card_ass` in [backend/ass/outro.py](backend/ass/outro.py); ffmpeg side in `render_outro_card` in [backend/renderer.py](backend/renderer.py) |
 | Highlight reel rendering             | `render_highlight_clip` in [backend/renderer.py](backend/renderer.py) |
 | Slow-mo replay plan / playlist       | `build_replay_plan` / `build_main_playlist` / `remap_events_with_replays` in [backend/renderer.py](backend/renderer.py) |
 | Slow-mo / HIGHLIGHT / FULL MATCH badge | [backend/ass/badges.py](backend/ass/badges.py) |
 | Score logic (replay, set wins)       | [frontend/score.js](frontend/score.js) — `recomputeAllEvents`, `scorePoint` |
 | Avatar lookup rules                  | [backend/avatars.py](backend/avatars.py) |
-| Render-time pipeline orchestration   | `_intro_stage` / `_highlight_stage` / `_bridge_stage` / `_main_stage` / `_finalize` in [backend/renderer.py](backend/renderer.py) |
+| Render-time pipeline orchestration   | `_intro_stage` / `_highlight_stage` / `_bridge_stage` / `_main_stage` / `_outro_stage` / `_finalize` in [backend/renderer.py](backend/renderer.py) |
 | Add a new HTTP endpoint              | [backend/server.py](backend/server.py) |
 | Add new project field                | [backend/models.py](backend/models.py) `ProjectInfo`, then frontend `project.info` schema in [frontend/state.js](frontend/state.js), then UI input in [frontend/index.html](frontend/index.html) |

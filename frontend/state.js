@@ -36,7 +36,7 @@ export const project = {
   info: {
     tournament: '',
     match_type: 'single',
-    p1: 'Player 1',
+    p1: 'Nguyễn Bá Thảo',
     p2: 'Player 2',
     p3: '',
     p4: '',

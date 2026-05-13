@@ -110,7 +110,13 @@ main.mp4           ── one ffmpeg, one `-i` per kept slice AND one `-i`
                       MOTION badge burn, all NVDEC → CPU → NVENC.
                       Score events shift forward by cumulative replay
                       duration before they hit the scoreboard
-final.mp4          ── concat-demuxer of the four (no re-encode)
+outro.mp4          ── 5 s closing card: extract `main.mp4`'s last
+                      frame, gblur + dim it into a static bg, libass
+                      overlay the "THANK YOU FOR WATCHING" headline
+                      with a 1 s fade-in. Final 1 s fades a full-frame
+                      black box on top so the video sinks to black.
+                      Silent audio (anullsrc) for concat compatibility
+final.mp4          ── concat-demuxer of the five (no re-encode)
 ```
 
 All stages share the source video's resolution, fps, pixel format, sample
@@ -146,6 +152,16 @@ Edit `config.json`:
 - `intermission_sound_path` — MP3 impact sound played during the card
   (default `assets/sounds/intermission_boom.mp3`). Missing file →
   silent.
+- `outro_enabled` — `true` to append the 5 s closing card after the
+  main render (silent, ends in fade-to-black).
+- `outro_text` — big white centred headline (default
+  `"THANK YOU FOR WATCHING"`).
+- `outro_duration_seconds` — total card length; the last 1 s is the
+  fade-to-black tail (default `5.0`).
+- `outro_bg_path` — fallback / override bg image used when the last
+  frame of `main.mp4` can't be extracted (e.g. main was disabled, or
+  the operator wants a fixed shot instead). Empty / missing →
+  pipeline falls back to a solid dark colour.
 
 ## Project docs
 

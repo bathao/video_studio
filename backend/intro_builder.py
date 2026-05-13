@@ -24,41 +24,20 @@ image came from where as long as both inputs are valid image files.
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import Callable, Optional
 
 from .ass import build_cinematic_intro_ass
 from .config import config
 from .ffmpeg_runner import (
-    FFmpegError,
     TARGET_AUDIO_RATE,
     aac_args,
     escape_ffmpeg_filter_path,
+    extract_frame_at,
     nvenc_args,
     probe_video,
     run_ffmpeg_with_progress,
 )
-
-
-def _extract_bg_frame(src: Path, midpoint: float, out_png: Path) -> None:
-    """Pull a single frame from `src` at `midpoint` seconds. Used as the
-    static (looped) background for the intro — way cheaper than letting
-    the main filter graph decode and blur live video for 6 seconds."""
-    args = [
-        config.ffmpeg, "-y",
-        "-ss", f"{midpoint:.3f}",
-        "-i", str(src),
-        "-frames:v", "1",
-        "-q:v", "2",
-        str(out_png),
-    ]
-    proc = subprocess.run(args, capture_output=True, text=True, encoding="utf-8")
-    if proc.returncode != 0 or not out_png.exists():
-        raise FFmpegError(
-            "intro bg frame extract failed",
-            stderr=proc.stderr,
-        )
 
 
 def render_cinematic_intro(
@@ -107,7 +86,7 @@ def render_cinematic_intro(
 
     job_dir = out_path.parent
     bg_png = job_dir / "intro_bg.png"
-    _extract_bg_frame(src, midpoint, bg_png)
+    extract_frame_at(src, midpoint, bg_png)
 
     ass_path = out_path.with_suffix(".intro.ass")
     build_cinematic_intro_ass(

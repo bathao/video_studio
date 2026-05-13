@@ -20,6 +20,10 @@
   "intermission_duration_seconds": 3.0,
   "intermission_bg_path": "assets/backgrounds/intermission_bg.jpg",
   "intermission_sound_path": "assets/sounds/intermission_boom.mp3",
+  "outro_enabled": true,
+  "outro_text": "THANK YOU FOR WATCHING",
+  "outro_duration_seconds": 5.0,
+  "outro_bg_path": "assets/backgrounds/outro_bg.jpg",
   "host": "127.0.0.1",
   "port": 8765
 }
