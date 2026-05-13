@@ -51,6 +51,8 @@ from .ffmpeg_runner import (
     escape_ffmpeg_filter_path,
     extract_frame_at,
     hwaccel_input_args,
+    music_filter_chain,
+    music_input_args,
     nvenc_args,
     probe_video,
     run_ffmpeg_with_progress,
@@ -400,16 +402,20 @@ def render_intermission_card(
     sound_path: Optional[Path],
     on_progress: Callable[[float, str], None],
     cancel_check: Optional[Callable[[], bool]] = None,
+    sound_volume: float = 0.7,
 ) -> float:
     """Render the typography intermission card that bridges the
     highlight reel and the main match.
 
     Background is `bg_path` (looped JPG/PNG) when available, otherwise a
     solid dark colour from lavfi — keeps the renderer robust when the
-    operator hasn't dropped an asset in yet. Same fallback policy on
-    `sound_path`: a real impact mp3 plays through if present, silence
-    otherwise. Everything else (typography, fades, zoom, gold accent)
-    is libass-driven so it scales to any resolution and stays sharp.
+    operator hasn't dropped an asset in yet. `sound_path` is looped +
+    capped to `duration` via `music_input_args`, with a short 0.05 s
+    fade-in (preserves impact-stinger punch) and 0.4 s fade-out so a
+    longer music bed sinks gracefully into the main render. Missing
+    file → silent fallback. Everything else (typography, fades, zoom,
+    gold accent) is libass-driven so it scales to any resolution and
+    stays sharp.
 
     Returns the clip duration.
     """
@@ -453,27 +459,32 @@ def render_intermission_card(
         ]
         bg_chain = f"[0:v]format=yuv420p[bg]"
 
-    # Input 1: audio. Real impact sound when present, otherwise silent
-    # (anullsrc). Either way the map points at index 1, so the rest of
-    # the command stays uniform.
-    if sound_path is not None:
-        args += ["-t", f"{duration:.3f}", "-i", str(sound_path)]
-    else:
-        args += [
-            "-f", "lavfi", "-t", f"{duration:.3f}",
-            "-i", f"anullsrc=r={TARGET_AUDIO_RATE}:cl=stereo",
-        ]
+    # Input 1: audio bed (looped + capped) when present, silent anullsrc
+    # otherwise. Same index in both cases so the map below stays stable.
+    args += music_input_args(sound_path, duration)
 
     ass_arg = escape_ffmpeg_filter_path(ass_path)
-    filter_complex = (
-        f"{bg_chain};"
-        f"[bg]ass='{ass_arg}',format=yuv420p[vout]"
-    )
+    chains = [
+        bg_chain,
+        f"[bg]ass='{ass_arg}',format=yuv420p[vout]",
+    ]
+    if sound_path is not None:
+        # Short fade-in (0.05 s) keeps an impact stinger feeling punchy;
+        # the 0.4 s fade-out is long enough to make a longer music bed
+        # sink smoothly into the main render that follows.
+        chains.append(music_filter_chain(
+            input_idx=1, duration=duration,
+            volume=sound_volume, fade_in=0.05, fade_out=0.4,
+        ))
+        audio_map = "[aout]"
+    else:
+        audio_map = "1:a"
+    filter_complex = ";".join(chains)
 
     args += [
         "-filter_complex", filter_complex,
         "-map", "[vout]",
-        "-map", "1:a",
+        "-map", audio_map,
         *nvenc_args(),
         *aac_args(),
         "-shortest",
@@ -499,6 +510,8 @@ def render_outro_card(
     duration: float,
     text: str,
     bg_path: Optional[Path],
+    sound_path: Optional[Path] = None,
+    sound_volume: float = 0.7,
     on_progress: Callable[[float, str], None],
     cancel_check: Optional[Callable[[], bool]] = None,
 ) -> float:
@@ -510,7 +523,9 @@ def render_outro_card(
     overlay carries the headline + a full-frame black box that fades
     in over the final second of the clip.
 
-    Audio is `anullsrc` (silent) — `-an` would break the concat
+    Audio is the optional `sound_path` mp3 (looped + capped) with a 1 s
+    afade-out anchored to the fade-to-black tail; falls back to silent
+    anullsrc when the file is missing — `-an` would break the concat
     demuxer's stream-layout check since every other rendered part has
     an audio track. Returns the clip duration.
     """
@@ -548,23 +563,31 @@ def render_outro_card(
         ]
         bg_chain = f"[0:v]format=yuv420p[bg]"
 
-    # Input 1: silent audio (anullsrc) so the concat demuxer sees a
-    # matching stream layout vs main / intro / intermission.
-    args += [
-        "-f", "lavfi", "-t", f"{duration:.3f}",
-        "-i", f"anullsrc=r={TARGET_AUDIO_RATE}:cl=stereo",
-    ]
+    # Input 1: music bed when sound_path is set; silent anullsrc
+    # otherwise. Either way the map stays at index 1 / [aout].
+    args += music_input_args(sound_path, duration)
 
     ass_arg = escape_ffmpeg_filter_path(ass_path)
-    filter_complex = (
-        f"{bg_chain};"
-        f"[bg]ass='{ass_arg}',format=yuv420p[vout]"
-    )
+    chains = [
+        bg_chain,
+        f"[bg]ass='{ass_arg}',format=yuv420p[vout]",
+    ]
+    if sound_path is not None:
+        # Outro fade-out is 1 s so the music sinks together with the
+        # full-frame black box that fades in over the final second.
+        chains.append(music_filter_chain(
+            input_idx=1, duration=duration,
+            volume=sound_volume, fade_in=0.5, fade_out=1.0,
+        ))
+        audio_map = "[aout]"
+    else:
+        audio_map = "1:a"
+    filter_complex = ";".join(chains)
 
     args += [
         "-filter_complex", filter_complex,
         "-map", "[vout]",
-        "-map", "1:a",
+        "-map", audio_map,
         *nvenc_args(),
         *aac_args(),
         "-shortest",
@@ -787,6 +810,8 @@ def render_main_with_scoreboard(
     has_audio: bool,
     on_progress: Callable[[float, str], None],
     cancel_check: Optional[Callable[[], bool]] = None,
+    replay_sound_paths: Optional[list[Path]] = None,
+    replay_sound_volume: float = 0.7,
 ) -> float:
     """
     Render the main match: open the source once per playlist entry with
@@ -816,13 +841,40 @@ def render_main_with_scoreboard(
     n = len(playlist)
     expected_total = sum(e.final_end - e.final_start for e in playlist)
 
+    # Per-replay music inputs (alternating A / B / A / B ...). Each one
+    # is `-stream_loop -1` looped and `-t` capped so an mp3 shorter than
+    # the replay loops to fill, and a longer mp3 gets trimmed. Indexed
+    # right after the n source clip inputs. Disabled when the source
+    # has no audio track — the concat=a=1 path needs every entry to
+    # produce audio, and synthesising silence per slice just to keep
+    # one branch alive isn't worth the filter-complex noise.
+    replay_music_files: list[Path] = list(replay_sound_paths or [])
+    replay_music_idx_map: dict[int, int] = {}
+    next_input_idx = n
+    if has_audio and replay_music_files:
+        replay_seen = 0
+        for i, entry in enumerate(playlist):
+            if entry.kind != "replay":
+                continue
+            chosen = replay_music_files[replay_seen % len(replay_music_files)]
+            r_dur = entry.final_end - entry.final_start
+            args += [
+                "-stream_loop", "-1",
+                "-t", f"{r_dur:.3f}",
+                "-i", str(chosen),
+            ]
+            replay_music_idx_map[i] = next_input_idx
+            next_input_idx += 1
+            replay_seen += 1
+
     # If the source has no audio, we still need an audio stream in the
     # output (so the final concat-demuxer doesn't fail on stream mismatch).
-    # Add silent audio as input #n, BEFORE any output options.
+    # Goes AFTER the replay music inputs so indices stay valid.
     silent_idx: Optional[int] = None
     if not has_audio:
-        silent_idx = n
+        silent_idx = next_input_idx
         args += ["-f", "lavfi", "-i", f"anullsrc=r={TARGET_AUDIO_RATE}:cl=stereo"]
+        next_input_idx += 1
 
     # Build the per-entry processing chains. Replay entries stretch
     # video PTS to 2× and halve audio tempo so they play at half speed.
@@ -837,20 +889,34 @@ def render_main_with_scoreboard(
                 f"scale={width}:{height},fps={fps}[vk{i}]"
             )
             if has_audio:
-                # Time-stretched replay duration in the FINAL timeline
-                # (atempo=0.5 doubles the audio length, matching the
-                # video setpts*2). Fade window is capped so back-to-back
-                # in/out don't overlap on tiny replays.
+                # Fade window is capped so back-to-back in/out don't
+                # overlap on tiny replays.
                 r_dur = entry.final_end - entry.final_start
                 fade_d = max(0.05, min(REPLAY_FADE_SECONDS, r_dur / 4.0))
                 fade_out_st = max(0.0, r_dur - fade_d)
-                a_parts.append(
-                    f"[{i}:a]asetpts=PTS-STARTPTS,atempo={REPLAY_SPEED},"
-                    f"volume={REPLAY_VOLUME},"
-                    f"afade=t=in:st=0:d={fade_d:.3f},"
-                    f"afade=t=out:st={fade_out_st:.3f}:d={fade_d:.3f},"
-                    f"aformat=sample_rates={TARGET_AUDIO_RATE}:channel_layouts=stereo[ak{i}]"
-                )
+                if i in replay_music_idx_map:
+                    # Replay music input — already looped + capped to
+                    # r_dur via -stream_loop / -t at the input stage,
+                    # so the filter chain just needs volume + fades.
+                    music_idx = replay_music_idx_map[i]
+                    a_parts.append(
+                        f"[{music_idx}:a]"
+                        f"volume={replay_sound_volume:.2f},"
+                        f"afade=t=in:st=0:d={fade_d:.3f},"
+                        f"afade=t=out:st={fade_out_st:.3f}:d={fade_d:.3f},"
+                        f"aformat=sample_rates={TARGET_AUDIO_RATE}:channel_layouts=stereo[ak{i}]"
+                    )
+                else:
+                    # No music file configured — fall back to muted
+                    # source audio at half tempo (REPLAY_VOLUME=0). The
+                    # atempo=0.5 doubles audio length to match setpts*2.
+                    a_parts.append(
+                        f"[{i}:a]asetpts=PTS-STARTPTS,atempo={REPLAY_SPEED},"
+                        f"volume={REPLAY_VOLUME},"
+                        f"afade=t=in:st=0:d={fade_d:.3f},"
+                        f"afade=t=out:st={fade_out_st:.3f}:d={fade_d:.3f},"
+                        f"aformat=sample_rates={TARGET_AUDIO_RATE}:channel_layouts=stereo[ak{i}]"
+                    )
         else:
             v_parts.append(
                 f"[{i}:v]setpts=PTS-STARTPTS,scale={width}:{height},fps={fps}[vk{i}]"
@@ -1262,6 +1328,7 @@ def _bridge_stage(ctx: RenderContext, highlight_appended: bool) -> None:
             headline=config.intermission_text,
             bg_path=config.intermission_bg_path,
             sound_path=config.intermission_sound_path,
+            sound_volume=config.intermission_sound_volume,
             on_progress=lambda f, m: None,  # short clip, no progress reporting
             cancel_check=ctx.cancel_check,
         )
@@ -1361,6 +1428,8 @@ def _main_stage(ctx: RenderContext) -> None:
         has_audio=ctx.has_audio,
         on_progress=ctx.make_progress("main"),
         cancel_check=ctx.cancel_check,
+        replay_sound_paths=config.replay_sound_paths,
+        replay_sound_volume=config.replay_sound_volume,
     )
     ctx.parts.append(main_path)
     ctx.completed_weight += ctx.weight_lookup["main"]
@@ -1417,6 +1486,8 @@ def _outro_stage(ctx: RenderContext) -> None:
         duration=config.outro_duration_seconds,
         text=config.outro_text,
         bg_path=bg_path,
+        sound_path=config.outro_sound_path,
+        sound_volume=config.outro_sound_volume,
         on_progress=lambda f, m: None,  # short clip, no progress reporting
         cancel_check=ctx.cancel_check,
     )

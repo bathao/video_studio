@@ -1,6 +1,6 @@
 # Progress Status
 
-Last update: 2026-05-12
+Last update: 2026-05-13
 
 ## Module map
 
@@ -110,6 +110,28 @@ render started splicing a full 50% replay after every highlight.)
       `sum(highlight_dur) × (1 / 0.5)` and the scoreboard's
       `total_duration` is recomputed from the playlist's final
       timeline so libass doesn't expire mid-clip.
+- ✅ Intermission card audio upgraded to the shared
+      `music_input_args` + `music_filter_chain` pattern (looped + capped
+      + volume scale + 0.05 s fade-in / 0.4 s fade-out). Replaces the
+      old one-shot `-i sound_path` so a longer music bed sinks cleanly
+      into the main render instead of being cut hard at 3 s. New config
+      key `intermission_sound_volume` (default 0.7).
+- ✅ Slow-mo replay music: two mp3s
+      (`replay_sound_path_a` / `replay_sound_path_b`, defaults to
+      `assets/sounds/slow_motion.mp3` + `slow_motion2.mp3`) alternated
+      A/B/A/B across the spliced-in replays. Each replay gets its own
+      `-stream_loop -1 -t r_dur -i <file>` input so a short mp3 loops
+      to fill the replay and a long mp3 gets trimmed. Volume + afade
+      in/out match the surrounding slice transitions; missing files →
+      original muted-replay path (REPLAY_VOLUME=0) as fallback.
+- ✅ Optional music beds for intro + outro (`intro_sound_path` /
+      `outro_sound_path` in config — defaults to shared
+      `assets/sounds/intro.mp3`). `music_input_args` +
+      `music_filter_chain` in `ffmpeg_runner.py` loop the file, cap to
+      the clip duration, and apply `volume` + `afade` in/out. Intro
+      uses a 0.3 s in / 0.5 s out; outro uses 0.5 s in / 1.0 s out so
+      it sinks together with the fade-to-black tail. Missing file →
+      silent anullsrc fallback (matches the intermission pattern).
 - ✅ Cinematic outro card at the very end of the final cut: extract
       the last frame of `main.mp4`, blur (`gblur=sigma=30`) and dim
       (`eq=brightness=-0.3`) it into a static background, then libass

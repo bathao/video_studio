@@ -149,9 +149,12 @@ Edit `config.json`:
 - `intermission_bg_path` — JPG/PNG dimmed and used as the card background
   (default `assets/backgrounds/intermission_bg.jpg`). Missing file →
   solid dark colour fallback.
-- `intermission_sound_path` — MP3 impact sound played during the card
-  (default `assets/sounds/intermission_boom.mp3`). Missing file →
+- `intermission_sound_path` — audio bed played during the card
+  (default `assets/sounds/intermission_boom.wav`). Looped + capped to
+  the 3 s duration via `music_input_args`, with a short 0.05 s fade-in
+  (keeps an impact stinger punchy) and 0.4 s fade-out. Missing file →
   silent.
+- `intermission_sound_volume` — 0..1, default `0.7`.
 - `outro_enabled` — `true` to append the 5 s closing card after the
   main render (silent, ends in fade-to-black).
 - `outro_text` — big white centred headline (default
@@ -162,6 +165,21 @@ Edit `config.json`:
   frame of `main.mp4` can't be extracted (e.g. main was disabled, or
   the operator wants a fixed shot instead). Empty / missing →
   pipeline falls back to a solid dark colour.
+- `intro_sound_path` / `outro_sound_path` — optional mp3 music beds
+  for the intro and outro. Looped + capped at the clip duration, with
+  volume + afade in/out. Missing file → silent fallback. Default both
+  point at `assets/sounds/intro.mp3` so a single track covers both
+  bookends; set different paths to differentiate.
+- `intro_sound_volume` / `outro_sound_volume` — 0..1, default `0.7`.
+  Lower if music drowns out the "VS" pulse / fade-to-black moment.
+- `replay_sound_path_a` / `replay_sound_path_b` — optional mp3s
+  alternated across the slow-mo replays spliced into the main render.
+  Each replay's clip is `-stream_loop`-looped and `-t`-capped to the
+  replay's final duration, so a short mp3 loops to fill and a long
+  mp3 gets trimmed. Defaults to `assets/sounds/slow_motion.mp3` +
+  `slow_motion2.mp3`. Missing files → muted replay fallback (the
+  original behaviour). `replay_sound_volume` (0..1, default `0.7`)
+  scales the music against the surrounding real-time slice audio.
 
 ## Project docs
 

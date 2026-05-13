@@ -11,7 +11,9 @@ Builds a 6-second broadcast-style title card by composing in ffmpeg:
   - Text       : tournament name (top), player names (below avatars),
                  "VS" between the avatars — all rendered by libass via
                  `build_cinematic_intro_ass`.
-  - Audio      : silent (anullsrc); music mix is reserved for v2.
+  - Audio      : optional `intro_sound_path` mp3 (looped + capped) with
+                 volume + afade in/out; falls back to anullsrc when the
+                 file is missing from disk.
 
 The function takes ~2-3 s on an RTX 5060 Ti at 1080p and produces a
 clip that's frame/sample-rate compatible with the rest of the render
@@ -30,10 +32,11 @@ from typing import Callable, Optional
 from .ass import build_cinematic_intro_ass
 from .config import config
 from .ffmpeg_runner import (
-    TARGET_AUDIO_RATE,
     aac_args,
     escape_ffmpeg_filter_path,
     extract_frame_at,
+    music_filter_chain,
+    music_input_args,
     nvenc_args,
     probe_video,
     run_ffmpeg_with_progress,
@@ -78,6 +81,8 @@ def render_cinematic_intro(
         else config.intro_avatar_size_px
     )
     blur_sigma = config.intro_blur_sigma
+    sound_path = config.intro_sound_path
+    sound_volume = config.intro_sound_volume
 
     # Pull the background frame from the middle of the source so the
     # intro's blurred backdrop has the right venue / lighting flavour.
@@ -161,7 +166,7 @@ def render_cinematic_intro(
             f"W-(W*0.27-{gap_half})*(1-(1-t)*(1-t)*(1-t))\\,"
             f"W*0.73+{gap_half})"
         )
-        filter_complex = ";".join([
+        video_chains = [
             bg_chain,
             f"[1:v]{avatar_chain}[av1]",
             f"[2:v]{avatar_chain}[av2]",
@@ -172,7 +177,15 @@ def render_cinematic_intro(
             f"[s2][av3]overlay=x='{p2a_x}':y='{avatar_y}'[s3]",
             f"[s3][av4]overlay=x='{p2b_x}':y='{avatar_y}'[s4]",
             f"[s4]ass='{ass_arg}',format=yuv420p[vout]",
-        ])
+        ]
+        if sound_path is not None:
+            video_chains.append(music_filter_chain(
+                input_idx=5, duration=duration, volume=sound_volume,
+            ))
+            audio_map = "[aout]"
+        else:
+            audio_map = "5:a"
+        filter_complex = ";".join(video_chains)
         # Input order is wired to the overlay chain below: [1:v] → av1
         # ends up at p1a_x (team 1 left), [2:v] → av2 at p1b_x (team 1
         # right), [3:v] → av3 at p2a_x (team 2 left), [4:v] → av4 at
@@ -187,10 +200,9 @@ def render_cinematic_intro(
             "-loop", "1", "-t", f"{duration:.3f}", "-i", str(p3_avatar),
             "-loop", "1", "-t", f"{duration:.3f}", "-i", str(p2_avatar),
             "-loop", "1", "-t", f"{duration:.3f}", "-i", str(p4_avatar),
-            "-f", "lavfi", "-t", f"{duration:.3f}",
-            "-i", f"anullsrc=r={TARGET_AUDIO_RATE}:cl=stereo",
+            *music_input_args(sound_path, duration),
             "-filter_complex", filter_complex,
-            "-map", "[vout]", "-map", "5:a",
+            "-map", "[vout]", "-map", audio_map,
             *nvenc_args(),
             *aac_args(),
             "-shortest",
@@ -209,22 +221,29 @@ def render_cinematic_intro(
             "W-(W*0.27+w/2)*(1-(1-t)*(1-t)*(1-t))\\,"
             "W*0.73-w/2)"
         )
-        filter_complex = ";".join([
+        video_chains = [
             bg_chain,
             f"[1:v]{avatar_chain}[av1]",
             f"[2:v]{avatar_chain}[av2]",
             f"[bg][av1]overlay=x='{p1_x}':y='{avatar_y}'[s1]",
             f"[s1][av2]overlay=x='{p2_x}':y='{avatar_y}'[s2]",
             f"[s2]ass='{ass_arg}',format=yuv420p[vout]",
-        ])
+        ]
+        if sound_path is not None:
+            video_chains.append(music_filter_chain(
+                input_idx=3, duration=duration, volume=sound_volume,
+            ))
+            audio_map = "[aout]"
+        else:
+            audio_map = "3:a"
+        filter_complex = ";".join(video_chains)
         args = [
             "-loop", "1", "-t", f"{duration:.3f}", "-i", str(bg_png),
             "-loop", "1", "-t", f"{duration:.3f}", "-i", str(p1_avatar),
             "-loop", "1", "-t", f"{duration:.3f}", "-i", str(p2_avatar),
-            "-f", "lavfi", "-t", f"{duration:.3f}",
-            "-i", f"anullsrc=r={TARGET_AUDIO_RATE}:cl=stereo",
+            *music_input_args(sound_path, duration),
             "-filter_complex", filter_complex,
-            "-map", "[vout]", "-map", "3:a",
+            "-map", "[vout]", "-map", audio_map,
             *nvenc_args(),
             *aac_args(),
             "-shortest",

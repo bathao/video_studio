@@ -86,6 +86,14 @@ class Config:
     def intro_blur_sigma(self) -> int:
         return int(self._data.get("intro_blur_sigma", 30))
 
+    @property
+    def intro_sound_path(self) -> Path | None:
+        return self._optional_asset("intro_sound_path")
+
+    @property
+    def intro_sound_volume(self) -> float:
+        return float(self._data.get("intro_sound_volume", 0.7))
+
     # ------------------------------------------------------------------
     # Intermission card — typography bridge between highlight reel and
     # main match. When enabled, replaces the 0.8 s gold-sweep transition
@@ -128,6 +136,10 @@ class Config:
     def intermission_sound_path(self) -> Path | None:
         return self._optional_asset("intermission_sound_path")
 
+    @property
+    def intermission_sound_volume(self) -> float:
+        return float(self._data.get("intermission_sound_volume", 0.7))
+
     # ------------------------------------------------------------------
     # Outro card — 5-second closing card appended after main.mp4. The
     # background is the last frame of main.mp4 blurred + dimmed; the
@@ -151,6 +163,37 @@ class Config:
     @property
     def outro_bg_path(self) -> Path | None:
         return self._optional_asset("outro_bg_path")
+
+    @property
+    def outro_sound_path(self) -> Path | None:
+        return self._optional_asset("outro_sound_path")
+
+    @property
+    def outro_sound_volume(self) -> float:
+        return float(self._data.get("outro_sound_volume", 0.7))
+
+    # ------------------------------------------------------------------
+    # Slow-mo replay music — A / B mp3 alternated across the replays
+    # spliced into the main render. Two files are enough to keep a long
+    # match's replays from getting repetitive; the alternation order is
+    # A, B, A, B, ... so a single replay still has a deterministic clip.
+    # ------------------------------------------------------------------
+
+    @property
+    def replay_sound_paths(self) -> list[Path]:
+        """Resolved replay music files in alternation order. Missing
+        files are filtered out; an empty list disables replay music and
+        the main render falls back to the original muted-replay path."""
+        out: list[Path] = []
+        for key in ("replay_sound_path_a", "replay_sound_path_b"):
+            p = self._optional_asset(key)
+            if p is not None:
+                out.append(p)
+        return out
+
+    @property
+    def replay_sound_volume(self) -> float:
+        return float(self._data.get("replay_sound_volume", 0.7))
 
 
 config = Config()

@@ -78,6 +78,54 @@ def aac_args() -> list[str]:
     ]
 
 
+def music_input_args(sound_path: Optional[Path], duration: float) -> list[str]:
+    """ffmpeg input args for a fixed-duration music bed.
+
+    With `sound_path`, the file is `-stream_loop -1` (looped infinitely)
+    and `-t` capped at `duration` — works for any file length without
+    the caller knowing whether the mp3 is shorter or longer than the
+    clip. Without a path, returns a silent anullsrc of the same length
+    so concat-demuxer stream layout stays uniform.
+    """
+    if sound_path is not None:
+        return [
+            "-stream_loop", "-1",
+            "-t", f"{duration:.3f}",
+            "-i", str(sound_path),
+        ]
+    return [
+        "-f", "lavfi", "-t", f"{duration:.3f}",
+        "-i", f"anullsrc=r={TARGET_AUDIO_RATE}:cl=stereo",
+    ]
+
+
+def music_filter_chain(
+    *,
+    input_idx: int,
+    duration: float,
+    volume: float = 0.7,
+    fade_in: float = 0.3,
+    fade_out: float = 0.5,
+    output_label: str = "aout",
+) -> str:
+    """filter_complex chain that applies volume + afade in/out to an
+    audio input and labels the result. The fade-out is anchored so it
+    lands flush at `duration`.
+
+    Caller `;`-joins this with the video chain and maps `[output_label]`
+    instead of `<input_idx>:a`. Silent fallback path skips the chain and
+    maps the input directly — afade on silence is a no-op but the chain
+    just adds noise to filter_complex.
+    """
+    fade_out_start = max(0.0, duration - fade_out)
+    return (
+        f"[{input_idx}:a]volume={volume:.2f},"
+        f"afade=t=in:st=0:d={fade_in:.3f},"
+        f"afade=t=out:st={fade_out_start:.3f}:d={fade_out:.3f}"
+        f"[{output_label}]"
+    )
+
+
 def hwaccel_input_args() -> list[str]:
     """Prepend before `-i <video>` to enable NVDEC for source decoding,
     or return an empty list when CUDA hwaccel is disabled in config."""

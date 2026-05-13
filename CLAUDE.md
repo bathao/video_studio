@@ -119,9 +119,16 @@ assets/avatars/      Player photos as flat files: <Name>.{png,jpg,jpeg,webp}
                      `_default.jpg` ships as the placeholder silhouette.
 assets/backgrounds/  Optional `intermission_bg.jpg` for the intermission
                      card. Missing → renderer falls back to lavfi color.
-assets/sounds/       Optional `intermission_boom.mp3` impact sound for
-                     the intermission card. Missing → silent audio.
-                     (Outro is always silent — no sound asset.)
+assets/sounds/       Optional music beds, all wired through the shared
+                     `music_input_args` + `music_filter_chain` helpers
+                     (loop + cap + volume + afade in/out). Defaults:
+                     `intermission_boom.wav` for the intermission card
+                     (short 0.05 s fade-in to preserve impact punch);
+                     `intro.mp3` for the cinematic intro AND the outro
+                     (0.3/0.5 s and 0.5/1.0 s fades respectively);
+                     `slow_motion.mp3` + `slow_motion2.mp3` alternated
+                     A/B across the slow-mo replays spliced into main.
+                     Any missing file → silent fallback for that slot.
 assets/backgrounds/  Also accepts an optional `outro_bg.jpg` used when
                      `_outro_stage` can't extract main's last frame
                      (or when the operator wants a fixed bg).
@@ -306,9 +313,10 @@ progress fraction stays correct as stages advance.
 | You want to change…                  | File |
 |---|---|
 | Encoder, preset, quality             | [config.json](config.json) |
-| Intro duration / avatar size / blur  | [config.json](config.json) (`intro_*` keys) |
+| Intro duration / avatar size / blur / sound | [config.json](config.json) (`intro_*` keys) |
 | Intermission on/off, text, bg, sound | [config.json](config.json) (`intermission_*` keys) |
-| Outro on/off, text, duration, bg     | [config.json](config.json) (`outro_*` keys) |
+| Outro on/off, text, duration, bg, sound | [config.json](config.json) (`outro_*` keys) |
+| Music bed shared helper (loop + fade + volume) | `music_input_args` / `music_filter_chain` in [backend/ffmpeg_runner.py](backend/ffmpeg_runner.py) |
 | Scoreboard layout / colours          | [backend/ass/scoreboard.py](backend/ass/scoreboard.py) |
 | Doubles combined-name rule           | `resolve_row_names` / `_combine_doubles_name` in [backend/ass/scoreboard.py](backend/ass/scoreboard.py) + [backend/ass/common.py](backend/ass/common.py) |
 | Cinematic intro filter graph         | [backend/intro_builder.py](backend/intro_builder.py) — branches on `is_doubles` for the 4-avatar layout |
@@ -317,6 +325,7 @@ progress fraction stays correct as stages advance.
 | Outro card layout                    | `build_outro_card_ass` in [backend/ass/outro.py](backend/ass/outro.py); ffmpeg side in `render_outro_card` in [backend/renderer.py](backend/renderer.py) |
 | Highlight reel rendering             | `render_highlight_clip` in [backend/renderer.py](backend/renderer.py) |
 | Slow-mo replay plan / playlist       | `build_replay_plan` / `build_main_playlist` / `remap_events_with_replays` in [backend/renderer.py](backend/renderer.py) |
+| Slow-mo replay music (alternating A/B) | `replay_sound_path_a` / `replay_sound_path_b` / `replay_sound_volume` in [config.json](config.json); resolved via `config.replay_sound_paths` and consumed by `render_main_with_scoreboard` in [backend/renderer.py](backend/renderer.py) |
 | Slow-mo / HIGHLIGHT / FULL MATCH badge | [backend/ass/badges.py](backend/ass/badges.py) |
 | Score logic (replay, set wins)       | [frontend/score.js](frontend/score.js) — `recomputeAllEvents`, `scorePoint` |
 | Avatar lookup rules                  | [backend/avatars.py](backend/avatars.py) |
