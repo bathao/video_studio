@@ -1,7 +1,7 @@
 // Live timeline summary under the Live Score panel.
 //
 // Shows three derived totals that update on every highlight / trim
-// edit and every change to the render-stage checkboxes:
+// edit and every change to the intro-style checkboxes:
 //
 //   - Highlights total (sum of all `(end - start)` ranges).
 //   - Trimmed total (sum of all `(end - start)` ranges removed from
@@ -42,27 +42,23 @@ export function syncTimeline() {
     (sum, t) => sum + Math.max(0, t.end - t.start), 0,
   );
 
-  // Render-options gate each stage's contribution to the output.
+  // Only the intro style is user-toggleable now; main + replays +
+  // outro always run.
   const cinematic = $('opt-intro-cinematic').checked;
   const textIntro = $('opt-intro-text').checked;
-  const includeReplays = $('opt-replays').checked && hlCount > 0;
-  const includeMain = $('opt-main').checked;
+  const haveReplays = hlCount > 0;
 
   const introDur = cinematic ? INTRO_DUR_CINEMATIC
                  : textIntro ? INTRO_DUR_TEXT
                  : 0;
-  const baseMain = includeMain ? Math.max(0, (player.duration || 0) - trimTotal) : 0;
+  const baseMain = Math.max(0, (player.duration || 0) - trimTotal);
   // Each highlight gets a 50%-speed replay spliced into main, so the
   // main contribution stretches by `sum(highlight_dur) / REPLAY_SPEED`.
   // Each replay is also bracketed by a sting-in + sting-out clip.
-  const replayDur = (includeReplays && includeMain) ? hlTotal / REPLAY_SPEED : 0;
-  const stingerDur = (includeReplays && includeMain)
-    ? hlCount * (STINGER_IN_DUR + STINGER_OUT_DUR)
-    : 0;
-  // Outro tags onto main; only contributes when main is on.
-  const outroDur = includeMain ? OUTRO_DUR : 0;
+  const replayDur = haveReplays ? hlTotal / REPLAY_SPEED : 0;
+  const stingerDur = haveReplays ? hlCount * (STINGER_IN_DUR + STINGER_OUT_DUR) : 0;
 
-  const outputDur = introDur + baseMain + replayDur + stingerDur + outroDur;
+  const outputDur = introDur + baseMain + replayDur + stingerDur + OUTRO_DUR;
 
   $('tl-hl').textContent = fmt(hlTotal);
   $('tl-trim').textContent = fmt(trimTotal);
@@ -72,9 +68,9 @@ export function syncTimeline() {
 
 // Auto-refresh whenever any input that feeds the calculation changes.
 // (Highlight / trim list edits already call syncTimeline directly from
-// their sync* functions, so we only need listeners for the render
+// their sync* functions, so we only need listeners for the intro
 // checkboxes + video duration here.)
-['opt-intro-cinematic', 'opt-intro-text', 'opt-replays', 'opt-main'].forEach((id) => {
+['opt-intro-cinematic', 'opt-intro-text'].forEach((id) => {
   $(id).addEventListener('change', syncTimeline);
 });
 player.addEventListener('durationchange', syncTimeline);

@@ -4,7 +4,37 @@ Where the project actually is, version by version. Anything beyond the
 latest tag is "not decided yet" — when an operator-facing feature gets
 planned, it gets a new section here.
 
-Currently shipped: **v1.5** (auto-stinger transitions).
+Currently shipped: **v1.6** (manifest-cached stingers + pipeline lock-in).
+
+## v1.6 — Manifest cache + pipeline lock-in (2026-05-15)
+
+Polish + simplification on top of the v1.5 ship; no new operator
+feature, no scope expansion.
+
+- Stinger pair persists at fixed paths
+  (`assets/branding/stinger_{in,out}.mp4`) with a sibling
+  `stinger.manifest.json` snapshot of every input that affects pixels
+  (W/H/fps, brand colour, channel name, replay label, in/out durations,
+  logo + sound paths + mtimes). Re-renders with identical inputs are
+  cache hits at zero ffmpeg overhead. Editing the logo or sound in
+  place invalidates via mtime.
+- Pipeline locked: removed the operator-facing "Main match + scoreboard"
+  and "Slow-mo replays of highlights" checkboxes from the Render panel.
+  The pipeline always runs intro (cinematic or text) → main with
+  inline stinger-bracketed replays → outro; only the intro style is
+  user-toggleable now.
+- Dead config plumbing removed: `stinger_text` config key + builder
+  param + manifest field. `channel_name` + `stinger_replay_label`
+  already cover the on-screen text role.
+- `outro_bg_path` cleared from `config.json` (was pointing at a
+  shipped-but-missing file); the renderer's freeze-frame fallback is
+  the supported path.
+- `intro_duration_seconds` property default synced to `4.0` to match
+  `config.json` (was `6.0`, masked by the runtime read).
+- Retired `docs/CINEMATIC_INTRO_PLAN.md` (feature shipped in v1.0).
+
+Tests: 109 passing — added `test_intro_fallback.py` (doubles photo-gate)
+and `test_stinger_cache.py` (cache-hit + invalidation matrix).
 
 ## v1.5 — Branded stinger transitions (2026-05-15)
 

@@ -786,11 +786,6 @@ class RenderPlan:
     project_name: str
     include_intro: bool = True
     intro_style: str = "cinematic"   # "cinematic" | "text"
-    # Splice a 50%-speed replay of each highlight into main, right after
-    # its real-time occurrence. When false, highlights are ignored at
-    # render time (they still exist in the project for re-render later).
-    include_replays: bool = True
-    include_main: bool = True
     output_name: Optional[str] = None
     state: RenderState = field(default_factory=lambda: RenderState(job_id=uuid.uuid4().hex[:12]))
 
@@ -880,7 +875,7 @@ def _prepare_context(plan: RenderPlan) -> RenderContext:
     has_audio = probe["has_audio"]
 
     kept = kept_segments_from_trims(duration, plan.project.trim_segments)
-    if not kept and plan.include_main:
+    if not kept:
         raise FFmpegError("All content was removed by trim segments")
 
     # Remap score events from source time → trimmed-main time.
@@ -902,14 +897,13 @@ def _prepare_context(plan: RenderPlan) -> RenderContext:
     job_dir = config.temp_dir / s.job_id
     job_dir.mkdir(parents=True, exist_ok=True)
 
-    # Stage weights for the unified 0..1 progress fraction. Concat is
-    # always present; intro/main only contribute when their stages will
-    # actually run.
+    # Stage weights for the unified 0..1 progress fraction. Main +
+    # concat always run; intro only contributes when its stage will
+    # actually render.
     weights: list[tuple[str, float]] = []
     if plan.include_intro:
         weights.append(("intro", 0.05))
-    if plan.include_main:
-        weights.append(("main", 0.9))
+    weights.append(("main", 0.9))
     weights.append(("concat", 0.05))
     total = sum(w for _, w in weights)
     weight_lookup = {n: w / total for n, w in weights}
@@ -1029,11 +1023,9 @@ def _main_stage(ctx: RenderContext) -> None:
     SLOW MOTION badge pulses on top-left during each replay so the
     viewer reads the speed change instantly."""
     plan = ctx.plan
-    if not plan.include_main:
-        return
     ctx._bail_if_cancelled()
 
-    use_replays = bool(plan.include_replays and plan.project.highlights)
+    use_replays = bool(plan.project.highlights)
     replays = build_replay_plan(plan.project.highlights, ctx.kept) if use_replays else []
 
     # Stinger pair: build / fetch from cache when replays will be spliced
@@ -1154,18 +1146,12 @@ def _main_stage(ctx: RenderContext) -> None:
 def _outro_stage(ctx: RenderContext) -> None:
     """Render the cinematic outro card that closes the final cut.
 
-    Only runs when the main render is part of the output AND outro is
-    enabled in config — without a main.mp4 there's no last frame to
-    extract. The configured `outro_bg_path` acts as a fallback when
-    frame extraction fails for any reason.
-
-    Failure to extract the last frame falls back to `outro_bg_path` if
-    set, else lavfi solid colour. Errors here never abort the render —
-    the rest of the cut is already on disk in `ctx.parts`.
+    Skipped only when the operator has disabled the outro in config.
+    The configured `outro_bg_path` acts as a fallback when frame
+    extraction from main.mp4 fails for any reason; failing that, a
+    lavfi solid colour. Errors here never abort the render — the rest
+    of the cut is already on disk in `ctx.parts`.
     """
-    plan = ctx.plan
-    if not plan.include_main:
-        return
     if not config.outro_enabled:
         return
     ctx._bail_if_cancelled()
