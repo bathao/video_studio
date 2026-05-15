@@ -30,7 +30,7 @@ pydantic. ffmpeg + ffprobe live on PATH. tkinter ships with Python.
 ```
 backend/
   server.py          FastAPI endpoints (videos, projects, render jobs,
-                     avatars). One file. ~545 lines.
+                     avatars). One file. ~600 lines.
   renderer.py        Render orchestrator (RenderPlan + RenderContext +
                      stage helpers). Owns the public `run_render(plan)`.
   intro_builder.py   Cinematic intro ffmpeg filter graph (avatars +
@@ -70,6 +70,10 @@ backend/
                      overlay over the blurred + dimmed last frame of
                      main.mp4; fades to black in the final second.
                      Silent audio for concat-demuxer compatibility.
+    stinger.py       libass overlay burned onto the auto-stinger IN
+                     clip: diagonal light streak (\\move + \\frz +
+                     \\blur), channel name (Vietnamese-safe via
+                     libass shaping), gold "▶ REPLAY" label.
 
 frontend/
   index.html         Tailwind via CDN, single-page UI. Entry script
@@ -119,7 +123,7 @@ assets/avatars/      Player photos as flat files: <Name>.{png,jpg,jpeg,webp}
 assets/backgrounds/  Optional `outro_bg.jpg` used when `_outro_stage`
                      can't extract main's last frame (or when the
                      operator wants a fixed bg).
-assets/branding/     `logo.png` (operator-supplied, transparent) +
+assets/branding/     `logo.png` / `logo.jpg` (operator-supplied) +
                      auto-generated `stinger_in_{W}x{H}_{fps}.mp4` and
                      `stinger_out_*.mp4` cache files. Delete cache to
                      regenerate after changing brand_color / logo /
@@ -271,7 +275,7 @@ progress fraction stays correct as stages advance.
   to defend against this.
 
 - **The cinematic intro extracts a single frame as a PNG** before the
-  main filter graph runs. We could decode live source for 6 s but
+  main filter graph runs. We could decode live source for 4 s but
   zoompan + gblur per frame would be wasteful. Two-pass approach is
   ~10× faster.
 
@@ -301,7 +305,8 @@ progress fraction stays correct as stages advance.
 ## Don't
 
 - Don't add tests next to the modules; if you add tests put them in a
-  `tests/` directory. There are currently none.
+  `tests/` directory. ~93 tests live there; pure-logic only (segment
+  math, builder smoke, playlist + remap), no ffmpeg execution.
 
 - Don't commit videos, project JSONs, output mp4s, or temp/. They're
   in `.gitignore` already; if a `git status` shows them as new files

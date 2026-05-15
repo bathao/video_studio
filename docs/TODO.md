@@ -26,7 +26,7 @@ indicator: 🟢 quick (<1h), 🟡 medium (~half-day), 🔴 large (1+ day).
 - [ ] 🟢 Pin Python version in `pyproject.toml` (currently bare requirements.txt).
 - [x] 🟢 Add `pytest` smoke tests for `kept_segments_from_trims`,
       `remap_score_event_to_trimmed`, and `_detect_active`. Done —
-      89 tests in `tests/`, includes segment math + scoreboard event
+      93 tests in `tests/`, includes segment math + scoreboard event
       walk + main playlist + stinger bracket + event remap.
 - [ ] 🟡 Add a `--dry-run` mode to the renderer that prints the full
       ffmpeg command instead of executing.
@@ -45,3 +45,36 @@ indicator: 🟢 quick (<1h), 🟡 medium (~half-day), 🔴 large (1+ day).
       opens N inputs (one per kept segment). Investigate whether ffmpeg
       keeps all decoders open simultaneously or pools them. If many trims
       → many sessions, fall back to filter-trim path.
+
+## Post-v1.5 cleanup (from 2026-05-15 audit)
+
+Surfaced when reviewing the codebase after the auto-stinger ship. None
+are urgent — just consolidating before the next feature.
+
+- [ ] 🟢 **Drop dead `stinger_text` plumbing.** Config key
+      (`config.json:31`), property (`backend/config.py:180-181`), and
+      param threaded through `get_or_build_stinger_pair` are never
+      rendered — `channel_name` + `stinger_replay_label` replaced this
+      role. Either delete the key + param + README mention (preferred,
+      reduces config surface), or wire it into `ass/stinger.py` as a
+      third text line. README currently flags it as "legacy, unused".
+- [ ] 🟢 **Retire `docs/CINEMATIC_INTRO_PLAN.md`.** The cinematic intro
+      shipped long ago; the doc still describes a 5–8 s clip
+      "transitioning smoothly into the highlight reel" — both stale.
+      Move to `docs/archive/` (keep history) or delete.
+- [ ] 🟢 **Sync `intro_duration_seconds` defaults.** `backend/config.py:79`
+      falls back to `6.0`, `config.json:15` sets `4.0`. config.json
+      wins at runtime but a dev reading `config.py` gets confused.
+      Make the property default `4.0`.
+- [ ] 🟢 **`outro_bg_path` points at a missing file.** `config.json:23`
+      = `assets/backgrounds/outro_bg.jpg`; that directory doesn't
+      exist. `_optional_asset` returns None gracefully so the
+      `gblur(last frame of main)` fallback runs — but config implies
+      an asset that isn't shipped. Either drop the key (rely on the
+      frame-extraction fallback only) or ship a real bg jpg.
+- [ ] 🟡 **Test gaps** identified during the audit:
+      - No test covers the doubles-intro fallback (< 4 photos →
+        text intro) in `_intro_stage` (`backend/renderer.py:959-963`).
+      - No test covers `get_or_build_stinger_pair` cache-hit path
+        (re-call with same args returns existing paths without
+        re-rendering). Pure playlist + remap math is well covered.

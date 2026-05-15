@@ -1,7 +1,7 @@
 """
 Render orchestrator.
 
-Three stages, each produces an MP4 in temp/<job_id>/, then we concat them
+Stage helpers each produce an MP4 in temp/<job_id>/, then we concat them
 with the concat demuxer (no re-encode) into the final output.
 
 Stage layout:
@@ -147,7 +147,8 @@ def remap_score_event_to_trimmed(
 
 # Speed factor for slow-mo replays inserted into main. 0.5 → 2× duration,
 # atempo=0.5 audio. Picked to match what's visually readable for a table-
-# tennis rally and to align with the highlight-reel tail-slow-mo idiom.
+# tennis rally — fast enough that the replay doesn't drag, slow enough
+# to show the rally's geometry clearly.
 REPLAY_SPEED = 0.5
 
 # Volume scale applied to the replay clip's audio. atempo=0.5 leaves the
@@ -1029,10 +1030,10 @@ def _main_stage(ctx: RenderContext) -> None:
     # Stinger pair: build / fetch from cache when replays will be spliced
     # AND the operator hasn't disabled it in config. IN and OUT have
     # ASYMMETRIC durations — long readable hold on the way in, quick
-    # wipe back to live on the way out. The stinger uses a blurred
-    # frame from the SOURCE video as its background, so cache is keyed
-    # by source identity too — same source = cache hit on re-render,
-    # different source = regeneration.
+    # wipe back to live on the way out. Cache is manifest-driven: as
+    # long as brand colour / logo / channel name / sounds / spec all
+    # match the previous render, the cached mp4s are reused untouched
+    # (99 % of renders pay zero stinger overhead).
     stinger_in: Optional[Path] = None
     stinger_out: Optional[Path] = None
     stinger_in_dur = 0.0
@@ -1040,18 +1041,22 @@ def _main_stage(ctx: RenderContext) -> None:
     if replays and config.stinger_enabled:
         stinger_in_dur = config.stinger_duration_seconds
         stinger_out_dur = config.stinger_out_duration_seconds
-        # Pull a frame ~40 % into the source for the blurred background.
-        # Past the warm-up but well before the end — likely to land on
-        # an actual rally rather than empty table at either end. Failure
-        # falls through silently to the lavfi-colour fallback inside the
-        # builder; not worth aborting a render over.
-        bg_png = ctx.job_dir / "stinger_bg.png"
-        try:
-            src_dur_probe = probe_video(ctx.src).get("duration", 0.0)
-            bg_t = max(0.0, float(src_dur_probe) * 0.4)
-            extract_frame_at(ctx.src, bg_t, bg_png)
-        except FFmpegError:
-            bg_png = None  # type: ignore[assignment]
+
+        def _extract_stinger_bg() -> Optional[Path]:
+            # Pull a frame ~40 % into the source for the blurred bg.
+            # Past the warm-up but well before the end — likely to
+            # land on an actual rally rather than empty table at
+            # either end. Lazy: only invoked on cache miss. Failure
+            # falls through silently to the lavfi-colour fallback
+            # inside the builder.
+            bg_png = ctx.job_dir / "stinger_bg.png"
+            try:
+                src_dur_probe = probe_video(ctx.src).get("duration", 0.0)
+                bg_t = max(0.0, float(src_dur_probe) * 0.4)
+                extract_frame_at(ctx.src, bg_t, bg_png)
+                return bg_png if bg_png.exists() else None
+            except FFmpegError:
+                return None
 
         stinger_in, stinger_out = get_or_build_stinger_pair(
             width=ctx.width, height=ctx.height, fps=ctx.fps,
@@ -1061,8 +1066,7 @@ def _main_stage(ctx: RenderContext) -> None:
             text=config.stinger_text,
             logo_path=find_brand_logo(),
             sound_path=config.stinger_sound_path,
-            source_path=ctx.src,
-            bg_frame_path=bg_png if (bg_png is not None and bg_png.exists()) else None,
+            bg_frame_provider=_extract_stinger_bg,
             channel_name=config.channel_name,
             replay_label=config.stinger_replay_label,
         )
@@ -1144,9 +1148,8 @@ def _outro_stage(ctx: RenderContext) -> None:
 
     Only runs when the main render is part of the output AND outro is
     enabled in config — without a main.mp4 there's no last frame to
-    extract (the configured `outro_bg_path` still acts as a fallback if
-    the operator wants an outro on intro/highlight-only renders, but
-    that's not the common path).
+    extract. The configured `outro_bg_path` acts as a fallback when
+    frame extraction fails for any reason.
 
     Failure to extract the last frame falls back to `outro_bg_path` if
     set, else lavfi solid colour. Errors here never abort the render —

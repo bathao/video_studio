@@ -99,18 +99,19 @@ render started splicing a full 50% replay after every highlight.)
       (2026-05-15): no separate highlight reel section at the top, no
       intermission/transition bridge, no FULL MATCH badge — highlights
       now contribute only their inline slow-mo replays.
-- ✅ Auto-stinger transition: 1s branded wipe (brand bar + optional logo
-      + text) auto-generated once per (W, H, fps) into
-      `assets/branding/stinger_in_*.mp4`, time-reversed into
-      `stinger_out_*.mp4`. Brackets every slow-mo replay in main
-      (sting-in before, sting-out after) — gives a broadcast-style
-      framing for each replay. Cache key in filename → resolution / fps
-      change auto-regenerates. Operator deletes the 2 mp4 files to
-      regenerate after changing `brand_color` / `brand_logo_path` /
-      `stinger_text`. Falls back to brand-color-only wipe when no
-      `logo.png` available, silent audio when no `stinger_swoosh.wav`.
-      Score events shifted by `replay_dur + 2 × stinger_dur` past each
-      replay so scoreboard stays in sync.
+- ✅ Auto-stinger transition: asymmetric branded bracket around every
+      slow-mo replay in main. IN clip (default 2 s) carries the full
+      reveal — blurred source-frame bg, brand-colour wipe (alpha 0.5),
+      diagonal light streak, circular-masked logo, channel name +
+      "▶ REPLAY" label, vignette. OUT clip (default 0.6 s) is a
+      no-text variant rendered separately at the OUT duration then
+      time-reversed → quick wipe back to live action. Cached per
+      `(source × W × H × fps)` in `assets/branding/`; spec change
+      auto-regenerates. Operator deletes the 2 mp4 files to force
+      rebuild after changing `brand_color` / `brand_logo_path` /
+      `channel_name` / `stinger_text` / `stinger_replay_label`.
+      Score events shifted by `replay_dur + in_dur + out_dur` past
+      each replay so the scoreboard stays in sync.
 - ✅ Slow-mo replay music: single mp3 (`replay_sound_path`, defaults
       to `assets/sounds/slow_motion.mp3`) reused for every spliced-in
       replay. Each replay gets its own `-stream_loop -1 -t r_dur -i
@@ -192,26 +193,27 @@ render started splicing a full 50% replay after every highlight.)
 - ✅ Docs index (this folder)
 - ✅ Pytest suite for pure logic (segment math, text helpers,
       avatar lookup, scoreboard event walk, builder smoke tests, main
-      playlist + stinger bracket + event remap). 89 tests, runs in
+      playlist + stinger bracket + event remap). 93 tests, runs in
       <0.2 s. Configured in `pyproject.toml`,
       basetemp pinned to `temp/pytest/` to dodge sandbox-denied
       access on the user-temp dir.
 
 ### Code organisation
-- ✅ ASS overlay generators split from a 1208-line `ass_builder.py`
-      monolith into the `backend/ass/` package — common / scoreboard
-      / intro / badges / transition. Public re-exports in
-      `__init__.py`; every emitted .ass file is byte-identical to
-      pre-split output (verified across 8 + 11 cases).
+- ✅ ASS overlay generators live in the `backend/ass/` package —
+      `common` / `scoreboard` / `intro` / `outro` / `badges` /
+      `stinger`. Public re-exports in `__init__.py`. (Originally
+      split from a 1208-line `ass_builder.py` monolith; the v1.5
+      pipeline simplification later retired the `intermission` and
+      `transition` submodules.)
 - ✅ `build_scoreboard_ass` decomposed into `_Geometry` dataclass +
       `_AssetText` + 5 emit helpers (`_emit_live_panel`,
       `_emit_dynamic_numbers`, `_emit_recap_cards`,
       `_emit_flag_overlays`, `_emit_final_scoreboard`). Public function
-      now a 66-line dispatcher.
-- ✅ `run_render` decomposed into `RenderContext` + 7 stage helpers
-      (`_resolve_source`, `_prepare_context`, `_intro_stage`,
-      `_highlight_stage`, `_bridge_stage`, `_main_stage`, `_finalize`).
-      Public function now a 12-line dispatcher.
+      now a thin dispatcher.
+- ✅ `run_render` decomposed into `RenderContext` + 4 stage helpers
+      (`_resolve_source` + `_prepare_context` + `_intro_stage` +
+      `_main_stage` + `_outro_stage` + `_finalize`). Public function
+      is a short orchestrator.
 - ✅ NVENC / AAC / hwaccel helpers + audio rate constants centralised
       in `ffmpeg_runner.py` (was duplicated between renderer.py and
       intro_builder.py).

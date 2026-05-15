@@ -100,19 +100,21 @@ intro.mp4          ── cinematic title card (4 avatars in doubles, 2 in
                       when player photos are missing
 main.mp4           ── one ffmpeg, one `-i` per kept slice AND one `-i`
                       per slow-mo replay (replays use setpts*2 +
-                      atempo=0.5). Each replay is bracketed by a 1 s
-                      branded sting-in (before) + 1 s sting-out (after,
-                      = sting-in reversed). Concat + scoreboard.ass +
-                      SLOW MOTION badge burn, all NVDEC → CPU → NVENC.
-                      Score events shift forward by cumulative
-                      (replay + 2×stinger) duration before hitting
-                      the scoreboard
+                      atempo=0.5). Each replay is bracketed by an
+                      asymmetric branded pair: long IN clip (default
+                      2 s, full reveal with channel name + REPLAY
+                      label) BEFORE the replay, short OUT clip
+                      (default 0.6 s, no text) AFTER. Concat +
+                      scoreboard.ass + SLOW MOTION badge burn, all
+                      NVDEC → CPU → NVENC. Score events shift forward
+                      by cumulative (replay + IN + OUT) duration
+                      before hitting the scoreboard.
                       Stingers themselves come from
-                      `assets/branding/stinger_in_{W}x{H}_{fps}.mp4` —
-                      auto-generated on first render at each resolution
-                      and cached. Delete cache files to regenerate
-                      after changing `brand_color` / `logo.png` /
-                      `stinger_text` in config.
+                      `assets/branding/stinger_{in,out}_{src_key}_{W}x{H}_{fps}.mp4`
+                      — auto-generated on first render at each source
+                      × resolution × fps combo and cached. Delete cache
+                      files to regenerate after editing brand colour /
+                      logo / channel name / REPLAY label in config.
 outro.mp4          ── 5 s closing card: extract `main.mp4`'s last
                       frame, gblur + dim it into a static bg, libass
                       overlay the "THANK YOU FOR WATCHING" headline
@@ -172,29 +174,40 @@ Edit `config.json`:
   (0..1, default `0.7`) scales the music against the surrounding
   real-time slice audio.
 - `stinger_enabled` — `true` to bracket every slow-mo replay with a
-  1 s branded transition (sting-in before + sting-out after = the
-  IN played in reverse). `false` skips the brackets entirely.
-- `stinger_duration_seconds` — per-direction duration. Total bracket
-  per replay = `2 × stinger_duration_seconds`. Default `1.0`.
+  branded transition; `false` skips the brackets entirely.
+- `stinger_duration_seconds` — IN-clip duration in seconds. The IN
+  clip carries the full reveal animation + channel name + REPLAY
+  hold. Default `2.0` — increase to give viewers longer to read.
+- `stinger_out_duration_seconds` — OUT-clip duration. Always shorter
+  than IN; rendered as a separate no-text variant then time-reversed,
+  so the wipe back to live action is snappy. Default `0.6`.
 - `brand_color` — hex (`#FF5722`), `0xRRGGBB`, or named colour for
   the sliding bar + accent. Default deep orange (`#FF5722`); contrasts
   the cyan SLOW MOTION badge so they read as two distinct mode
   signals.
-- `stinger_text` — small white text shown under the logo during the
-  hold. Empty string → no text. ASCII works everywhere; Vietnamese
-  diacritics may not render until a bundled font is added.
-- `brand_logo_path` — transparent PNG centred over the brand bar.
-  Default `assets/branding/logo.png`. Missing file → brand bar + text
-  only (still looks broadcast).
+- `channel_name` — line of text below the logo (Vietnamese-safe via
+  libass shaping). Empty → no line. Only renders on IN.
+- `stinger_replay_label` — accent-gold line below the channel name,
+  default `"REPLAY"`. Renders as `▶ <label>`. Empty → no line.
+- `stinger_text` — legacy config key, currently unused in the renderer
+  (channel_name + stinger_replay_label replaced it). Kept in config
+  for backwards compatibility; safe to ignore.
+- `brand_logo_path` — image overlaid centred on the brand bar
+  (circular alpha mask + fade-in applied at render time). Accepts
+  `.png` / `.jpg` / `.jpeg` / `.webp`. Default
+  `assets/branding/logo.jpg`. Missing → brand bar + text only.
 - `stinger_sound_path` — short swoosh mp3/wav layered into the IN
   clip; the reverse comes for free in the OUT clip via `areverse`.
   Default `assets/sounds/stinger_swoosh.wav`. Missing → silent.
 
-Stinger clips are rendered ONCE per `(W, H, fps)` and cached in
-`assets/branding/stinger_{in,out}_{W}x{H}_{fps}.mp4`. Subsequent
-renders at the same spec reuse the cache with zero overhead; a 2K
-match auto-renders a separate 2K pair on first use. To swap the
-look (different colour, new logo, different text), edit the config
+Stinger clips are rendered ONCE per `(source × W × H × fps)` and
+cached in `assets/branding/stinger_{in,out}_{src_key}_{W}x{H}_{fps}.mp4`,
+where `src_key` is an 8-char hash of the source video's path (so the
+blurred-frame background tracks the actual match being recapped, not
+some other match's frame). Subsequent renders of the same match at
+the same spec reuse the cache with zero overhead; switching to a
+different source video auto-regenerates. To swap the branding
+identity (colour, logo, channel name, REPLAY label), edit the config
 keys and **delete the cached mp4s** — the next render will rebuild
 from current config.
 

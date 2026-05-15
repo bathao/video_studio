@@ -10,15 +10,30 @@ variant at the OUT duration and then time-reversing it, so the
 "wipe out + logo fade out + streak reverse" motion comes for free
 without authoring a second animation.
 
-Output is cached in
-`assets/branding/stinger_{direction}_{src_key}_{W}x{H}_{fps}.mp4`,
-keyed by source-video identity + output spec. The background of every
-clip is a heavily-blurred frame from the project's source video, so
-the cache must invalidate when the source changes — hence `src_key`
-in the filename. Within a single match, the same cache file is reused
-across re-renders.
+## Cache model
 
-Visual storyboard for the IN clip (duration = 1.5 s reference):
+Output is cached at fixed paths:
+  - `assets/branding/stinger_in.mp4`
+  - `assets/branding/stinger_out.mp4`
+  - `assets/branding/stinger.manifest.json`  (config snapshot)
+
+The manifest captures every input that affects the rendered pixels —
+brand colour, logo path + mtime, sound path + mtime, channel name,
+REPLAY label, IN/OUT durations, and the output spec (W, H, fps). On
+call, the builder compares the current snapshot against the on-disk
+manifest. Identical → cache hit (no re-render). Any diff → rebuild
+both clips + rewrite the manifest.
+
+This means: 99 % of renders (operator hasn't touched config or logo)
+pay zero stinger overhead. Editing `logo.jpg` in place triggers a
+rebuild via mtime. Switching match resolution / fps triggers a
+rebuild via the spec fields. The background blur is from whatever
+source triggered the LAST rebuild — accepted because the blur is
+heavy enough to be effectively content-agnostic.
+
+## Visual storyboard
+
+IN clip (duration = 2.0 s reference):
 
   0.00 – 0.20 s : brand-colour bar wipes in from the left (alpha 0.5,
                   so the blurred bg is still readable through it).
@@ -36,9 +51,10 @@ OUT clip (duration = 0.6 s reference, plays IN-no-text reversed):
 
 from __future__ import annotations
 
-import hashlib
+import json
+import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from .ass.stinger import build_stinger_ass
 from .config import config
@@ -46,7 +62,6 @@ from .ffmpeg_runner import (
     TARGET_AUDIO_RATE,
     aac_args,
     escape_ffmpeg_filter_path,
-    extract_frame_at,
     nvenc_args,
     probe_video,
     run_ffmpeg_with_progress,
@@ -91,16 +106,67 @@ def find_brand_logo() -> Optional[Path]:
     return None
 
 
-def _source_cache_key(src_path: Optional[Path]) -> str:
-    """Short stable identifier for the source video. The stinger's
-    background is a blurred frame from this source, so two different
-    sources must produce different cached stingers — we encode an
-    8-char MD5 of the source path into the filename. Re-renders of
-    the same match hit the cache; switching to a new source forces
-    a regeneration."""
-    if src_path is None:
-        return "nosrc"
-    return hashlib.md5(str(src_path).encode("utf-8")).hexdigest()[:8]
+def _file_mtime(p: Optional[Path]) -> Optional[float]:
+    """File mtime to 3 decimal places, or None if the path is missing
+    / unreadable. Used in the cache manifest so editing `logo.jpg`
+    in place invalidates the cache even though the path string hasn't
+    changed."""
+    if p is None:
+        return None
+    try:
+        return round(os.path.getmtime(p), 3)
+    except OSError:
+        return None
+
+
+def _build_manifest(
+    *,
+    width: int,
+    height: int,
+    fps: float,
+    brand_color: str,
+    text: str,
+    channel_name: str,
+    replay_label: str,
+    logo_path: Optional[Path],
+    sound_path: Optional[Path],
+    in_duration: float,
+    out_duration: float,
+) -> dict[str, Any]:
+    """Snapshot of every input that affects the rendered stinger
+    pixels. Two snapshots compare equal iff a cache hit is safe."""
+    return {
+        "version": 1,
+        "width": int(width),
+        "height": int(height),
+        "fps": int(round(fps)),
+        "brand_color": brand_color,
+        "stinger_text": text,
+        "channel_name": channel_name,
+        "stinger_replay_label": replay_label,
+        "brand_logo_path": str(logo_path) if logo_path is not None else None,
+        "brand_logo_mtime": _file_mtime(logo_path),
+        "stinger_sound_path": str(sound_path) if sound_path is not None else None,
+        "stinger_sound_mtime": _file_mtime(sound_path),
+        "in_duration": round(float(in_duration), 6),
+        "out_duration": round(float(out_duration), 6),
+    }
+
+
+def _read_manifest(path: Path) -> Optional[dict[str, Any]]:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _write_manifest(path: Path, data: dict[str, Any]) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except OSError:
+        pass  # best-effort; next render will rebuild from scratch
 
 
 def get_or_build_stinger_pair(
@@ -114,8 +180,7 @@ def get_or_build_stinger_pair(
     text: str,
     logo_path: Optional[Path],
     sound_path: Optional[Path],
-    source_path: Optional[Path] = None,
-    bg_frame_path: Optional[Path] = None,
+    bg_frame_provider: Optional[Callable[[], Optional[Path]]] = None,
     channel_name: str = "",
     replay_label: str = "REPLAY",
 ) -> tuple[Path, Path]:
@@ -126,32 +191,45 @@ def get_or_build_stinger_pair(
     text. This makes the bracket asymmetric: long readable hold on the
     way IN, quick wipe-out on the way back to live action.
 
-    Implementation: render IN with the full text overlay at
-    `in_duration`. For OUT, render a NO-TEXT forward variant at
-    `out_duration`, then time-reverse it — gives the bar-wipe-out +
-    logo-fade-out + streak motion in reverse for free.
+    Caching is manifest-driven (`stinger.manifest.json` next to the
+    cached mp4s). When the manifest snapshot matches current inputs,
+    the existing mp4 files are returned untouched — 99 % of renders
+    pay zero stinger overhead. Editing the logo / sound in place
+    triggers a rebuild via mtime tracking.
 
-    Cache files in `assets/branding/`, keyed by source identity + spec.
-    Both files are NVENC h264 + AAC 48k stereo + yuv420p, concat-demuxer
-    compatible. To force regen after config / logo changes, delete the
-    cached mp4s.
+    `bg_frame_provider` is a callable returning a PNG path to use as
+    the blurred background. Invoked LAZILY — only on cache miss —
+    so a cache-hit render skips frame extraction entirely.
     """
     branding_dir = config.assets_dir / "branding"
     branding_dir.mkdir(parents=True, exist_ok=True)
 
-    src_key = _source_cache_key(source_path)
-    fps_int = int(round(fps))
-    in_path = branding_dir / f"stinger_in_{src_key}_{width}x{height}_{fps_int}.mp4"
-    out_path = branding_dir / f"stinger_out_{src_key}_{width}x{height}_{fps_int}.mp4"
-
-    if in_path.exists() and out_path.exists():
-        return in_path, out_path
+    in_path = branding_dir / "stinger_in.mp4"
+    out_path = branding_dir / "stinger_out.mp4"
+    manifest_path = branding_dir / "stinger.manifest.json"
 
     # If caller didn't supply a logo (config path missing or pointing
     # at a non-existent file), auto-scan assets/branding/ for any image
     # the operator dropped in. Keeps the "drop a photo, hit Render"
     # flow working without forcing the operator to edit config.json.
     resolved_logo = logo_path if logo_path is not None else find_brand_logo()
+
+    current_manifest = _build_manifest(
+        width=width, height=height, fps=fps,
+        brand_color=brand_color, text=text,
+        channel_name=channel_name, replay_label=replay_label,
+        logo_path=resolved_logo, sound_path=sound_path,
+        in_duration=in_duration, out_duration=out_duration,
+    )
+
+    if in_path.exists() and out_path.exists():
+        existing = _read_manifest(manifest_path)
+        if existing == current_manifest:
+            return in_path, out_path  # cache hit
+
+    # Cache miss: extract the blurred-bg frame from the current source
+    # (lazy — only paid on miss) and rebuild both clips.
+    bg_frame_path = bg_frame_provider() if bg_frame_provider is not None else None
 
     # --- IN: full reveal animation with channel + REPLAY text ---
     _render_stinger_forward(
@@ -170,7 +248,7 @@ def get_or_build_stinger_pair(
     # The reversed clip will visually be: brief hold → logo fade out →
     # streak sweeps the OTHER direction → brand bar wipes off right.
     # Faster than IN and never shows the channel/REPLAY text.
-    out_fwd_temp = branding_dir / f"_stinger_out_tmp_{src_key}_{width}x{height}_{fps_int}.mp4"
+    out_fwd_temp = branding_dir / "_stinger_out_tmp.mp4"
     _render_stinger_forward(
         out_path=out_fwd_temp,
         width=width, height=height, fps=fps,
@@ -190,6 +268,8 @@ def get_or_build_stinger_pair(
             leftover.unlink()
         except OSError:
             pass  # leftover from a prior crash, will be overwritten next time
+
+    _write_manifest(manifest_path, current_manifest)
     return in_path, out_path
 
 

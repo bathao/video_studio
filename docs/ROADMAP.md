@@ -1,111 +1,130 @@
-# Production Roadmap
+# Release History
 
-This document plans the path from the current MVP toward a tool a
-content creator could use to publish broadcast-quality table-tennis
-recaps without external editing software.
+Where the project actually is, version by version. Anything beyond the
+latest tag is "not decided yet" — when an operator-facing feature gets
+planned, it gets a new section here.
 
-## Current state (v0.1 — MVP)
+Currently shipped: **v1.5** (auto-stinger transitions).
 
-A single operator on Windows + RTX 5060 Ti can:
+## v1.5 — Branded stinger transitions (2026-05-15)
 
-1. Drop a tripod recording into `videos/`.
-2. Watch the match, scoring with `A` / `D` and tagging highlights with `H`.
-3. Hit **Render** and get back an MP4 with intro + main match (with
-    burned-in scoreboard and inline slow-mo replays of every highlight)
-    + outro card.
+Each slow-mo replay in main is bracketed by a branded sting clip
+([backend/stinger_builder.py](../backend/stinger_builder.py),
+[backend/ass/stinger.py](../backend/ass/stinger.py)).
 
-This works end-to-end and has been validated on a synthetic 1080p sample
-in 1.74 s (20 s input). Real 2K / multi-GB validation is the next gate.
+- IN (default 2 s) — blurred source-frame background + brand-colour
+   wipe + diagonal light streak + circular logo + REPLAY label.
+- OUT (default 0.6 s) — same visual reversed, no text. Quick wipe
+   back to live action.
+- Cached per `(source × W × H × fps)` in `assets/branding/`;
+   regenerates automatically when any spec changes, or when the
+   operator deletes the cached mp4s after editing branding config.
+- Pipeline simplified at the same time: removed the upfront highlight
+   reel, the intermission/transition bridge, and the FULL MATCH badge.
+   Output is now strictly intro → main (with inline slow-mo replays
+   bracketed by stingers) → outro.
 
-## v0.2 — Production-ready single match (target: +1 week)
+Config: `brand_color`, `brand_logo_path`, `stinger_text`,
+`channel_name`, `stinger_replay_label`, `stinger_duration_seconds`,
+`stinger_out_duration_seconds`, `stinger_sound_path`.
 
-Goal: comfortable for daily filming of regional tournaments.
+Tests: 93 passing.
 
-- Validate the pipeline on the user's actual 15 GB 2K source.
-- Cancel renders (done) + resume from last completed stage.
-- Auto-cleanup of `temp/` (done).
-- Live scoreboard preview overlaid on the `<video>` element (done — JASSUB
-   libass-WASM auto-attaches once the source video reports metadata).
-- Timeline markers for highlights and trims on the seek bar.
-- Bundled font + bundled fonts directory so `drawtext` and `ass` filters
-   never fail because the system font lookup is misconfigured.
+## v1.4 — Audio beds (2026-05-13)
 
-Exit criteria: the user can edit a 90-minute 2K match in <30 minutes of
-operator time and render it in <30 minutes of wall-clock GPU time.
+Optional music tracks wired through a shared `music_input_args` +
+`music_filter_chain` helper pair in
+[backend/ffmpeg_runner.py](../backend/ffmpeg_runner.py): looped, capped
+to clip duration, volume scaled, with afade in/out.
 
-## v0.3 — Match awareness (target: +2 weeks)
+- `intro_sound_path` + `outro_sound_path` (defaults
+   `assets/sounds/intro.mp3`, different fade windows so the outro
+   sinks into the fade-to-black tail).
+- `replay_sound_path` (default `assets/sounds/slow_motion.mp3`) reused
+   for every slow-mo replay spliced into main.
+- Intermission audio (still part of the pipeline at this point)
+   upgraded from one-shot `-i` to the shared loop+fade pattern.
 
-Goal: the tool understands a *match*, not just a sequence of points.
+## v1.3 — Cinematic outro card (2026-05-12)
 
-- Best-of-N config (3 / 5 / 7 sets) with auto match-end detection.
-- Serve tracking (alternates every 2 points; every 1 in deuce / 10–10).
-- Deuce / match-point overlays on the scoreboard.
-- Per-set summary card inserted between sets in the main render.
-- Score events reflect the *transition* (who scored), not just the
-   absolute counts.
+Closing card appended after main.mp4:
 
-## v0.4 — Broadcast polish (target: +1 month)
+- Extracts the last frame of main.mp4, applies `gblur=sigma=30` +
+   `eq=brightness=-0.3` → static backdrop.
+- libass overlay: configurable headline (default "THANK YOU FOR
+   WATCHING"), centred, 1 s fade-in.
+- Final 1 s fades a full-frame black box on top so the video sinks to
+   black before EOF — no xfade boundary because the first frame of
+   outro matches the last frame of main, hiding the cut.
+- Silent audio (`anullsrc`) so the concat-demuxer's stream layout
+   check passes.
 
-Goal: output looks like an amateur broadcast feed, not a screen recording.
+Config: `outro_enabled`, `outro_text`, `outro_duration_seconds`,
+`outro_bg_path`.
 
-- Country / club flag column in the scoreboard (PNGs in `assets/flags/`).
-- Tournament logo on intro + bottom-corner watermark on main.
-- Theme presets for the scoreboard (palette per tournament).
-- Animated transitions: fade between sets, slide-in for the scoreboard
-   panel, "POINT WON" flash on score change.
-- ~~Branded sting framing each slow-mo replay (`brand_color` + logo +
-   swoosh).~~ ✅ shipped 2026-05-15 as the auto-stinger generator —
-   `backend/stinger_builder.py`.
-- ~~Optional intro music file in `assets/intro.mp3`.~~ ✅ shipped — the
-   `music_input_args` / `music_filter_chain` helpers in
-   `ffmpeg_runner.py` wire mp3 beds into intro / outro / slow-mo replay
-   with shared loop + cap + fade.
-- Optional commentary track import (mix in user-supplied audio file).
+## v1.2 — Live scoreboard preview + cancellable renders (2026-05-08)
 
-## v0.5 — Multi-clip + asset library (target: +2 months)
+- **Live scoreboard preview** — JASSUB (libass-WASM) attaches a canvas
+   to the `<video>` element as soon as the source reports
+   `loadedmetadata`. Browser overlay uses the SAME `.ass` text the
+   render pipeline burns in (fetched via `POST /api/preview/scoreboard.ass`),
+   so what you see while editing is byte-identical to what the render
+   produces.
+- **Cancellable renders** — `run_ffmpeg_with_progress` reads a
+   `cancel_check` predicate per progress line and `proc.terminate()`s
+   the child; `FFmpegCancelled` propagates up to `run_render` which
+   marks the job `cancelled` (distinct from `error`). UI exposes a
+   Cancel button while a render is in flight.
 
-Goal: support a tournament day with multiple matches.
+## v1.1 — Layout overhaul (2026-04-26)
 
-- Project list becomes a tournament list: each tournament has many
-   matches.
-- Player roster stored once at the tournament level; auto-fill names.
-- Cross-match highlight compilation (top 10 rallies of the day).
-- Output naming convention: `<tournament>/<round>_<p1>_vs_<p2>.mp4`.
+Operator-facing UI rework — wider video panel, panels relaid out
+around it so scoring + highlight marking can happen while watching at
+a larger size.
 
-## v1.0 — Standalone distributable
+## v1.0 — First release in regular use (2026-04-20)
 
-Goal: somebody other than the original author can use this.
+End-to-end working tool. Single operator on Windows + RTX 5060 Ti can
+drop a tripod recording in, watch the match with `A`/`D` scoring and
+`H` highlight marking, and render a recap MP4 with intro, slow-mo
+highlight reel, transition bridge, main match with burned-in
+scoreboard, and final-score card.
 
-- Bundled FFmpeg + standalone Python via PyInstaller / pyoxidizer.
-- Single `.exe` that opens the local web app on launch.
-- Settings UI (replaces hand-editing `config.json`).
-- Auto-update channel.
-- First-run wizard: pick GPU, pick output folder, pick fonts.
-- Localised UI (Vietnamese / English toggle).
+The "highlight reel + transition + FULL MATCH badge" sequence was the
+default pipeline through v1.4 — see v1.5 above for the simplification.
 
-## Stretch / research
+## Pre-1.0 milestones
 
-These are ideas worth exploring once the core flow is stable. Not
-committed.
+Early commits before tagging discipline. Notable ones:
 
-- **Auto-rally detection.** Train a small audio classifier on the
-   distinctive paddle / ball impact pattern to suggest highlight cuts
-   automatically. Operator just confirms.
-- **Auto-score from video.** OCR a real-world physical scoreboard if one
-   is in frame. Reduces operator load to "watch and confirm".
-- **Multi-camera composition.** Two angles + automatic cuts based on
-   ball-side detection.
-- **Live streaming output.** RTMP push of the rendered feed to YouTube /
-   Facebook with the scoreboard burned in real-time.
-- **Cloud render fallback.** If the local GPU is busy, queue jobs to a
-   remote NVENC machine.
+- Initial MVP with FastAPI backend + browser UI + scoreboard.
+- Scoreboard redesigned to broadcast style (gold accents, set-tint
+   columns, GP/MP/DEUCE flag).
+- Intro ported from `drawtext` to libass for Vietnamese diacritics.
+- Action-based scoring (`who: 1 | 2` per event; cache re-derived on
+   every change).
+- BO3 / 5 / 7 support with match-point awareness.
+- Cinematic avatar intro (circular-masked player photos + Ken-Burns
+   blur background) replacing the text-only title card.
+- Doubles support (P3 + P4 inputs; combined-name rule
+   `resolve_row_names`).
+- Inline 50%-speed slow-mo replay of each highlight spliced into
+   main.
+- ASS-builder package split (`backend/ass/`) + frontend split into ES6
+   modules (`frontend/*.js`).
+- pytest suite added (currently 93 tests across 6 files).
 
 ## Non-goals (deliberately out of scope)
 
-- Multi-user / multi-tenant editing. This is a single-operator tool.
-- General-purpose video editor. We optimise for one workflow:
+- Multi-user / multi-tenant editing — single-operator tool by design.
+- General-purpose video editor — optimised for one workflow:
    table-tennis match recap.
-- Mobile app. Browser UI is enough; the heavy lifting is on the
+- Mobile app — browser UI is enough; the heavy lifting is on the
    operator's desktop GPU.
-- Cloud upload of source video. Files stay local; uploads are the user's
-   choice via the OS share sheet.
+- Cloud upload of source video — files stay local; uploads are the
+   user's choice via the OS share sheet.
+
+## What's next
+
+Nothing planned yet. When a new feature is decided, it gets a new
+section above with a target date or "shipped" stamp.
