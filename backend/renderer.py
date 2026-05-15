@@ -6,13 +6,14 @@ with the concat demuxer (no re-encode) into the final output.
 
 Stage layout:
 
-  intro.mp4       — 3 second title card built with lavfi color + drawtext
-  highlight.mp4   — concat of all highlight clips at normal speed
+  intro.mp4       — cinematic / text title card
   main.mp4        — source video minus trim_segments, with the scoreboard
-                    burned in via libass. Every highlight also gets a
-                    50%-speed replay spliced in right after its real-time
-                    occurrence in main, with a pulsing SLOW MOTION badge
-                    on the top-left for the duration of each replay.
+                    burned in via libass. Every highlight gets a 50%-speed
+                    replay spliced in right after its real-time occurrence,
+                    with a pulsing SLOW MOTION badge on the top-left for
+                    the duration of each replay.
+  outro.mp4       — closing card over a blurred freeze-frame of main's last
+                    frame, fading to black at the tail.
 
 All produced files share the same resolution, fps, pixel format, audio
 sample rate, channel layout, and codec, so the concat demuxer can stitch
@@ -30,14 +31,10 @@ from typing import Callable, Optional
 
 from .ass import (
     ScoreFrame,
-    build_full_match_badge_ass,
-    build_highlight_badge_ass,
-    build_intermission_card_ass,
     build_intro_ass,
     build_outro_card_ass,
     build_scoreboard_ass,
     build_slow_motion_badge_ass,
-    build_transition_ass,
 )
 from .ass.scoreboard import resolve_row_names
 from .avatars import find_avatar_or_default
@@ -45,7 +42,6 @@ from .config import config
 from .ffmpeg_runner import (
     FFmpegCancelled,
     FFmpegError,
-    TARGET_AUDIO_CHANNELS,
     TARGET_AUDIO_RATE,
     aac_args,
     escape_ffmpeg_filter_path,
@@ -59,6 +55,7 @@ from .ffmpeg_runner import (
 )
 from .intro_builder import render_cinematic_intro
 from .models import Highlight, ProjectData, TrimSegment
+from .stinger_builder import find_brand_logo, get_or_build_stinger_pair
 
 @dataclass
 class RenderState:
@@ -219,11 +216,18 @@ def build_replay_plan(
 def remap_events_with_replays(
     events: list[ScoreFrame],
     replays: list[ReplayInsert],
+    *,
+    stinger_total_duration: float = 0.0,
 ) -> list[ScoreFrame]:
-    """Shift each score event by the cumulative replay duration of
-    replays that occur strictly before the event. Events that fire AT
-    a replay's insert point stay put so the post-highlight score is
-    visible during the replay too."""
+    """Shift each score event by the cumulative replay (+ optional
+    stinger bracket) duration of replays that occur strictly before
+    the event. Events that fire AT a replay's insert point stay put
+    so the post-highlight score is visible during the replay too.
+
+    `stinger_total_duration` is `in_duration + out_duration` (the
+    asymmetric bracket: long IN before, short OUT after). When > 0
+    each replay adds this on top of `replay_duration` to the timeline;
+    subsequent events shift by the combined amount."""
     if not replays:
         return events
     out: list[ScoreFrame] = []
@@ -231,7 +235,7 @@ def remap_events_with_replays(
         shift = 0.0
         for r in replays:
             if r.insert_at_main < ev.timestamp:
-                shift += r.replay_duration
+                shift += r.replay_duration + stinger_total_duration
             else:
                 break
         out.append(ScoreFrame(
@@ -244,34 +248,96 @@ def remap_events_with_replays(
 
 @dataclass(frozen=True)
 class _PlaylistEntry:
-    """One ffmpeg input slot for the main render. `kind` discriminates
-    between a normal-speed source slice and a slow-mo replay (which
-    needs setpts*2 + atempo=0.5). `final_start` / `final_end` are the
-    entry's position in the final main timeline — used to time the
-    SLOW MOTION badge during replay entries."""
-    kind: str   # "slice" | "replay"
+    """One ffmpeg input slot for the main render.
+
+    `kind` discriminates:
+      - "slice"      : a normal-speed slice of the source video
+      - "replay"     : a slow-mo replay (needs setpts*2 + atempo=0.5)
+      - "stinger_in" : pre-rendered branded transition before a replay
+      - "stinger_out": pre-rendered branded transition after a replay
+                       (same content as stinger_in, played reversed)
+
+    For "slice" / "replay" the source is the main project video and we
+    use input-side `-ss src_start -t (src_end-src_start) -i <src>`. For
+    stinger entries, `src_path` points to the cached stinger mp4 and the
+    whole file is consumed (no -ss/-t needed).
+
+    `final_start` / `final_end` are the entry's position in the final
+    main timeline — used to time the SLOW MOTION badge during replay
+    entries and to remap score events past every entry's contribution.
+    """
+    kind: str
     src_start: float
     src_end: float
     final_start: float
     final_end: float
+    src_path: Optional[Path] = None   # only set for stinger entries
 
 
 def build_main_playlist(
     kept: list[tuple[float, float]],
     replays: list[ReplayInsert],
+    *,
+    stinger_in_path: Optional[Path] = None,
+    stinger_out_path: Optional[Path] = None,
+    stinger_in_duration: float = 0.0,
+    stinger_out_duration: float = 0.0,
 ) -> list[_PlaylistEntry]:
     """Walk the kept segments and splice each replay in at its insert
     point. Kept segments that contain insert points get split into
-    sub-slices; replays drop in between. Returns a flat chronological
-    list ready to map to ffmpeg inputs.
+    sub-slices; replays drop in between. When stinger paths are supplied
+    each replay is bracketed with a sting-in (before) and sting-out
+    (after). IN and OUT have INDEPENDENT durations — the IN clip is
+    the long readable hold, OUT is the quick wipe-out back to live.
 
     When a replay's insert point lands exactly at a kept-segment
     boundary, the splice falls between two existing slices — no extra
-    split is generated."""
+    split is generated.
+
+    Stinger entries always have `src_path` set; slice / replay entries
+    leave it None so the caller knows to use the main source with
+    input-side `-ss` / `-t`.
+    """
+    has_stinger = (
+        stinger_in_path is not None
+        and stinger_out_path is not None
+        and stinger_in_duration > 0.0
+        and stinger_out_duration > 0.0
+    )
+
     entries: list[_PlaylistEntry] = []
     accumulated_main = 0.0          # trimmed-main offset at start of current kept
-    accumulated_final = 0.0         # final-timeline cursor (incl. replay durations)
+    accumulated_final = 0.0         # final-timeline cursor (incl. replay + sting)
     replay_idx = 0
+
+    def _append_replay_with_stingers(r: ReplayInsert) -> None:
+        nonlocal accumulated_final
+        if has_stinger:
+            entries.append(_PlaylistEntry(
+                kind="stinger_in",
+                src_start=0.0, src_end=stinger_in_duration,
+                final_start=accumulated_final,
+                final_end=accumulated_final + stinger_in_duration,
+                src_path=stinger_in_path,
+            ))
+            accumulated_final += stinger_in_duration
+        r_len = r.replay_duration
+        entries.append(_PlaylistEntry(
+            kind="replay",
+            src_start=r.src_start, src_end=r.src_end,
+            final_start=accumulated_final,
+            final_end=accumulated_final + r_len,
+        ))
+        accumulated_final += r_len
+        if has_stinger:
+            entries.append(_PlaylistEntry(
+                kind="stinger_out",
+                src_start=0.0, src_end=stinger_out_duration,
+                final_start=accumulated_final,
+                final_end=accumulated_final + stinger_out_duration,
+                src_path=stinger_out_path,
+            ))
+            accumulated_final += stinger_out_duration
 
     for a, b in kept:
         seg_len = b - a
@@ -295,15 +361,7 @@ def build_main_playlist(
                     final_end=accumulated_final + slice_len,
                 ))
                 accumulated_final += slice_len
-            # Replay
-            r_len = r.replay_duration
-            entries.append(_PlaylistEntry(
-                kind="replay",
-                src_start=r.src_start, src_end=r.src_end,
-                final_start=accumulated_final,
-                final_end=accumulated_final + r_len,
-            ))
-            accumulated_final += r_len
+            _append_replay_with_stingers(r)
             current_src = split_src
             replay_idx += 1
 
@@ -323,182 +381,13 @@ def build_main_playlist(
     # Any replays whose insert point lands past every kept segment land
     # at the very end (insert_at_main was snapped to past-end by remap).
     while replay_idx < len(replays):
-        r = replays[replay_idx]
-        r_len = r.replay_duration
-        entries.append(_PlaylistEntry(
-            kind="replay",
-            src_start=r.src_start, src_end=r.src_end,
-            final_start=accumulated_final,
-            final_end=accumulated_final + r_len,
-        ))
-        accumulated_final += r_len
+        _append_replay_with_stingers(replays[replay_idx])
         replay_idx += 1
 
     return entries
 
 
 # ---------- stages ----------------------------------------------------------
-
-
-def render_transition(
-    *,
-    out_path: Path,
-    width: int,
-    height: int,
-    fps: float,
-    on_progress: Callable[[float, str], None],
-    cancel_check: Optional[Callable[[], bool]] = None,
-) -> float:
-    """
-    Render a 0.8 s bridge clip with a gold sweep line, used between
-    the highlight reel and the main match so the boundary doesn't feel
-    like a hard cut. Returns the clip duration.
-    """
-    duration = 0.8
-
-    ass_path = out_path.with_suffix(".transition.ass")
-    build_transition_ass(
-        output_path=ass_path,
-        video_w=width,
-        video_h=height,
-        duration=duration,
-    )
-
-    ass_arg = escape_ffmpeg_filter_path(ass_path)
-    args = [
-        "-f", "lavfi", "-i", f"color=c=0x101418:s={width}x{height}:r={fps}:d={duration}",
-        "-f", "lavfi", "-i", f"anullsrc=r={TARGET_AUDIO_RATE}:cl=stereo",
-        "-vf", f"ass='{ass_arg}',format=yuv420p",
-        "-t", f"{duration}",
-        *nvenc_args(),
-        *aac_args(),
-        "-shortest",
-        str(out_path),
-    ]
-    run_ffmpeg_with_progress(
-        args,
-        expected_out_seconds=duration,
-        on_progress=on_progress,
-        log_prefix="transition: ",
-        cancel_check=cancel_check,
-    )
-    return duration
-
-
-def render_intermission_card(
-    *,
-    out_path: Path,
-    width: int,
-    height: int,
-    fps: float,
-    duration: float,
-    tournament: str,
-    p1_label: str,
-    p2_label: str,
-    p1_team: str,
-    p2_team: str,
-    headline: str,
-    bg_path: Optional[Path],
-    sound_path: Optional[Path],
-    on_progress: Callable[[float, str], None],
-    cancel_check: Optional[Callable[[], bool]] = None,
-    sound_volume: float = 0.7,
-) -> float:
-    """Render the typography intermission card that bridges the
-    highlight reel and the main match.
-
-    Background is `bg_path` (looped JPG/PNG) when available, otherwise a
-    solid dark colour from lavfi — keeps the renderer robust when the
-    operator hasn't dropped an asset in yet. `sound_path` is looped +
-    capped to `duration` via `music_input_args`, with a short 0.05 s
-    fade-in (preserves impact-stinger punch) and 0.4 s fade-out so a
-    longer music bed sinks gracefully into the main render. Missing
-    file → silent fallback. Everything else (typography, fades, zoom,
-    gold accent) is libass-driven so it scales to any resolution and
-    stays sharp.
-
-    Returns the clip duration.
-    """
-    ass_path = out_path.with_suffix(".intermission.ass")
-    build_intermission_card_ass(
-        output_path=ass_path,
-        video_w=width, video_h=height,
-        duration=duration,
-        headline=headline,
-        tournament=tournament,
-        p1_label=p1_label,
-        p2_label=p2_label,
-        p1_team=p1_team,
-        p2_team=p2_team,
-    )
-
-    args: list[str] = []
-    # Input 0: background. Looped image when available; lavfi colour
-    # otherwise. eq=brightness=-0.2 dims a real photo so the centre
-    # type stays the focal point; the lavfi fallback is already dark
-    # so we only apply the dim on the image branch.
-    if bg_path is not None:
-        # `-framerate` before `-loop 1 -i` is mandatory: image2 demuxer
-        # defaults to 25 fps, which mismatches the source-native fps used
-        # by every other stage and breaks the concat demuxer (silently
-        # drops the section's video track).
-        args += [
-            "-loop", "1",
-            "-framerate", f"{fps}",
-            "-t", f"{duration:.3f}",
-            "-i", str(bg_path),
-        ]
-        bg_chain = (
-            f"[0:v]scale={width}:{height},eq=brightness=-0.2,"
-            f"format=yuv420p[bg]"
-        )
-    else:
-        args += [
-            "-f", "lavfi", "-t", f"{duration:.3f}",
-            "-i", f"color=c=0x101418:s={width}x{height}:r={fps}",
-        ]
-        bg_chain = f"[0:v]format=yuv420p[bg]"
-
-    # Input 1: audio bed (looped + capped) when present, silent anullsrc
-    # otherwise. Same index in both cases so the map below stays stable.
-    args += music_input_args(sound_path, duration)
-
-    ass_arg = escape_ffmpeg_filter_path(ass_path)
-    chains = [
-        bg_chain,
-        f"[bg]ass='{ass_arg}',format=yuv420p[vout]",
-    ]
-    if sound_path is not None:
-        # Short fade-in (0.05 s) keeps an impact stinger feeling punchy;
-        # the 0.4 s fade-out is long enough to make a longer music bed
-        # sink smoothly into the main render that follows.
-        chains.append(music_filter_chain(
-            input_idx=1, duration=duration,
-            volume=sound_volume, fade_in=0.05, fade_out=0.4,
-        ))
-        audio_map = "[aout]"
-    else:
-        audio_map = "1:a"
-    filter_complex = ";".join(chains)
-
-    args += [
-        "-filter_complex", filter_complex,
-        "-map", "[vout]",
-        "-map", audio_map,
-        *nvenc_args(),
-        *aac_args(),
-        "-shortest",
-        str(out_path),
-    ]
-
-    run_ffmpeg_with_progress(
-        args,
-        expected_out_seconds=duration,
-        on_progress=on_progress,
-        log_prefix="intermission: ",
-        cancel_check=cancel_check,
-    )
-    return duration
 
 
 def render_outro_card(
@@ -655,153 +544,11 @@ def render_intro(
     )
 
 
-def _render_one_highlight(
-    *,
-    src: Path,
-    out_path: Path,
-    h: Highlight,
-    width: int,
-    height: int,
-    fps: float,
-    has_audio: bool,
-    badge_ass: Optional[Path],
-    on_progress: Callable[[float, str], None],
-    cancel_check: Optional[Callable[[], bool]] = None,
-) -> float:
-    """
-    Render a single highlight clip with input-side seeking (`-ss BEFORE -i`),
-    so ffmpeg only demuxes the few seconds of source we actually need —
-    crucial when the source is 10+ GB. Returns the clip duration.
-    """
-    duration = h.end - h.start
-
-    # Emit the concat output to [vc] (or [vout] when there's no badge),
-    # then optionally chain an `ass=` burn for the HIGHLIGHT badge. The
-    # final video label is always [vout].
-    vc_label = "vc" if badge_ass else "vout"
-
-    v_filter = (
-        f"[0:v]setpts=PTS-STARTPTS,scale={width}:{height},fps={fps}[{vc_label}]"
-    )
-    if has_audio:
-        a_filter = (
-            f"[0:a]asetpts=PTS-STARTPTS,"
-            f"aformat=sample_rates={TARGET_AUDIO_RATE}:channel_layouts=stereo[aout]"
-        )
-        filter_complex = ";".join([v_filter, a_filter])
-    else:
-        filter_complex = v_filter
-    out_duration = duration
-
-    # Burn the HIGHLIGHT badge on top of the concat output.
-    if badge_ass:
-        badge_arg = escape_ffmpeg_filter_path(badge_ass)
-        filter_complex += f";[vc]ass='{badge_arg}'[vout]"
-
-    # Both `-ss` and `-t` placed BEFORE `-i` are input-side. `-ss` is a
-    # fast keyframe seek; `-t` limits how much of the source we demux.
-    args = [
-        *hwaccel_input_args(),
-        "-ss", f"{h.start:.3f}",
-        "-t", f"{duration:.3f}",
-        "-i", str(src),
-    ]
-    if not has_audio:
-        # Add silent audio as input #1 BEFORE any output options.
-        args += ["-f", "lavfi", "-i", f"anullsrc=r={TARGET_AUDIO_RATE}:cl=stereo"]
-
-    args += ["-filter_complex", filter_complex, "-map", "[vout]"]
-    if has_audio:
-        args += ["-map", "[aout]", *nvenc_args(), *aac_args()]
-    else:
-        args += ["-map", "1:a", *nvenc_args(), *aac_args(), "-shortest"]
-    args += [str(out_path)]
-
-    run_ffmpeg_with_progress(
-        args,
-        expected_out_seconds=out_duration,
-        on_progress=on_progress,
-        cancel_check=cancel_check,
-    )
-    return out_duration
-
-
-def render_highlight_clip(
-    *,
-    src: Path,
-    out_path: Path,
-    job_dir: Path,
-    highlights: list[Highlight],
-    width: int,
-    height: int,
-    fps: float,
-    has_audio: bool,
-    on_progress: Callable[[float, str], None],
-    cancel_check: Optional[Callable[[], bool]] = None,
-) -> Optional[float]:
-    """
-    Render each highlight as its own MP4 (with input seeking) then stitch
-    them with the concat demuxer (no re-encode). One ffmpeg per highlight
-    keeps NVDEC session count low and avoids walking the whole source.
-    """
-    valid = [h for h in highlights if h.end > h.start]
-    if not valid:
-        return None
-
-    # Build one HIGHLIGHT badge .ass and reuse it for every clip. Each
-    # clip restarts the .ass timeline at 0, so the same file works for
-    # any clip duration (we just need the .ass to outlast the longest).
-    longest = max((h.end - h.start) for h in valid)
-    badge_dur = longest + 5.0  # slack so libass doesn't expire before the longest clip ends
-    badge_path = job_dir / "highlight_badge.ass"
-    build_highlight_badge_ass(
-        output_path=badge_path,
-        video_w=width,
-        video_h=height,
-        duration=badge_dur,
-    )
-
-    parts: list[Path] = []
-    total = 0.0
-    n = len(valid)
-    for i, h in enumerate(valid):
-        part_path = job_dir / f"hl_{i:03d}.mp4"
-
-        def make_cb(idx: int) -> Callable[[float, str], None]:
-            def cb(frac: float, msg: str) -> None:
-                on_progress((idx + frac) / n, f"highlight {idx + 1}/{n}: {msg}")
-            return cb
-
-        out_dur = _render_one_highlight(
-            src=src,
-            out_path=part_path,
-            h=h,
-            width=width,
-            height=height,
-            fps=fps,
-            has_audio=has_audio,
-            badge_ass=badge_path,
-            on_progress=make_cb(i),
-            cancel_check=cancel_check,
-        )
-        parts.append(part_path)
-        total += out_dur
-
-    # Stitch into one highlight reel via concat demuxer (stream copy).
-    concat_parts(
-        parts, out_path,
-        on_progress=lambda f, m: on_progress(0.999, f"highlight stitch: {m}"),
-        cancel_check=cancel_check,
-    )
-    return total
-
-
 def render_main_with_scoreboard(
     *,
     src: Path,
     out_path: Path,
     ass_path: Path,
-    full_match_badge_ass: Optional[Path],
     slow_motion_badge_ass: Optional[Path],
     playlist: list[_PlaylistEntry],
     width: int,
@@ -817,8 +564,8 @@ def render_main_with_scoreboard(
     Render the main match: open the source once per playlist entry with
     input-side seeking (`-ss BEFORE -i`), apply slow-mo (setpts*2,
     atempo=0.5) to replay entries, concat everything in chronological
-    order, then burn scoreboard + FULL MATCH badge + SLOW MOTION badge
-    — all in one NVDEC → CPU filter → NVENC pipeline.
+    order, then burn scoreboard + SLOW MOTION badge — all in one
+    NVDEC → CPU filter → NVENC pipeline.
 
     Each playlist entry is one ffmpeg input slice. Slice entries are
     processed normally; replay entries get setpts*2.0 / atempo=0.5 so
@@ -831,13 +578,20 @@ def render_main_with_scoreboard(
 
     args: list[str] = []
     for entry in playlist:
-        slice_len = entry.src_end - entry.src_start
-        args += [
-            *hwaccel_input_args(),
-            "-ss", f"{entry.src_start:.3f}",
-            "-t", f"{slice_len:.3f}",
-            "-i", str(src),
-        ]
+        if entry.kind in ("stinger_in", "stinger_out"):
+            # Stinger is a pre-rendered mp4 already at the right
+            # resolution / fps / codec — feed it as a plain input, no
+            # seek, no NVDEC (the file is short so software decode is
+            # fine and avoids holding an extra NVDEC session).
+            args += ["-i", str(entry.src_path)]
+        else:
+            slice_len = entry.src_end - entry.src_start
+            args += [
+                *hwaccel_input_args(),
+                "-ss", f"{entry.src_start:.3f}",
+                "-t", f"{slice_len:.3f}",
+                "-i", str(src),
+            ]
     n = len(playlist)
     expected_total = sum(e.final_end - e.final_start for e in playlist)
 
@@ -874,6 +628,8 @@ def render_main_with_scoreboard(
 
     # Build the per-entry processing chains. Replay entries stretch
     # video PTS to 2× and halve audio tempo so they play at half speed.
+    # Stinger entries pass through (they're pre-rendered at the right
+    # spec already; just scale/fps-normalise defensively and reset PTS).
     inv_speed = 1.0 / REPLAY_SPEED
     v_parts: list[str] = []
     a_parts: list[str] = []
@@ -914,6 +670,9 @@ def render_main_with_scoreboard(
                         f"aformat=sample_rates={TARGET_AUDIO_RATE}:channel_layouts=stereo[ak{i}]"
                     )
         else:
+            # Slice OR stinger. Stinger inputs are already at target
+            # resolution/fps from the cache, but we keep the scale/fps
+            # filter as a safety net (no-op when the input matches).
             v_parts.append(
                 f"[{i}:v]setpts=PTS-STARTPTS,scale={width}:{height},fps={fps}[vk{i}]"
             )
@@ -932,25 +691,20 @@ def render_main_with_scoreboard(
     else:
         concat_filter = "".join(concat_inputs) + f"concat=n={n}:v=1:a=0[vc]"
 
-    # Chain overlay burns: scoreboard → FULL MATCH badge → SLOW MOTION
-    # badge. Each `ass=` filter runs over the previous output, so the
-    # composition order matches the visual stacking we want. Optional
-    # overlays just skip their link in the chain.
+    # Chain overlay burns: scoreboard → SLOW MOTION badge. Each `ass=`
+    # filter runs over the previous output, so the composition order
+    # matches the visual stacking we want. The slow-mo badge is optional
+    # (skipped when no replays were spliced).
     ass_arg = escape_ffmpeg_filter_path(ass_path)
     burn_chain = [f"[vc]ass='{ass_arg}'[vb0]"]
     cur_label = "vb0"
-    if full_match_badge_ass is not None:
-        next_label = "vb1"
-        fm_arg = escape_ffmpeg_filter_path(full_match_badge_ass)
-        burn_chain.append(f"[{cur_label}]ass='{fm_arg}'[{next_label}]")
-        cur_label = next_label
     if slow_motion_badge_ass is not None:
-        next_label = "vb2"
+        next_label = "vb1"
         sm_arg = escape_ffmpeg_filter_path(slow_motion_badge_ass)
         burn_chain.append(f"[{cur_label}]ass='{sm_arg}'[{next_label}]")
         cur_label = next_label
-    # Final rename so the map below is stable regardless of which
-    # optional badges were chained.
+    # Final rename so the map below is stable regardless of whether the
+    # optional slow-mo badge was chained.
     burn_chain.append(f"[{cur_label}]null[vout]")
     filter_complex = ";".join(v_parts + a_parts + [concat_filter] + burn_chain)
 
@@ -1031,7 +785,10 @@ class RenderPlan:
     project_name: str
     include_intro: bool = True
     intro_style: str = "cinematic"   # "cinematic" | "text"
-    include_highlights: bool = True
+    # Splice a 50%-speed replay of each highlight into main, right after
+    # its real-time occurrence. When false, highlights are ignored at
+    # render time (they still exist in the project for re-render later).
+    include_replays: bool = True
     include_main: bool = True
     output_name: Optional[str] = None
     state: RenderState = field(default_factory=lambda: RenderState(job_id=uuid.uuid4().hex[:12]))
@@ -1042,11 +799,10 @@ class RenderContext:
     """Shared state passed between the per-stage helpers below.
 
     Built once by `_prepare_context` (probe + trim/event remap +
-    weight table) and threaded through `_intro_stage`, `_highlight_stage`,
-    `_bridge_stage`, `_main_stage`, `_finalize`. Each stage may append to
-    `parts` and bump `completed_weight`; `make_progress` reads both at
-    callback time, so progress fractions stay correct as the pipeline
-    advances.
+    weight table) and threaded through `_intro_stage`, `_main_stage`,
+    `_outro_stage`, `_finalize`. Each stage may append to `parts` and
+    bump `completed_weight`; `make_progress` reads both at callback
+    time, so progress fractions stay correct as the pipeline advances.
     """
     plan: RenderPlan
     state: RenderState
@@ -1146,15 +902,13 @@ def _prepare_context(plan: RenderPlan) -> RenderContext:
     job_dir.mkdir(parents=True, exist_ok=True)
 
     # Stage weights for the unified 0..1 progress fraction. Concat is
-    # always present; intro/highlight/main only contribute when their
-    # stages will actually run.
+    # always present; intro/main only contribute when their stages will
+    # actually run.
     weights: list[tuple[str, float]] = []
     if plan.include_intro:
         weights.append(("intro", 0.05))
-    if plan.include_highlights and plan.project.highlights:
-        weights.append(("highlight", 0.25))
     if plan.include_main:
-        weights.append(("main", 0.65))
+        weights.append(("main", 0.9))
     weights.append(("concat", 0.05))
     total = sum(w for _, w in weights)
     weight_lookup = {n: w / total for n, w in weights}
@@ -1257,117 +1011,85 @@ def _intro_stage(ctx: RenderContext) -> None:
     ctx.completed_weight += ctx.weight_lookup["intro"]
 
 
-def _highlight_stage(ctx: RenderContext) -> bool:
-    """Render the highlight reel. Returns True iff a highlight clip was
-    actually appended to `ctx.parts` (so the bridge stage knows whether
-    to insert a transition)."""
-    plan = ctx.plan
-    if not (plan.include_highlights and plan.project.highlights):
-        return False
-    ctx._bail_if_cancelled()
-
-    hi_path = ctx.job_dir / "highlight.mp4"
-    written = render_highlight_clip(
-        src=ctx.src,
-        out_path=hi_path,
-        job_dir=ctx.job_dir,
-        highlights=plan.project.highlights,
-        width=ctx.width, height=ctx.height, fps=ctx.fps,
-        has_audio=ctx.has_audio,
-        on_progress=ctx.make_progress("highlight"),
-        cancel_check=ctx.cancel_check,
-    )
-    if written:
-        ctx.parts.append(hi_path)
-    ctx.completed_weight += ctx.weight_lookup["highlight"]
-    return bool(written)
-
-
-def _bridge_stage(ctx: RenderContext, highlight_appended: bool) -> None:
-    """Bridge between the highlight reel and the main match.
-
-    When `config.intermission_enabled` is true we render the 3 s
-    typography intermission card (libass overlay over a dim background
-    + optional impact sound); otherwise we fall back to the original
-    0.8 s gold-sweep transition. Either way the bridge only runs when
-    both highlight reel and main match are actually in the final
-    output — same gating as before.
-    """
-    plan = ctx.plan
-    wants_bridge = (
-        plan.include_highlights
-        and plan.project.highlights
-        and plan.include_main
-        and highlight_appended
-    )
-    if not wants_bridge:
-        return
-    ctx._bail_if_cancelled()
-
-    if config.intermission_enabled:
-        info = plan.project.info
-        # Resolve scoreboard row labels so doubles shows the combined
-        # team names on the players line instead of just p1 / p2.
-        top_label, bot_label = resolve_row_names(
-            info.match_type, info.p1, info.p2, info.p3, info.p4,
-        )
-        im_path = ctx.job_dir / "intermission.mp4"
-        render_intermission_card(
-            out_path=im_path,
-            width=ctx.width, height=ctx.height, fps=ctx.fps,
-            duration=config.intermission_duration_seconds,
-            tournament=info.tournament,
-            p1_label=top_label,
-            p2_label=bot_label,
-            p1_team=info.p1_team,
-            p2_team=info.p2_team,
-            headline=config.intermission_text,
-            bg_path=config.intermission_bg_path,
-            sound_path=config.intermission_sound_path,
-            sound_volume=config.intermission_sound_volume,
-            on_progress=lambda f, m: None,  # short clip, no progress reporting
-            cancel_check=ctx.cancel_check,
-        )
-        ctx.parts.append(im_path)
-        return
-
-    tr_path = ctx.job_dir / "transition.mp4"
-    render_transition(
-        out_path=tr_path,
-        width=ctx.width, height=ctx.height, fps=ctx.fps,
-        on_progress=lambda f, m: None,  # quick clip, no progress reporting
-        cancel_check=ctx.cancel_check,
-    )
-    ctx.parts.append(tr_path)
-
-
 def _main_stage(ctx: RenderContext) -> None:
     """Render the main match (trims removed) with the scoreboard burned
-    in, the FULL MATCH badge over the first ~15 s, and slow-mo replays
-    of every highlight spliced in right after the highlight's real-time
-    occurrence. SLOW MOTION badge pulses on top-left during each
-    replay so the viewer reads the speed change instantly."""
+    in and slow-mo replays of every highlight spliced in right after the
+    highlight's real-time occurrence. Each replay is optionally bracketed
+    by a branded stinger transition (sting-in before, sting-out after).
+    SLOW MOTION badge pulses on top-left during each replay so the
+    viewer reads the speed change instantly."""
     plan = ctx.plan
     if not plan.include_main:
         return
     ctx._bail_if_cancelled()
 
-    # Replays only when the operator is also producing a highlight reel
-    # — same checkbox controls both behaviours, keeps the UX consistent.
-    use_replays = bool(plan.include_highlights and plan.project.highlights)
+    use_replays = bool(plan.include_replays and plan.project.highlights)
     replays = build_replay_plan(plan.project.highlights, ctx.kept) if use_replays else []
-    playlist = build_main_playlist(ctx.kept, replays)
+
+    # Stinger pair: build / fetch from cache when replays will be spliced
+    # AND the operator hasn't disabled it in config. IN and OUT have
+    # ASYMMETRIC durations — long readable hold on the way in, quick
+    # wipe back to live on the way out. The stinger uses a blurred
+    # frame from the SOURCE video as its background, so cache is keyed
+    # by source identity too — same source = cache hit on re-render,
+    # different source = regeneration.
+    stinger_in: Optional[Path] = None
+    stinger_out: Optional[Path] = None
+    stinger_in_dur = 0.0
+    stinger_out_dur = 0.0
+    if replays and config.stinger_enabled:
+        stinger_in_dur = config.stinger_duration_seconds
+        stinger_out_dur = config.stinger_out_duration_seconds
+        # Pull a frame ~40 % into the source for the blurred background.
+        # Past the warm-up but well before the end — likely to land on
+        # an actual rally rather than empty table at either end. Failure
+        # falls through silently to the lavfi-colour fallback inside the
+        # builder; not worth aborting a render over.
+        bg_png = ctx.job_dir / "stinger_bg.png"
+        try:
+            src_dur_probe = probe_video(ctx.src).get("duration", 0.0)
+            bg_t = max(0.0, float(src_dur_probe) * 0.4)
+            extract_frame_at(ctx.src, bg_t, bg_png)
+        except FFmpegError:
+            bg_png = None  # type: ignore[assignment]
+
+        stinger_in, stinger_out = get_or_build_stinger_pair(
+            width=ctx.width, height=ctx.height, fps=ctx.fps,
+            in_duration=stinger_in_dur,
+            out_duration=stinger_out_dur,
+            brand_color=config.brand_color,
+            text=config.stinger_text,
+            logo_path=find_brand_logo(),
+            sound_path=config.stinger_sound_path,
+            source_path=ctx.src,
+            bg_frame_path=bg_png if (bg_png is not None and bg_png.exists()) else None,
+            channel_name=config.channel_name,
+            replay_label=config.stinger_replay_label,
+        )
+
+    have_stinger = bool(stinger_in and stinger_out)
+    playlist = build_main_playlist(
+        ctx.kept, replays,
+        stinger_in_path=stinger_in,
+        stinger_out_path=stinger_out,
+        stinger_in_duration=stinger_in_dur if have_stinger else 0.0,
+        stinger_out_duration=stinger_out_dur if have_stinger else 0.0,
+    )
     if not playlist:
         raise FFmpegError("No content kept after trim segments")
 
-    # Total final-render duration after replays splice in. The scoreboard
-    # has to span this so libass doesn't expire the panel before the
-    # last slow-mo finishes.
+    # Total final-render duration after replays + stingers splice in.
+    # The scoreboard has to span this so libass doesn't expire the panel
+    # before the last entry finishes.
     final_duration = playlist[-1].final_end
 
     # Two-step event remap: trim already happened in _prepare_context,
-    # now shift each event by the replay durations that precede it.
-    final_events = remap_events_with_replays(ctx.remapped_events, replays)
+    # now shift each event by the replay + stinger (IN + OUT) durations
+    # of every replay that precedes it.
+    final_events = remap_events_with_replays(
+        ctx.remapped_events, replays,
+        stinger_total_duration=(stinger_in_dur + stinger_out_dur) if have_stinger else 0.0,
+    )
 
     ass_path = ctx.job_dir / "scoreboard.ass"
     build_scoreboard_ass(
@@ -1385,19 +1107,6 @@ def _main_stage(ctx: RenderContext) -> None:
         score_events=final_events,
         best_of=plan.project.info.best_of,
     )
-    # FULL MATCH badge: shown for the first 15 seconds of the main
-    # render so the viewer knows the highlight reel is over. Skipped
-    # when the intermission card is enabled — the card already plays
-    # the "we're entering main" signal, repeating it as a 15 s top-left
-    # badge would read as duplicate.
-    fm_badge_path: Optional[Path] = None
-    if not config.intermission_enabled:
-        fm_badge_path = ctx.job_dir / "full_match_badge.ass"
-        build_full_match_badge_ass(
-            output_path=fm_badge_path,
-            video_w=ctx.width, video_h=ctx.height,
-            show_seconds=15.0,
-        )
     # SLOW MOTION badge: one Dialogue range per spliced-in replay, in
     # final-render coords. Skipped when no replays were spliced — saves
     # a no-op ass= filter from the chain.
@@ -1417,7 +1126,6 @@ def _main_stage(ctx: RenderContext) -> None:
         src=ctx.src,
         out_path=main_path,
         ass_path=ass_path,
-        full_match_badge_ass=fm_badge_path,
         slow_motion_badge_ass=sm_badge_path,
         playlist=playlist,
         width=ctx.width, height=ctx.height, fps=ctx.fps,
@@ -1534,8 +1242,6 @@ def run_render(plan: RenderPlan) -> None:
     try:
         ctx = _prepare_context(plan)
         _intro_stage(ctx)
-        highlight_appended = _highlight_stage(ctx)
-        _bridge_stage(ctx, highlight_appended)
         _main_stage(ctx)
         _outro_stage(ctx)
         _finalize(ctx)

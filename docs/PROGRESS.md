@@ -1,6 +1,6 @@
 # Progress Status
 
-Last update: 2026-05-13
+Last update: 2026-05-15 (auto-stinger)
 
 ## Module map
 
@@ -12,6 +12,8 @@ Last update: 2026-05-13
 | FFmpeg / FFprobe wrapper | ✅ done | [backend/ffmpeg_runner.py](../backend/ffmpeg_runner.py) |
 | ASS overlay builders | ✅ done | [backend/ass/](../backend/ass/) |
 | Render orchestrator | ✅ done | [backend/renderer.py](../backend/renderer.py) |
+| Cinematic intro builder | ✅ done | [backend/intro_builder.py](../backend/intro_builder.py) |
+| Auto-stinger builder | ✅ done | [backend/stinger_builder.py](../backend/stinger_builder.py) |
 | Frontend HTML + Tailwind | ✅ done | [frontend/index.html](../frontend/index.html) |
 | Frontend logic (player + state) | ✅ done | [frontend/app.js](../frontend/app.js) |
 | Frontend styles | ✅ done | [frontend/styles.css](../frontend/styles.css) |
@@ -85,22 +87,6 @@ render started splicing a full 50% replay after every highlight.)
       (P1+P3 left pair, P2+P4 right pair, each ~60% of the singles
       avatar size) so all four players appear without re-rendering or
       a separate pipeline.
-- ✅ Highlight reel (per-clip ffmpeg with input seeking, straight encode;
-      slow-mo no longer applied per clip — see main-stage replays below)
-- ✅ Typography intermission card between highlight reel and main:
-      3 s libass overlay over a dim background image (optional, falls
-      back to lavfi color) with optional impact-sound mp3. Layout top
-      to bottom: tournament (gold) → "FULL MATCH" headline (white,
-      zoom 1.0 → 1.1) → gold accent line wiping outward → team labels
-      "Team A *vs* Team B" (white, gold "vs", only when both team
-      fields are set) → player labels "P1 + P3 *vs* P2 + P4" (white,
-      gold "vs"). The inline-gold "vs" on both lines is what visually
-      separates the two competing sides; team-vs-players hierarchy
-      comes from font size (38 px vs 48 px). Toggled via
-      `intermission_enabled` in config — `false` falls back to the
-      original 0.8 s gold-sweep bridge. When enabled, the FULL MATCH
-      top-left badge in main is suppressed so the "we're entering the
-      match" signal doesn't read as duplicate.
 - ✅ Main match (multi-input ffmpeg with input seeking, scoreboard
       burned via `ass=`). Every highlight gets a 50%-speed replay
       spliced in **right after its real-time occurrence** (setpts*2 +
@@ -109,13 +95,22 @@ render started splicing a full 50% replay after every highlight.)
       remap pass live in `renderer.py`; total main duration grows by
       `sum(highlight_dur) × (1 / 0.5)` and the scoreboard's
       `total_duration` is recomputed from the playlist's final
-      timeline so libass doesn't expire mid-clip.
-- ✅ Intermission card audio upgraded to the shared
-      `music_input_args` + `music_filter_chain` pattern (looped + capped
-      + volume scale + 0.05 s fade-in / 0.4 s fade-out). Replaces the
-      old one-shot `-i sound_path` so a longer music bed sinks cleanly
-      into the main render instead of being cut hard at 3 s. New config
-      key `intermission_sound_volume` (default 0.7).
+      timeline so libass doesn't expire mid-clip. Pipeline simplified
+      (2026-05-15): no separate highlight reel section at the top, no
+      intermission/transition bridge, no FULL MATCH badge — highlights
+      now contribute only their inline slow-mo replays.
+- ✅ Auto-stinger transition: 1s branded wipe (brand bar + optional logo
+      + text) auto-generated once per (W, H, fps) into
+      `assets/branding/stinger_in_*.mp4`, time-reversed into
+      `stinger_out_*.mp4`. Brackets every slow-mo replay in main
+      (sting-in before, sting-out after) — gives a broadcast-style
+      framing for each replay. Cache key in filename → resolution / fps
+      change auto-regenerates. Operator deletes the 2 mp4 files to
+      regenerate after changing `brand_color` / `brand_logo_path` /
+      `stinger_text`. Falls back to brand-color-only wipe when no
+      `logo.png` available, silent audio when no `stinger_swoosh.wav`.
+      Score events shifted by `replay_dur + 2 × stinger_dur` past each
+      replay so scoreboard stays in sync.
 - ✅ Slow-mo replay music: single mp3 (`replay_sound_path`, defaults
       to `assets/sounds/slow_motion.mp3`) reused for every spliced-in
       replay. Each replay gets its own `-stream_loop -1 -t r_dur -i
@@ -130,7 +125,7 @@ render started splicing a full 50% replay after every highlight.)
       the clip duration, and apply `volume` + `afade` in/out. Intro
       uses a 0.3 s in / 0.5 s out; outro uses 0.5 s in / 1.0 s out so
       it sinks together with the fade-to-black tail. Missing file →
-      silent anullsrc fallback (matches the intermission pattern).
+      silent anullsrc fallback.
 - ✅ Cinematic outro card at the very end of the final cut: extract
       the last frame of `main.mp4`, blur (`gblur=sigma=30`) and dim
       (`eq=brightness=-0.3`) it into a static background, then libass
@@ -196,8 +191,9 @@ render started splicing a full 50% replay after every highlight.)
 - ✅ README in English with full workflow
 - ✅ Docs index (this folder)
 - ✅ Pytest suite for pure logic (segment math, text helpers,
-      avatar lookup, scoreboard event walk, builder smoke tests).
-      78 tests, runs in <0.5 s. Configured in `pyproject.toml`,
+      avatar lookup, scoreboard event walk, builder smoke tests, main
+      playlist + stinger bracket + event remap). 89 tests, runs in
+      <0.2 s. Configured in `pyproject.toml`,
       basetemp pinned to `temp/pytest/` to dodge sandbox-denied
       access on the user-temp dir.
 

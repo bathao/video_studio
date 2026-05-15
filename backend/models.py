@@ -69,7 +69,10 @@ class RenderRequest(BaseModel):
     # "cinematic" (avatars + bg blur, default) or "text" (the original
     # 3 s libass title card). Ignored when include_intro is False.
     intro_style: str = "cinematic"
-    include_highlights: bool = True
+    # Splice a 50%-speed replay of each highlight into main, right after
+    # its real-time occurrence. When false, highlights are ignored at
+    # render time (they still exist in the project for re-render later).
+    include_replays: bool = True
     include_main: bool = True
     output_name: Optional[str] = None
 

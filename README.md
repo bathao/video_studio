@@ -2,8 +2,9 @@
 
 Local web app to edit fixed-tripod table-tennis footage: mark points with
 keyboard shortcuts, capture highlights, and render a final video that
-contains an intro, a slow-motion highlight reel, and the main match with
-a burned-in scoreboard. Hardware-accelerated via NVIDIA NVENC.
+contains an intro and the main match with a burned-in scoreboard plus
+50%-speed slow-mo replays of every highlight. Hardware-accelerated via
+NVIDIA NVENC.
 
 ## Requirements
 
@@ -71,8 +72,8 @@ browser.
 
 4. Save the project (right side `Save Project` button). It writes
    `projects/<name>.json` so you can resume later.
-5. Hit `Render`. The progress bar shows each stage (intro → highlight →
-   main → concat). The `Cancel render` button below the bar terminates
+5. Hit `Render`. The progress bar shows each stage (intro → main →
+   outro → concat). The `Cancel render` button below the bar terminates
    the in-flight ffmpeg process if you spot a problem; the partial
    intermediates stay in `temp/<job>/` for inspection. Output is written
    to `output/<name>.mp4`.
@@ -97,26 +98,28 @@ video_studio/
 intro.mp4          ── cinematic title card (4 avatars in doubles, 2 in
                       singles); falls back to a 3 s libass-only card
                       when player photos are missing
-highlight.mp4      ── per-clip ffmpeg with input seeking, then concat;
-                      no per-clip slow-mo (the main render now replays
-                      each highlight at 50% in place)
-intermission.mp4   ── 3 s typography bridge between highlight and main:
-                      headline ("FULL MATCH") + tournament + players
-                      over a dim bg (optional asset). Fallback when
-                      `intermission_enabled=false`: 0.8 s gold-sweep
 main.mp4           ── one ffmpeg, one `-i` per kept slice AND one `-i`
                       per slow-mo replay (replays use setpts*2 +
-                      atempo=0.5); concat + scoreboard.ass + SLOW
-                      MOTION badge burn, all NVDEC → CPU → NVENC.
-                      Score events shift forward by cumulative replay
-                      duration before they hit the scoreboard
+                      atempo=0.5). Each replay is bracketed by a 1 s
+                      branded sting-in (before) + 1 s sting-out (after,
+                      = sting-in reversed). Concat + scoreboard.ass +
+                      SLOW MOTION badge burn, all NVDEC → CPU → NVENC.
+                      Score events shift forward by cumulative
+                      (replay + 2×stinger) duration before hitting
+                      the scoreboard
+                      Stingers themselves come from
+                      `assets/branding/stinger_in_{W}x{H}_{fps}.mp4` —
+                      auto-generated on first render at each resolution
+                      and cached. Delete cache files to regenerate
+                      after changing `brand_color` / `logo.png` /
+                      `stinger_text` in config.
 outro.mp4          ── 5 s closing card: extract `main.mp4`'s last
                       frame, gblur + dim it into a static bg, libass
                       overlay the "THANK YOU FOR WATCHING" headline
                       with a 1 s fade-in. Final 1 s fades a full-frame
                       black box on top so the video sinks to black.
                       Silent audio (anullsrc) for concat compatibility
-final.mp4          ── concat-demuxer of the five (no re-encode)
+final.mp4          ── concat-demuxer of the three (no re-encode)
 ```
 
 All stages share the source video's resolution, fps, pixel format, sample
@@ -143,18 +146,6 @@ Edit `config.json`:
 - `preset` — NVENC presets `p1`..`p7` (p1 = fastest, p7 = best quality)
 - `cq` — constant quality (lower = better, default 21)
 - `use_hwaccel` — set false to disable CUDA decode if your driver chokes
-- `intermission_enabled` — `true` for the 3 s typography card between
-  highlight reel and main; `false` falls back to the 0.8 s gold-sweep
-- `intermission_text` — big headline on the card (default `"FULL MATCH"`)
-- `intermission_bg_path` — JPG/PNG dimmed and used as the card background
-  (default `assets/backgrounds/intermission_bg.jpg`). Missing file →
-  solid dark colour fallback.
-- `intermission_sound_path` — audio bed played during the card
-  (default `assets/sounds/intermission_boom.wav`). Looped + capped to
-  the 3 s duration via `music_input_args`, with a short 0.05 s fade-in
-  (keeps an impact stinger punchy) and 0.4 s fade-out. Missing file →
-  silent.
-- `intermission_sound_volume` — 0..1, default `0.7`.
 - `outro_enabled` — `true` to append the 5 s closing card after the
   main render (silent, ends in fade-to-black).
 - `outro_text` — big white centred headline (default
@@ -180,6 +171,32 @@ Edit `config.json`:
   replay fallback (the original behaviour). `replay_sound_volume`
   (0..1, default `0.7`) scales the music against the surrounding
   real-time slice audio.
+- `stinger_enabled` — `true` to bracket every slow-mo replay with a
+  1 s branded transition (sting-in before + sting-out after = the
+  IN played in reverse). `false` skips the brackets entirely.
+- `stinger_duration_seconds` — per-direction duration. Total bracket
+  per replay = `2 × stinger_duration_seconds`. Default `1.0`.
+- `brand_color` — hex (`#FF5722`), `0xRRGGBB`, or named colour for
+  the sliding bar + accent. Default deep orange (`#FF5722`); contrasts
+  the cyan SLOW MOTION badge so they read as two distinct mode
+  signals.
+- `stinger_text` — small white text shown under the logo during the
+  hold. Empty string → no text. ASCII works everywhere; Vietnamese
+  diacritics may not render until a bundled font is added.
+- `brand_logo_path` — transparent PNG centred over the brand bar.
+  Default `assets/branding/logo.png`. Missing file → brand bar + text
+  only (still looks broadcast).
+- `stinger_sound_path` — short swoosh mp3/wav layered into the IN
+  clip; the reverse comes for free in the OUT clip via `areverse`.
+  Default `assets/sounds/stinger_swoosh.wav`. Missing → silent.
+
+Stinger clips are rendered ONCE per `(W, H, fps)` and cached in
+`assets/branding/stinger_{in,out}_{W}x{H}_{fps}.mp4`. Subsequent
+renders at the same spec reuse the cache with zero overhead; a 2K
+match auto-renders a separate 2K pair on first use. To swap the
+look (different colour, new logo, different text), edit the config
+keys and **delete the cached mp4s** — the next render will rebuild
+from current config.
 
 ## Project docs
 

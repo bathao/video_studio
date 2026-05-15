@@ -20,7 +20,7 @@ async function startRender() {
     project,
     include_intro: cinematic || textIntro,
     intro_style: cinematic ? 'cinematic' : 'text',
-    include_highlights: $('opt-hl').checked,
+    include_replays: $('opt-replays').checked,
     include_main: $('opt-main').checked,
     output_name: $('in-output').value || null,
   };

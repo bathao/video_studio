@@ -35,6 +35,11 @@ backend/
                      stage helpers). Owns the public `run_render(plan)`.
   intro_builder.py   Cinematic intro ffmpeg filter graph (avatars +
                      bg blur + Ken-Burns zoom + libass text).
+  stinger_builder.py Auto-stinger transition clip. Renders a 1s branded
+                     wipe (brand bar + optional logo + text) once per
+                     (W, H, fps) into assets/branding/stinger_in_*.mp4,
+                     then reverses it into stinger_out_*.mp4. Used to
+                     bracket every slow-mo replay in main.
   ffmpeg_runner.py   ffprobe + run_ffmpeg_with_progress + shared
                      NVENC / AAC / hwaccel arg helpers and the
                      TARGET_AUDIO_RATE / TARGET_AUDIO_CHANNELS
@@ -58,19 +63,13 @@ backend/
                      the cinematic intro. Same builder serves singles
                      (2 avatars) and doubles (4 avatars laid out as 2
                      pairs); caller pre-combines names for doubles.
-    badges.py        Top-left HIGHLIGHT, FULL MATCH and SLOW MOTION
-                     badges. SLOW MOTION takes a list of (start, end)
-                     ranges so one .ass covers every spliced replay.
-    intermission.py  3-second typography bridge between highlight reel
-                     and main match (when `intermission_enabled` is
-                     true). Headline + tournament + players over a
-                     dim bg image (optional, falls back to lavfi color).
+    badges.py        Top-left SLOW MOTION badge. Takes a list of
+                     (start, end) ranges so one .ass covers every
+                     spliced replay.
     outro.py         5-second closing card after main match. libass
                      overlay over the blurred + dimmed last frame of
                      main.mp4; fades to black in the final second.
                      Silent audio for concat-demuxer compatibility.
-    transition.py    Gold-sweep bridge — fallback when intermission is
-                     disabled in config.
 
 frontend/
   index.html         Tailwind via CDN, single-page UI. Entry script
@@ -117,21 +116,23 @@ frontend/
 
 assets/avatars/      Player photos as flat files: <Name>.{png,jpg,jpeg,webp}
                      `_default.jpg` ships as the placeholder silhouette.
-assets/backgrounds/  Optional `intermission_bg.jpg` for the intermission
-                     card. Missing → renderer falls back to lavfi color.
+assets/backgrounds/  Optional `outro_bg.jpg` used when `_outro_stage`
+                     can't extract main's last frame (or when the
+                     operator wants a fixed bg).
+assets/branding/     `logo.png` (operator-supplied, transparent) +
+                     auto-generated `stinger_in_{W}x{H}_{fps}.mp4` and
+                     `stinger_out_*.mp4` cache files. Delete cache to
+                     regenerate after changing brand_color / logo /
+                     stinger_text.
 assets/sounds/       Optional music beds, all wired through the shared
                      `music_input_args` + `music_filter_chain` helpers
                      (loop + cap + volume + afade in/out). Defaults:
-                     `intermission_boom.wav` for the intermission card
-                     (short 0.05 s fade-in to preserve impact punch);
                      `intro.mp3` for the cinematic intro AND the outro
                      (0.3/0.5 s and 0.5/1.0 s fades respectively);
                      `slow_motion.mp3` reused for every slow-mo replay
-                     spliced into main. Any missing file → silent
-                     fallback for that slot.
-assets/backgrounds/  Also accepts an optional `outro_bg.jpg` used when
-                     `_outro_stage` can't extract main's last frame
-                     (or when the operator wants a fixed bg).
+                     spliced into main; `stinger_swoosh.wav` for the
+                     stinger transition clips. Any missing file →
+                     silent fallback for that slot.
 videos/              Source MP4s (gitignored).
 projects/            Saved project JSON files (gitignored).
 output/              Final rendered MP4s.
@@ -156,16 +157,11 @@ run_render(plan):
                                        # build stage weight table
   _intro_stage(ctx)                   # cinematic OR text intro → intro.mp4
                                        # 4-avatar layout when doubles
-  hl = _highlight_stage(ctx)          # render highlight reel → highlight.mp4
-                                       # (no per-clip slow-mo — straight encode)
-  _bridge_stage(ctx, hl)              # intermission card (3 s typography
-                                       # over dim bg) when enabled; gold-sweep
-                                       # 0.8 s fallback otherwise
-  _main_stage(ctx)                    # scoreboard + (optional FULL MATCH
-                                       # badge) + per-highlight 50%-speed
+  _main_stage(ctx)                    # scoreboard + per-highlight 50%-speed
                                        # replay spliced after each real-time
-                                       # occurrence, with SLOW MOTION badge
-                                       # → main.mp4
+                                       # occurrence, bracketed by branded
+                                       # stinger-in / stinger-out clips,
+                                       # with SLOW MOTION badge → main.mp4
   _outro_stage(ctx)                   # extract last frame of main.mp4,
                                        # blur + dim → bg; THANK YOU card
                                        # over it; fade-to-black tail → outro.mp4
@@ -219,17 +215,31 @@ progress fraction stays correct as stages advance.
 - **Main render splices slow-mo replays inline.** Every highlight
   becomes a 50%-speed replay inserted into main *right after* its
   real-time occurrence. `build_replay_plan` + `build_main_playlist` in
-  `renderer.py` produce a chronological list of (slice | replay)
-  entries; `remap_events_with_replays` shifts score events past each
-  insert point by the replay's final duration. Total main duration
-  changes — the scoreboard `total_duration` must use the post-replay
-  value, not the trimmed-source sum.
+  `renderer.py` produce a chronological list of (slice | stinger_in |
+  replay | stinger_out) entries; `remap_events_with_replays` shifts
+  score events past each insert point by `replay_dur + 2 *
+  stinger_dur`. Total main duration changes — the scoreboard
+  `total_duration` must use the post-replay, post-stinger value, not
+  the trimmed-source sum.
 
-- **Intermission card suppresses the FULL MATCH top-left badge.** When
-  `config.intermission_enabled` is true, `_main_stage` passes
-  `full_match_badge_ass=None`, since the intermission card already
-  signals "we're entering the main match". Keeping both would read as
-  duplicate for ~18 s.
+- **Stinger pair is cached per (W, H, fps).** `get_or_build_stinger_pair`
+  in `backend/stinger_builder.py` writes `assets/branding/stinger_in_*.mp4`
+  + `stinger_out_*.mp4` once and reuses them for every subsequent render
+  with matching spec. Cache key is encoded in the filename so resolution
+  / fps change → fresh files generated. To change brand_color, logo,
+  or stinger_text, the operator deletes the cached files manually.
+  The cached mp4s are gitignored (`assets/branding/stinger_*.mp4`) so
+  they don't leak into the repo.
+
+- **Stinger logo auto-detects.** `find_brand_logo()` in
+  `backend/stinger_builder.py` prefers `config.brand_logo_path` when
+  it points to an existing file, but falls back to scanning
+  `assets/branding/` for the first image (sorted by name, skipping
+  `_*` and `stinger_*.mp4`). Means the operator can drop any image
+  named anything (e.g. `Nguyễn Bá Thảo.jpg`) in `assets/branding/`
+  and it'll be picked up as the logo. The logo is centre-cropped to
+  a square and circular-alpha-masked at render time — same idiom as
+  the cinematic intro's avatar processing.
 
 - **Temp survives errors.** `_finalize` deletes `temp/<job_id>/` ONLY
   on success. Failed renders leave the .ass / .mp4 / .concat.txt
@@ -268,9 +278,9 @@ progress fraction stays correct as stages advance.
 ## When making changes
 
 - Don't add new ASS builders to `ass_builder.py` — that file is gone.
-  Pick one of `ass/scoreboard.py`, `ass/intro.py`, `ass/badges.py`,
-  `ass/transition.py`, or create a new module under `ass/` and
-  re-export from `ass/__init__.py`.
+  Pick one of `ass/scoreboard.py`, `ass/intro.py`, `ass/outro.py`,
+  `ass/badges.py`, or create a new module under `ass/` and re-export
+  from `ass/__init__.py`.
 
 - Don't duplicate `nvenc_args()` / `aac_args()` / `hwaccel_input_args()`
   — import from `ffmpeg_runner`.
@@ -314,21 +324,20 @@ progress fraction stays correct as stages advance.
 |---|---|
 | Encoder, preset, quality             | [config.json](config.json) |
 | Intro duration / avatar size / blur / sound | [config.json](config.json) (`intro_*` keys) |
-| Intermission on/off, text, bg, sound | [config.json](config.json) (`intermission_*` keys) |
 | Outro on/off, text, duration, bg, sound | [config.json](config.json) (`outro_*` keys) |
 | Music bed shared helper (loop + fade + volume) | `music_input_args` / `music_filter_chain` in [backend/ffmpeg_runner.py](backend/ffmpeg_runner.py) |
 | Scoreboard layout / colours          | [backend/ass/scoreboard.py](backend/ass/scoreboard.py) |
 | Doubles combined-name rule           | `resolve_row_names` / `_combine_doubles_name` in [backend/ass/scoreboard.py](backend/ass/scoreboard.py) + [backend/ass/common.py](backend/ass/common.py) |
 | Cinematic intro filter graph         | [backend/intro_builder.py](backend/intro_builder.py) — branches on `is_doubles` for the 4-avatar layout |
 | Cinematic intro text overlays        | `build_cinematic_intro_ass` in [backend/ass/intro.py](backend/ass/intro.py) |
-| Intermission card layout             | `build_intermission_card_ass` in [backend/ass/intermission.py](backend/ass/intermission.py); ffmpeg side in `render_intermission_card` in [backend/renderer.py](backend/renderer.py) |
 | Outro card layout                    | `build_outro_card_ass` in [backend/ass/outro.py](backend/ass/outro.py); ffmpeg side in `render_outro_card` in [backend/renderer.py](backend/renderer.py) |
-| Highlight reel rendering             | `render_highlight_clip` in [backend/renderer.py](backend/renderer.py) |
 | Slow-mo replay plan / playlist       | `build_replay_plan` / `build_main_playlist` / `remap_events_with_replays` in [backend/renderer.py](backend/renderer.py) |
 | Slow-mo replay music                 | `replay_sound_path` / `replay_sound_volume` in [config.json](config.json); resolved via `config.replay_sound_path` and consumed by `render_main_with_scoreboard` in [backend/renderer.py](backend/renderer.py) |
-| Slow-mo / HIGHLIGHT / FULL MATCH badge | [backend/ass/badges.py](backend/ass/badges.py) |
+| SLOW MOTION badge                    | `build_slow_motion_badge_ass` in [backend/ass/badges.py](backend/ass/badges.py) |
+| Auto-stinger generation              | `get_or_build_stinger_pair` in [backend/stinger_builder.py](backend/stinger_builder.py) |
+| Brand identity (color / logo / text) | [config.json](config.json) `brand_color` / `brand_logo_path` / `stinger_text` / `stinger_duration_seconds` / `stinger_sound_path` |
 | Score logic (replay, set wins)       | [frontend/score.js](frontend/score.js) — `recomputeAllEvents`, `scorePoint` |
 | Avatar lookup rules                  | [backend/avatars.py](backend/avatars.py) |
-| Render-time pipeline orchestration   | `_intro_stage` / `_highlight_stage` / `_bridge_stage` / `_main_stage` / `_outro_stage` / `_finalize` in [backend/renderer.py](backend/renderer.py) |
+| Render-time pipeline orchestration   | `_intro_stage` / `_main_stage` / `_outro_stage` / `_finalize` in [backend/renderer.py](backend/renderer.py) |
 | Add a new HTTP endpoint              | [backend/server.py](backend/server.py) |
 | Add new project field                | [backend/models.py](backend/models.py) `ProjectInfo`, then frontend `project.info` schema in [frontend/state.js](frontend/state.js), then UI input in [frontend/index.html](frontend/index.html) |

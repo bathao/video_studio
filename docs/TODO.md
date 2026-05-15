@@ -24,17 +24,21 @@ indicator: 🟢 quick (<1h), 🟡 medium (~half-day), 🔴 large (1+ day).
 ## Dev infra
 
 - [ ] 🟢 Pin Python version in `pyproject.toml` (currently bare requirements.txt).
-- [ ] 🟢 Add `pytest` smoke tests for `kept_segments_from_trims`,
-      `remap_score_event_to_trimmed`, and `_detect_active`.
+- [x] 🟢 Add `pytest` smoke tests for `kept_segments_from_trims`,
+      `remap_score_event_to_trimmed`, and `_detect_active`. Done —
+      89 tests in `tests/`, includes segment math + scoreboard event
+      walk + main playlist + stinger bracket + event remap.
 - [ ] 🟡 Add a `--dry-run` mode to the renderer that prints the full
       ffmpeg command instead of executing.
 - [ ] 🟡 GitHub Actions: lint (ruff) + import-check on push.
 
 ## Bugs / questions
 
-- [ ] 🟢 `drawtext` on the intro card uses no `fontfile=` — relies on
-      ffmpeg's default font lookup which can fail on some Windows builds.
-      Add a bundled font in `assets/` and reference it explicitly.
+- [ ] 🟢 `drawtext` on the intro card AND the auto-stinger clip uses
+      no `fontfile=` — relies on ffmpeg's default font lookup which can
+      fail on some Windows builds, and likely won't render Vietnamese
+      diacritics in `stinger_text`. Add a bundled font in `assets/` and
+      reference it explicitly from both call sites.
 - [ ] 🟢 If user names contain `'` (apostrophe), the .ass escape may
       double-escape inside `Dialogue:` lines. Add a unit test.
 - [ ] 🟡 NVDEC session limit on consumer GPUs is ~8. The main render

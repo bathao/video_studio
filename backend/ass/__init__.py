@@ -7,37 +7,32 @@ Each submodule owns one kind of card / overlay:
                    + end-of-match summary
   - `intro`      — text-only title card and the libass companion for the
                    ffmpeg-driven cinematic intro
-  - `badges`     — top-left HIGHLIGHT and FULL MATCH badges
-  - `transition` — sweep-line bridge between highlight reel and main match
+  - `outro`      — closing card over a blurred freeze-frame of main's
+                   last frame
+  - `stinger`    — channel-name + REPLAY label + soft glow burned over
+                   the auto-stinger transition clip
+  - `badges`     — top-left SLOW MOTION badge
   - `common`     — palette, drawing primitives, and shared helpers
-                   (everything imported by the four builders above)
+                   (everything imported by the builders above)
 
 Public symbols are re-exported from this package so call sites can do
 ``from .ass import build_scoreboard_ass`` without picking which file
 each builder lives in.
 """
 
-from .badges import (
-    build_full_match_badge_ass,
-    build_highlight_badge_ass,
-    build_slow_motion_badge_ass,
-)
-from .intermission import build_intermission_card_ass
+from .badges import build_slow_motion_badge_ass
 from .intro import build_cinematic_intro_ass, build_intro_ass
 from .outro import build_outro_card_ass
 from .scoreboard import ScoreFrame, build_scoreboard_ass, build_scoreboard_ass_text
-from .transition import build_transition_ass
+from .stinger import build_stinger_ass
 
 __all__ = [
     "ScoreFrame",
     "build_cinematic_intro_ass",
-    "build_full_match_badge_ass",
-    "build_highlight_badge_ass",
-    "build_intermission_card_ass",
     "build_intro_ass",
     "build_outro_card_ass",
     "build_scoreboard_ass",
     "build_scoreboard_ass_text",
     "build_slow_motion_badge_ass",
-    "build_transition_ass",
+    "build_stinger_ass",
 ]

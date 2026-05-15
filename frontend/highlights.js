@@ -1,7 +1,6 @@
-// Highlight reel ops + list UI. Highlights store source-time ranges;
-// the renderer pulls them in order to build the highlight reel mp4
-// AND inserts a 50%-speed replay of each into the main render at the
-// matching real-time point.
+// Highlight ops + list UI. Highlights store source-time ranges; the
+// renderer splices a 50%-speed replay of each into the main render at
+// the matching real-time point.
 import { $ } from './dom.js';
 import { fmt, parseTimecode } from './timecode.js';
 import { mut, project, snapshot } from './state.js';

@@ -11,11 +11,10 @@ import pytest
 from backend.ass import (
     ScoreFrame,
     build_cinematic_intro_ass,
-    build_full_match_badge_ass,
-    build_highlight_badge_ass,
     build_intro_ass,
     build_scoreboard_ass,
-    build_transition_ass,
+    build_slow_motion_badge_ass,
+    build_stinger_ass,
 )
 
 
@@ -148,30 +147,77 @@ def test_cinematic_intro_singles_skips_team_text(out: Path):
     assert "TX" not in text
 
 
-# ---------- badges + transition --------------------------------------------
+# ---------- badges ----------------------------------------------------------
 
 
-def test_highlight_badge(out: Path):
-    build_highlight_badge_ass(output_path=out, video_w=1920, video_h=1080)
+def test_slow_motion_badge_with_ranges(out: Path):
+    build_slow_motion_badge_ass(
+        output_path=out, video_w=1920, video_h=1080,
+        show_ranges=[(1.0, 3.5), (10.0, 12.0)],
+    )
     text = out.read_text(encoding="utf-8")
     assert _has_ass_skeleton(text)
-    assert "HIGHLIGHT" in text
+    assert "SLOW MOTION" in text
 
 
-def test_full_match_badge(out: Path):
-    build_full_match_badge_ass(output_path=out, video_w=1920, video_h=1080)
+def test_slow_motion_badge_empty_ranges(out: Path):
+    # No ranges → header-only file, but still a valid .ass so ffmpeg's
+    # `ass=` filter doesn't choke on a zero-line input.
+    build_slow_motion_badge_ass(
+        output_path=out, video_w=1920, video_h=1080, show_ranges=[],
+    )
     text = out.read_text(encoding="utf-8")
     assert _has_ass_skeleton(text)
-    assert "FULL MATCH" in text
+    assert "Dialogue:" not in text
 
 
-def test_transition_writes_dialogue(out: Path):
-    build_transition_ass(output_path=out, video_w=1920, video_h=1080)
+# ---------- stinger ---------------------------------------------------------
+
+
+def test_stinger_ass_renders_channel_name_and_replay(out: Path):
+    build_stinger_ass(
+        output_path=out, video_w=1920, video_h=1080,
+        duration=1.0,
+        channel_name="Nguyễn Bá Thảo",
+        replay_label="REPLAY",
+    )
     text = out.read_text(encoding="utf-8")
-    assert "[Script Info]" in text
-    # transition has its own minimal header (no fonts beyond Box)
-    assert "Style: Box" in text
-    assert "Dialogue:" in text
+    assert _has_ass_skeleton(text)
+    # libass-rendered text — Vietnamese diacritics preserved in the
+    # .ass source (drawtext would have rendered boxes for these glyphs).
+    assert "Nguyễn Bá Thảo" in text
+    assert "REPLAY" in text
+    # Glow shape + channel + replay → at least 3 Dialogue lines.
+    assert text.count("Dialogue:") >= 3
+
+
+def test_stinger_ass_omits_empty_channel_name(out: Path):
+    build_stinger_ass(
+        output_path=out, video_w=1920, video_h=1080,
+        duration=1.0,
+        channel_name="",
+        replay_label="REPLAY",
+    )
+    text = out.read_text(encoding="utf-8")
+    # No channel-name Dialogue line, but glow + replay still present.
+    assert "ChannelName" not in text or "Style: ChannelName" in text
+    # Channel-name Dialogue lines should be absent.
+    assert "Dialogue: 1," in text  # at least one Dialogue at layer 1 (REPLAY)
+    # Sanity: REPLAY still appears.
+    assert "REPLAY" in text
+
+
+def test_stinger_ass_handles_empty_replay_label(out: Path):
+    build_stinger_ass(
+        output_path=out, video_w=1920, video_h=1080,
+        duration=1.0,
+        channel_name="Test Channel",
+        replay_label="",
+    )
+    text = out.read_text(encoding="utf-8")
+    assert "Test Channel" in text
+    # No REPLAY text emitted when label is blank.
+    assert "REPLAY" not in text
 
 
 # ---------- scaling ---------------------------------------------------------

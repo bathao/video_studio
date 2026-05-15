@@ -544,7 +544,7 @@ def start_render(req: RenderRequest) -> dict:
         project_name=name,
         include_intro=req.include_intro,
         intro_style=req.intro_style,
-        include_highlights=req.include_highlights,
+        include_replays=req.include_replays,
         include_main=req.include_main,
         output_name=req.output_name,
     )

@@ -9,6 +9,10 @@ temp/
 output/*.mp4
 videos/*
 projects/*.json
+# auto-generated stinger cache (regenerated per-resolution from logo + config)
+assets/branding/stinger_*.mp4
+assets/branding/stinger_*.ass
+assets/branding/_stinger_*
 
 # editor
 .vscode/

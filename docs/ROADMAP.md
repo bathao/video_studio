@@ -10,8 +10,9 @@ A single operator on Windows + RTX 5060 Ti can:
 
 1. Drop a tripod recording into `videos/`.
 2. Watch the match, scoring with `A` / `D` and tagging highlights with `H`.
-3. Hit **Render** and get back an MP4 with intro + slow-mo highlight reel
-    + main match with a burned-in scoreboard.
+3. Hit **Render** and get back an MP4 with intro + main match (with
+    burned-in scoreboard and inline slow-mo replays of every highlight)
+    + outro card.
 
 This works end-to-end and has been validated on a synthetic 1080p sample
 in 1.74 s (20 s input). Real 2K / multi-GB validation is the next gate.
@@ -52,8 +53,14 @@ Goal: output looks like an amateur broadcast feed, not a screen recording.
 - Theme presets for the scoreboard (palette per tournament).
 - Animated transitions: fade between sets, slide-in for the scoreboard
    panel, "POINT WON" flash on score change.
+- ~~Branded sting framing each slow-mo replay (`brand_color` + logo +
+   swoosh).~~ ✅ shipped 2026-05-15 as the auto-stinger generator —
+   `backend/stinger_builder.py`.
+- ~~Optional intro music file in `assets/intro.mp3`.~~ ✅ shipped — the
+   `music_input_args` / `music_filter_chain` helpers in
+   `ffmpeg_runner.py` wire mp3 beds into intro / outro / slow-mo replay
+   with shared loop + cap + fade.
 - Optional commentary track import (mix in user-supplied audio file).
-- Optional intro music file in `assets/intro.mp3`.
 
 ## v0.5 — Multi-clip + asset library (target: +2 months)
 

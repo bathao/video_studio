@@ -94,30 +94,10 @@ class Config:
     def intro_sound_volume(self) -> float:
         return float(self._data.get("intro_sound_volume", 0.7))
 
-    # ------------------------------------------------------------------
-    # Intermission card — typography bridge between highlight reel and
-    # main match. When enabled, replaces the 0.8 s gold-sweep transition
-    # (see backend/ass/transition.py) and suppresses the FULL MATCH
-    # top-left badge in the main render so the headline doesn't read as
-    # duplicated.
-    # ------------------------------------------------------------------
-
-    @property
-    def intermission_enabled(self) -> bool:
-        return bool(self._data.get("intermission_enabled", True))
-
-    @property
-    def intermission_text(self) -> str:
-        return (self._data.get("intermission_text") or "FULL MATCH").strip() or "FULL MATCH"
-
-    @property
-    def intermission_duration_seconds(self) -> float:
-        return float(self._data.get("intermission_duration_seconds", 3.0))
-
     def _optional_asset(self, key: str) -> Path | None:
         """Resolve a config-supplied asset path, returning None when the
-        value is missing OR the file doesn't exist. Used by the
-        intermission renderer to gracefully fall back to a solid-colour
+        value is missing OR the file doesn't exist. Used by the outro
+        and music-bed paths to gracefully fall back to a solid-colour
         background / silent audio when the operator hasn't dropped real
         assets in yet."""
         raw = self._data.get(key)
@@ -127,18 +107,6 @@ class Config:
         if not p.is_absolute():
             p = ROOT_DIR / p
         return p if p.exists() and p.is_file() else None
-
-    @property
-    def intermission_bg_path(self) -> Path | None:
-        return self._optional_asset("intermission_bg_path")
-
-    @property
-    def intermission_sound_path(self) -> Path | None:
-        return self._optional_asset("intermission_sound_path")
-
-    @property
-    def intermission_sound_volume(self) -> float:
-        return float(self._data.get("intermission_sound_volume", 0.7))
 
     # ------------------------------------------------------------------
     # Outro card — 5-second closing card appended after main.mp4. The
@@ -185,6 +153,61 @@ class Config:
     @property
     def replay_sound_volume(self) -> float:
         return float(self._data.get("replay_sound_volume", 0.7))
+
+    # ------------------------------------------------------------------
+    # Auto-stinger — branded transition clip that brackets every slow-mo
+    # replay in the main render. Forward clip is rendered once per
+    # (W, H, fps) and cached in assets/branding/; OUT clip is the
+    # time-reverse. Operator deletes the cached files to force regen
+    # after changing brand colour / logo / text.
+    # ------------------------------------------------------------------
+
+    @property
+    def stinger_enabled(self) -> bool:
+        return bool(self._data.get("stinger_enabled", True))
+
+    @property
+    def stinger_duration_seconds(self) -> float:
+        """IN-stinger duration (before replay). The IN clip carries the
+        full reveal animation + channel name + REPLAY hold."""
+        return float(self._data.get("stinger_duration_seconds", 1.5))
+
+    @property
+    def stinger_out_duration_seconds(self) -> float:
+        """OUT-stinger duration (after replay). Shorter than IN by
+        default because the viewer just saw the replay — a fast wipe
+        back to live action reads better than a second long hold.
+        Default 0.6 s."""
+        return float(self._data.get("stinger_out_duration_seconds", 0.6))
+
+    @property
+    def brand_color(self) -> str:
+        return str(self._data.get("brand_color", "#FF5722")).strip() or "#FF5722"
+
+    @property
+    def stinger_text(self) -> str:
+        return str(self._data.get("stinger_text", "")).strip()
+
+    @property
+    def channel_name(self) -> str:
+        """Operator's YouTube channel name (Vietnamese diacritics OK —
+        libass handles them). Shown centred below the logo on each
+        stinger transition. Empty → no channel line."""
+        return str(self._data.get("channel_name", "")).strip()
+
+    @property
+    def stinger_replay_label(self) -> str:
+        """Small accent-coloured tag below the channel name. Default
+        "REPLAY"; empty → no label line."""
+        return str(self._data.get("stinger_replay_label", "REPLAY")).strip()
+
+    @property
+    def brand_logo_path(self) -> Optional[Path]:
+        return self._optional_asset("brand_logo_path")
+
+    @property
+    def stinger_sound_path(self) -> Optional[Path]:
+        return self._optional_asset("stinger_sound_path")
 
 
 config = Config()
