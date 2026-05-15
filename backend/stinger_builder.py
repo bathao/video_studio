@@ -125,7 +125,6 @@ def _build_manifest(
     height: int,
     fps: float,
     brand_color: str,
-    text: str,
     channel_name: str,
     replay_label: str,
     logo_path: Optional[Path],
@@ -136,12 +135,11 @@ def _build_manifest(
     """Snapshot of every input that affects the rendered stinger
     pixels. Two snapshots compare equal iff a cache hit is safe."""
     return {
-        "version": 1,
+        "version": 2,
         "width": int(width),
         "height": int(height),
         "fps": int(round(fps)),
         "brand_color": brand_color,
-        "stinger_text": text,
         "channel_name": channel_name,
         "stinger_replay_label": replay_label,
         "brand_logo_path": str(logo_path) if logo_path is not None else None,
@@ -177,7 +175,6 @@ def get_or_build_stinger_pair(
     in_duration: float,
     out_duration: float,
     brand_color: str,
-    text: str,
     logo_path: Optional[Path],
     sound_path: Optional[Path],
     bg_frame_provider: Optional[Callable[[], Optional[Path]]] = None,
@@ -216,7 +213,7 @@ def get_or_build_stinger_pair(
 
     current_manifest = _build_manifest(
         width=width, height=height, fps=fps,
-        brand_color=brand_color, text=text,
+        brand_color=brand_color,
         channel_name=channel_name, replay_label=replay_label,
         logo_path=resolved_logo, sound_path=sound_path,
         in_duration=in_duration, out_duration=out_duration,

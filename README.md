@@ -189,9 +189,6 @@ Edit `config.json`:
   libass shaping). Empty → no line. Only renders on IN.
 - `stinger_replay_label` — accent-gold line below the channel name,
   default `"REPLAY"`. Renders as `▶ <label>`. Empty → no line.
-- `stinger_text` — legacy config key, currently unused in the renderer
-  (channel_name + stinger_replay_label replaced it). Kept in config
-  for backwards compatibility; safe to ignore.
 - `brand_logo_path` — image overlaid centred on the brand bar
   (circular alpha mask + fade-in applied at render time). Accepts
   `.png` / `.jpg` / `.jpeg` / `.webp`. Default

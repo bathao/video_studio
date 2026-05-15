@@ -76,7 +76,7 @@ class Config:
 
     @property
     def intro_duration_seconds(self) -> float:
-        return float(self._data.get("intro_duration_seconds", 6.0))
+        return float(self._data.get("intro_duration_seconds", 4.0))
 
     @property
     def intro_avatar_size_px(self) -> int:
@@ -183,10 +183,6 @@ class Config:
     @property
     def brand_color(self) -> str:
         return str(self._data.get("brand_color", "#FF5722")).strip() or "#FF5722"
-
-    @property
-    def stinger_text(self) -> str:
-        return str(self._data.get("stinger_text", "")).strip()
 
     @property
     def channel_name(self) -> str:

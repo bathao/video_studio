@@ -105,11 +105,12 @@ render started splicing a full 50% replay after every highlight.)
       diagonal light streak, circular-masked logo, channel name +
       "▶ REPLAY" label, vignette. OUT clip (default 0.6 s) is a
       no-text variant rendered separately at the OUT duration then
-      time-reversed → quick wipe back to live action. Cached per
-      `(source × W × H × fps)` in `assets/branding/`; spec change
-      auto-regenerates. Operator deletes the 2 mp4 files to force
-      rebuild after changing `brand_color` / `brand_logo_path` /
-      `channel_name` / `stinger_text` / `stinger_replay_label`.
+      time-reversed → quick wipe back to live action. Cached as
+      `assets/branding/stinger_{in,out}.mp4` + `stinger.manifest.json`;
+      manifest captures every input that affects pixels (W/H/fps,
+      brand_color, channel_name, replay_label, in/out durations,
+      logo + sound paths + mtimes), so editing the logo or sound in
+      place auto-invalidates the cache. No manual delete needed.
       Score events shifted by `replay_dur + in_dur + out_dur` past
       each replay so the scoreboard stays in sync.
 - ✅ Slow-mo replay music: single mp3 (`replay_sound_path`, defaults
@@ -193,7 +194,8 @@ render started splicing a full 50% replay after every highlight.)
 - ✅ Docs index (this folder)
 - ✅ Pytest suite for pure logic (segment math, text helpers,
       avatar lookup, scoreboard event walk, builder smoke tests, main
-      playlist + stinger bracket + event remap). 93 tests, runs in
+      playlist + stinger bracket + event remap + intro photo gate +
+      stinger cache). 109 tests, runs in
       <0.2 s. Configured in `pyproject.toml`,
       basetemp pinned to `temp/pytest/` to dodge sandbox-denied
       access on the user-temp dir.

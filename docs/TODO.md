@@ -26,19 +26,19 @@ indicator: 🟢 quick (<1h), 🟡 medium (~half-day), 🔴 large (1+ day).
 - [ ] 🟢 Pin Python version in `pyproject.toml` (currently bare requirements.txt).
 - [x] 🟢 Add `pytest` smoke tests for `kept_segments_from_trims`,
       `remap_score_event_to_trimmed`, and `_detect_active`. Done —
-      93 tests in `tests/`, includes segment math + scoreboard event
-      walk + main playlist + stinger bracket + event remap.
+      109 tests in `tests/`, includes segment math + scoreboard event
+      walk + main playlist + stinger bracket + event remap + intro
+      photo gate + stinger cache.
 - [ ] 🟡 Add a `--dry-run` mode to the renderer that prints the full
       ffmpeg command instead of executing.
 - [ ] 🟡 GitHub Actions: lint (ruff) + import-check on push.
 
 ## Bugs / questions
 
-- [ ] 🟢 `drawtext` on the intro card AND the auto-stinger clip uses
-      no `fontfile=` — relies on ffmpeg's default font lookup which can
-      fail on some Windows builds, and likely won't render Vietnamese
-      diacritics in `stinger_text`. Add a bundled font in `assets/` and
-      reference it explicitly from both call sites.
+- [ ] 🟢 `drawtext` on the intro card uses no `fontfile=` — relies on
+      ffmpeg's default font lookup which can fail on some Windows
+      builds. Add a bundled font in `assets/` and reference it
+      explicitly. (Stinger text is libass-rendered, already safe.)
 - [ ] 🟢 If user names contain `'` (apostrophe), the .ass escape may
       double-escape inside `Dialogue:` lines. Add a unit test.
 - [ ] 🟡 NVDEC session limit on consumer GPUs is ~8. The main render
@@ -51,30 +51,25 @@ indicator: 🟢 quick (<1h), 🟡 medium (~half-day), 🔴 large (1+ day).
 Surfaced when reviewing the codebase after the auto-stinger ship. None
 are urgent — just consolidating before the next feature.
 
-- [ ] 🟢 **Drop dead `stinger_text` plumbing.** Config key
-      (`config.json:31`), property (`backend/config.py:180-181`), and
-      param threaded through `get_or_build_stinger_pair` are never
-      rendered — `channel_name` + `stinger_replay_label` replaced this
-      role. Either delete the key + param + README mention (preferred,
-      reduces config surface), or wire it into `ass/stinger.py` as a
-      third text line. README currently flags it as "legacy, unused".
-- [ ] 🟢 **Retire `docs/CINEMATIC_INTRO_PLAN.md`.** The cinematic intro
-      shipped long ago; the doc still describes a 5–8 s clip
-      "transitioning smoothly into the highlight reel" — both stale.
-      Move to `docs/archive/` (keep history) or delete.
-- [ ] 🟢 **Sync `intro_duration_seconds` defaults.** `backend/config.py:79`
-      falls back to `6.0`, `config.json:15` sets `4.0`. config.json
-      wins at runtime but a dev reading `config.py` gets confused.
-      Make the property default `4.0`.
-- [ ] 🟢 **`outro_bg_path` points at a missing file.** `config.json:23`
-      = `assets/backgrounds/outro_bg.jpg`; that directory doesn't
-      exist. `_optional_asset` returns None gracefully so the
-      `gblur(last frame of main)` fallback runs — but config implies
-      an asset that isn't shipped. Either drop the key (rely on the
-      frame-extraction fallback only) or ship a real bg jpg.
-- [ ] 🟡 **Test gaps** identified during the audit:
-      - No test covers the doubles-intro fallback (< 4 photos →
-        text intro) in `_intro_stage` (`backend/renderer.py:959-963`).
-      - No test covers `get_or_build_stinger_pair` cache-hit path
-        (re-call with same args returns existing paths without
-        re-rendering). Pure playlist + remap math is well covered.
+- [x] 🟢 **Drop dead `stinger_text` plumbing.** Removed config key,
+      property, builder param, manifest field, README/CLAUDE mentions.
+      Manifest version bumped 1→2 so the prior cached snapshot is
+      invalidated cleanly.
+- [x] 🟢 **Retire `docs/CINEMATIC_INTRO_PLAN.md`.** Deleted (history
+      preserved in git). Removed references in `docs/README.md` and
+      `CLAUDE.md`.
+- [x] 🟢 **Sync `intro_duration_seconds` defaults.** Property default
+      now matches `config.json` at `4.0`.
+- [x] 🟢 **`outro_bg_path` points at a missing file.** Cleared to
+      `""` in config.json so it matches the `channel_name`
+      "empty knob" convention. Renders still get the freeze-frame
+      fallback via `_outro_stage`. CLAUDE.md reworded to call out
+      that `assets/backgrounds/` is operator-created on demand.
+- [x] 🟡 **Test gaps** identified during the audit:
+      - Doubles-intro fallback: gate extracted as
+        `all_intro_photos_present` + 8 cases in `test_intro_fallback.py`.
+      - Stinger cache-hit: 8 cases in `test_stinger_cache.py` covering
+        first-call render, cache hit, brand/resolution/duration/channel
+        change invalidation, logo-mtime invalidation, and stale-cache
+        recovery. Renderers stubbed via monkeypatch so the suite stays
+        pure-Python (no ffmpeg execution).

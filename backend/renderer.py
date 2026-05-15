@@ -925,6 +925,18 @@ def _prepare_context(plan: RenderPlan) -> RenderContext:
     )
 
 
+def all_intro_photos_present(
+    is_doubles: bool,
+    photos: dict[str, tuple[Optional[Path], bool]],
+) -> bool:
+    """Return True iff every avatar slot the intro needs has a resolved
+    path. Singles needs `p1` + `p2`; doubles needs `p1`-`p4`. A missing
+    slot (or one whose tuple's path is None) blocks the cinematic intro
+    and forces fallback to the libass title card."""
+    required = ("p1", "p2", "p3", "p4") if is_doubles else ("p1", "p2")
+    return all(photos.get(slot, (None, False))[0] is not None for slot in required)
+
+
 def _intro_stage(ctx: RenderContext) -> None:
     """Render the intro card. Cinematic when every player has an avatar
     on disk (or falls back to the shipped placeholder) and intro_style
@@ -957,10 +969,7 @@ def _intro_stage(ctx: RenderContext) -> None:
             photos["p3"] = find_avatar_or_default(info.p3)
             photos["p4"] = find_avatar_or_default(info.p4)
 
-    required_slots = ("p1", "p2", "p3", "p4") if is_doubles else ("p1", "p2")
-    have_all_photos = use_cinematic and all(
-        photos.get(slot, (None, False))[0] is not None for slot in required_slots
-    )
+    have_all_photos = use_cinematic and all_intro_photos_present(is_doubles, photos)
 
     if use_cinematic and have_all_photos:
         render_cinematic_intro(
@@ -1063,7 +1072,6 @@ def _main_stage(ctx: RenderContext) -> None:
             in_duration=stinger_in_dur,
             out_duration=stinger_out_dur,
             brand_color=config.brand_color,
-            text=config.stinger_text,
             logo_path=find_brand_logo(),
             sound_path=config.stinger_sound_path,
             bg_frame_provider=_extract_stinger_bg,

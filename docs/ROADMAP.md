@@ -24,11 +24,12 @@ Each slow-mo replay in main is bracketed by a branded sting clip
    Output is now strictly intro → main (with inline slow-mo replays
    bracketed by stingers) → outro.
 
-Config: `brand_color`, `brand_logo_path`, `stinger_text`,
-`channel_name`, `stinger_replay_label`, `stinger_duration_seconds`,
+Config: `brand_color`, `brand_logo_path`, `channel_name`,
+`stinger_replay_label`, `stinger_duration_seconds`,
 `stinger_out_duration_seconds`, `stinger_sound_path`.
 
-Tests: 93 passing.
+Tests: 109 passing (post-v1.5 cleanup added the intro photo-gate
++ stinger cache-hit suites).
 
 ## v1.4 — Audio beds (2026-05-13)
 
@@ -112,7 +113,7 @@ Early commits before tagging discipline. Notable ones:
    main.
 - ASS-builder package split (`backend/ass/`) + frontend split into ES6
    modules (`frontend/*.js`).
-- pytest suite added (currently 93 tests across 6 files).
+- pytest suite added (currently 109 tests across 8 files).
 
 ## Non-goals (deliberately out of scope)
 

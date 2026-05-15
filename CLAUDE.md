@@ -120,14 +120,17 @@ frontend/
 
 assets/avatars/      Player photos as flat files: <Name>.{png,jpg,jpeg,webp}
                      `_default.jpg` ships as the placeholder silhouette.
-assets/backgrounds/  Optional `outro_bg.jpg` used when `_outro_stage`
-                     can't extract main's last frame (or when the
-                     operator wants a fixed bg).
+assets/backgrounds/  Operator-created on demand. Drop an image here
+                     and point `config.outro_bg_path` at it to override
+                     the freeze-frame outro bg. Empty config → freeze
+                     frame; freeze-frame extraction fails → solid dark.
 assets/branding/     `logo.png` / `logo.jpg` (operator-supplied) +
-                     auto-generated `stinger_in_{W}x{H}_{fps}.mp4` and
-                     `stinger_out_*.mp4` cache files. Delete cache to
-                     regenerate after changing brand_color / logo /
-                     stinger_text.
+                     auto-generated `stinger_in.mp4` / `stinger_out.mp4`
+                     + `stinger.manifest.json` cache files. The manifest
+                     captures every input that affects pixels (resolution,
+                     fps, brand_color, channel_name, replay_label, logo +
+                     sound mtimes, in/out durations); cache is reused iff
+                     the manifest snapshot matches.
 assets/sounds/       Optional music beds, all wired through the shared
                      `music_input_args` + `music_filter_chain` helpers
                      (loop + cap + volume + afade in/out). Defaults:
@@ -146,7 +149,7 @@ config.json          Encoder + paths + intro tuning. See ConfigClass
                      in backend/config.py for accepted keys.
 
 docs/
-  PROGRESS.md, TODO.md, ROADMAP.md, CINEMATIC_INTRO_PLAN.md
+  PROGRESS.md, TODO.md, ROADMAP.md, README.md
 ```
 
 ## Render pipeline at a glance
@@ -226,14 +229,15 @@ progress fraction stays correct as stages advance.
   `total_duration` must use the post-replay, post-stinger value, not
   the trimmed-source sum.
 
-- **Stinger pair is cached per (W, H, fps).** `get_or_build_stinger_pair`
-  in `backend/stinger_builder.py` writes `assets/branding/stinger_in_*.mp4`
-  + `stinger_out_*.mp4` once and reuses them for every subsequent render
-  with matching spec. Cache key is encoded in the filename so resolution
-  / fps change → fresh files generated. To change brand_color, logo,
-  or stinger_text, the operator deletes the cached files manually.
-  The cached mp4s are gitignored (`assets/branding/stinger_*.mp4`) so
-  they don't leak into the repo.
+- **Stinger pair is manifest-cached.** `get_or_build_stinger_pair`
+  in `backend/stinger_builder.py` writes `assets/branding/stinger_in.mp4`
+  + `stinger_out.mp4` + a sibling `stinger.manifest.json`. The manifest
+  records every input that affects pixels (W/H/fps, brand_color,
+  channel_name, replay_label, in/out durations, logo + sound paths +
+  mtimes). On the next render the manifest is rebuilt and compared by
+  exact equality — cache hit returns the existing mp4s untouched; any
+  drift triggers a rebuild. Editing the logo or sound file in place is
+  detected via mtime. All three cache files are gitignored.
 
 - **Stinger logo auto-detects.** `find_brand_logo()` in
   `backend/stinger_builder.py` prefers `config.brand_logo_path` when
@@ -305,7 +309,7 @@ progress fraction stays correct as stages advance.
 ## Don't
 
 - Don't add tests next to the modules; if you add tests put them in a
-  `tests/` directory. ~93 tests live there; pure-logic only (segment
+  `tests/` directory. ~109 tests live there; pure-logic only (segment
   math, builder smoke, playlist + remap), no ffmpeg execution.
 
 - Don't commit videos, project JSONs, output mp4s, or temp/. They're
@@ -340,7 +344,7 @@ progress fraction stays correct as stages advance.
 | Slow-mo replay music                 | `replay_sound_path` / `replay_sound_volume` in [config.json](config.json); resolved via `config.replay_sound_path` and consumed by `render_main_with_scoreboard` in [backend/renderer.py](backend/renderer.py) |
 | SLOW MOTION badge                    | `build_slow_motion_badge_ass` in [backend/ass/badges.py](backend/ass/badges.py) |
 | Auto-stinger generation              | `get_or_build_stinger_pair` in [backend/stinger_builder.py](backend/stinger_builder.py) |
-| Brand identity (color / logo / text) | [config.json](config.json) `brand_color` / `brand_logo_path` / `stinger_text` / `stinger_duration_seconds` / `stinger_sound_path` |
+| Brand identity (color / logo / channel name) | [config.json](config.json) `brand_color` / `brand_logo_path` / `channel_name` / `stinger_replay_label` / `stinger_duration_seconds` / `stinger_sound_path` |
 | Score logic (replay, set wins)       | [frontend/score.js](frontend/score.js) — `recomputeAllEvents`, `scorePoint` |
 | Avatar lookup rules                  | [backend/avatars.py](backend/avatars.py) |
 | Render-time pipeline orchestration   | `_intro_stage` / `_main_stage` / `_outro_stage` / `_finalize` in [backend/renderer.py](backend/renderer.py) |
