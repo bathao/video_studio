@@ -123,6 +123,25 @@ export function scorePoint(who) {
   }
 }
 
+// Remove the most recent scoring event for `who` at-or-before the
+// current playback time. Lets the operator correct a misclick without
+// hunting in the events list. Falls back to a toast when there's
+// nothing to undo for that player in the visible timeline.
+export function unscorePoint(who) {
+  const player = $('player');
+  let target = -1;
+  for (let i = project.score_events.length - 1; i >= 0; i -= 1) {
+    const ev = project.score_events[i];
+    if (ev.timestamp > player.currentTime) continue;
+    if (ev.who === who) { target = i; break; }
+  }
+  if (target < 0) {
+    toast(`No P${who} points to remove`);
+    return;
+  }
+  deleteScoreEvent(target);
+}
+
 export function deleteScoreEvent(idx) {
   if (idx < 0 || idx >= project.score_events.length) return;
   const player = $('player');
@@ -181,6 +200,8 @@ export function syncEvents() {
 // Wire score-panel buttons.
 $('btn-p1').addEventListener('click', () => scorePoint(1));
 $('btn-p2').addEventListener('click', () => scorePoint(2));
+$('btn-p1-minus').addEventListener('click', () => unscorePoint(1));
+$('btn-p2-minus').addEventListener('click', () => unscorePoint(2));
 
 // Disable the score buttons once the video has played to the end —
 // scoring there pushes an event at `timestamp = duration` which never

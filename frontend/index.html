@@ -181,11 +181,13 @@
                 <div class="text-warn-400 text-xs">Sets: <span id="set-p2">0</span></div>
               </div>
             </div>
-            <div class="grid grid-cols-3 gap-2 mt-2">
+            <div class="grid grid-cols-2 gap-2 mt-2">
               <button id="btn-p1" class="btn-score" title="A">+ P1</button>
-              <button id="btn-undo" class="btn-secondary" title="Ctrl+Z">Undo</button>
               <button id="btn-p2" class="btn-score" title="D">+ P2</button>
+              <button id="btn-p1-minus" class="btn-score-minus" title="Remove last P1 point">− P1</button>
+              <button id="btn-p2-minus" class="btn-score-minus" title="Remove last P2 point">− P2</button>
             </div>
+            <button id="btn-undo" class="btn-secondary w-full mt-2" title="Ctrl+Z">Undo</button>
             <p class="text-[11px] text-slate-500 mt-1.5 leading-snug">Auto rule: 11 pts, lead by 2. Set won → score resets to 0-0.</p>
           </section>
 

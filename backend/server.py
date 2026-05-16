@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -133,6 +134,99 @@ def _resolve_inside(base: Path, name: str) -> Path:
     if base_resolved not in candidate.parents and candidate != base_resolved:
         raise HTTPException(status_code=400, detail="Path escapes base directory")
     return candidate
+
+
+# PowerShell payload for `_open_or_focus_explorer`: enumerate currently
+# open Explorer windows via Shell.Application COM, compare each one's
+# displayed folder to the target, and bring the match to the foreground
+# instead of spawning a duplicate window. Falls through to a fresh
+# explorer.exe launch (with `/select,` when a file is given) if nothing
+# matches.
+#
+# Parameters are passed in via environment variables (VS_OPEN_TARGET +
+# VS_OPEN_SELECT) so quoting is never an issue. The here-string for
+# Add-Type is single-quoted (literal) — its closing '@ MUST stay at
+# column 0 or PowerShell errors out on the parse.
+_FOCUS_EXPLORER_PS = r"""
+$ErrorActionPreference = 'Stop'
+$target = $env:VS_OPEN_TARGET
+$selectMode = ($env:VS_OPEN_SELECT -eq '1')
+if (-not $target) { exit 2 }
+
+$resolved = [System.IO.Path]::GetFullPath($target).TrimEnd('\')
+$folderPath = if ($selectMode) { [System.IO.Path]::GetDirectoryName($resolved) } else { $resolved }
+$folderPath = $folderPath.TrimEnd('\')
+
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class VsWin {
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
+}
+'@
+
+$shell = New-Object -ComObject Shell.Application
+$found = $null
+foreach ($w in @($shell.Windows())) {
+  try {
+    if ($w.FullName -notlike '*\explorer.exe') { continue }
+    $p = $w.Document.Folder.Self.Path
+    if ([string]::IsNullOrEmpty($p)) { continue }
+    $abs = [System.IO.Path]::GetFullPath($p).TrimEnd('\')
+    if ([string]::Equals($abs, $folderPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+      $found = $w
+      break
+    }
+  } catch { continue }
+}
+
+if ($found) {
+  $hwnd = [IntPtr]$found.HWND
+  if ([VsWin]::IsIconic($hwnd)) { [void][VsWin]::ShowWindow($hwnd, 9) }
+  [void][VsWin]::SetForegroundWindow($hwnd)
+  exit 0
+}
+
+if ($selectMode) {
+  Start-Process explorer.exe -ArgumentList "/select,`"$resolved`""
+} else {
+  Start-Process explorer.exe -ArgumentList "`"$resolved`""
+}
+exit 0
+"""
+
+
+def _open_or_focus_explorer(target: Path, *, select: bool) -> None:
+    """Bring an existing Explorer window for `target`'s folder to the
+    foreground; only spawn a new window if none is already showing it.
+
+    `select=True` mirrors `explorer /select,<file>` — the match is on
+    the file's parent directory, and the fallback launch selects the
+    file. Non-Windows hosts and PowerShell errors fall back to the
+    plain Popen-based launch so behaviour never regresses.
+    """
+    abs_target = str(Path(target).absolute())
+    if sys.platform != "win32":
+        subprocess.Popen(["explorer", abs_target])
+        return
+    try:
+        env = {
+            **os.environ,
+            "VS_OPEN_TARGET": abs_target,
+            "VS_OPEN_SELECT": "1" if select else "0",
+        }
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", _FOCUS_EXPLORER_PS],
+            env=env,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception:
+        if select:
+            subprocess.Popen(["explorer", f"/select,{abs_target}"])
+        else:
+            subprocess.Popen(["explorer", abs_target])
 
 
 # ---------- routes ----------------------------------------------------------
@@ -506,21 +600,17 @@ def fetch_output(name: str) -> FileResponse:
 @app.post("/api/output/{name}/reveal")
 def reveal_output(name: str) -> dict:
     """Open Windows Explorer with the file selected."""
-    import subprocess
     target = _resolve_inside(config.output_dir, name)
     if not target.exists():
         raise HTTPException(status_code=404, detail="Output not found")
-    # /select, expects the path immediately after; spaces in `target` are fine
-    # because we pass argv as a list (no shell parsing).
-    subprocess.Popen(["explorer", f"/select,{target}"])
+    _open_or_focus_explorer(target, select=True)
     return {"ok": True, "path": str(target)}
 
 
 @app.post("/api/output-folder/open")
 def open_output_folder() -> dict:
     """Open the output directory in Explorer."""
-    import subprocess
-    subprocess.Popen(["explorer", str(config.output_dir)])
+    _open_or_focus_explorer(Path(config.output_dir), select=False)
     return {"ok": True, "path": str(config.output_dir)}
 
 

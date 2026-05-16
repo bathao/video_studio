@@ -21,7 +21,10 @@
   @apply bg-ink-700 hover:bg-ink-600 px-3 py-1.5 rounded-md text-sm border border-ink-600;
 }
 .btn-score {
-  @apply bg-accent-500/20 border border-accent-500 hover:bg-accent-500/30 text-accent-400 font-bold px-2 py-2 rounded-md text-base disabled:opacity-40 disabled:cursor-not-allowed;
+  @apply bg-accent-500/20 border border-accent-500 hover:bg-accent-500/30 text-accent-400 font-bold px-2 py-5 rounded-md text-2xl disabled:opacity-40 disabled:cursor-not-allowed;
+}
+.btn-score-minus {
+  @apply bg-warn-400/10 border border-warn-400/60 hover:bg-warn-400/20 text-warn-400 font-semibold px-2 py-1 rounded-md text-xs disabled:opacity-40 disabled:cursor-not-allowed;
 }
 kbd {
   @apply bg-ink-700 border border-ink-600 rounded px-1.5 py-0.5 font-mono text-xs;
@@ -48,10 +51,14 @@ input[type="range"] {
 .btn-secondary:hover { background:#2a3140; }
 .btn-ctl { background:#1c222d; padding:0.4rem 0.75rem; border-radius:6px; font-size:0.85rem; border:1px solid #2a3140; }
 .btn-ctl:hover { background:#2a3140; }
-.btn-score { background:rgba(74,200,255,0.15); border:1px solid #1ea7e6; color:#4ac8ff; font-weight:700; padding:0.5rem; border-radius:6px; font-size:1rem; }
+.btn-score { background:rgba(74,200,255,0.15); border:1px solid #1ea7e6; color:#4ac8ff; font-weight:700; padding:1.25rem 0.5rem; border-radius:6px; font-size:1.5rem; }
 .btn-score:hover { background:rgba(74,200,255,0.25); }
 .btn-score:disabled { opacity:0.4; cursor:not-allowed; }
 .btn-score:disabled:hover { background:rgba(74,200,255,0.15); }
+.btn-score-minus { background:rgba(255,210,74,0.10); border:1px solid rgba(255,210,74,0.55); color:#ffd24a; font-weight:600; padding:0.25rem 0.5rem; border-radius:6px; font-size:0.7rem; }
+.btn-score-minus:hover { background:rgba(255,210,74,0.20); }
+.btn-score-minus:disabled { opacity:0.4; cursor:not-allowed; }
+.btn-score-minus:disabled:hover { background:rgba(255,210,74,0.10); }
 kbd { background:#1c222d; border:1px solid #2a3140; border-radius:4px; padding:0.05rem 0.35rem; font-family:ui-monospace, monospace; font-size:0.7rem; }
 .list-row { display:flex; align-items:center; gap:0.4rem; background:#141821; padding:0.4rem 0.5rem; border-radius:6px; font-size:0.7rem; border:1px solid #1c222d; }
 .list-row:hover { background:#1c222d; }
