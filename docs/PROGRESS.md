@@ -1,6 +1,6 @@
 # Progress Status
 
-Last update: 2026-05-15 (auto-stinger)
+Last update: 2026-05-16 (v2.0 — manual-mode final)
 
 ## Module map
 

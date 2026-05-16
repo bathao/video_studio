@@ -4,7 +4,36 @@ Where the project actually is, version by version. Anything beyond the
 latest tag is "not decided yet" — when an operator-facing feature gets
 planned, it gets a new section here.
 
-Currently shipped: **v1.6** (manifest-cached stingers + pipeline lock-in).
+Currently shipped: **v2.0** — final release of the manual-operator paradigm.
+
+## v2.0 — Manual-mode final release (2026-05-16)
+
+Closes out the manual-operator paradigm. No pipeline changes — just two
+operator-side polish items rolled up as the feature-complete snapshot
+before work pivots away from manual scoring.
+
+- **Live Score correction buttons.** −P1 / −P2 added under the +P1 /
+  +P2 pair in the Live Score panel. `unscorePoint(who)` walks events
+  backwards from the playback cursor and routes the deletion through
+  the existing `deleteScoreEvent` so undo / snapshot / recompute keep
+  working. +P and −P are sized asymmetrically — + is the dominant tap
+  target (24 px, py-5), − recedes (12 px, py-1) since corrections are
+  rare. Undo button moved to its own full-width row below the grid.
+- **Reuse open Explorer windows.** "Open output folder" and the
+  post-render "Reveal" button now route through
+  `_open_or_focus_explorer` in [backend/server.py](../backend/server.py).
+  A PowerShell helper enumerates live Explorer windows via
+  `Shell.Application` COM, compares each window's
+  `Document.Folder.Self.Path` to the target, and brings the matching
+  window to the foreground via P/Invoke `SetForegroundWindow` (with
+  `SW_RESTORE` if minimised). Spawns a new window only when nothing
+  matches. Parameters pass via env vars (`VS_OPEN_TARGET`,
+  `VS_OPEN_SELECT`) so Vietnamese paths and spaces never hit a
+  quoting edge. Non-Windows hosts and PS errors fall back to the
+  plain Popen launch.
+
+Tests: 109 passing (unchanged — both changes are pure UX wiring with
+no new pure-logic surface to test).
 
 ## v1.6 — Manifest cache + pipeline lock-in (2026-05-15)
 
