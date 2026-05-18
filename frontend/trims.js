@@ -7,6 +7,7 @@ import { mut, project, snapshot } from './state.js';
 import { player } from './player.js';
 import { syncTimeline } from './timeline.js';
 import { toast } from './toast.js';
+import { openAutoTrimModal } from './auto_trim_modal.js';
 
 export function markTrimStart() {
   if (!player.duration) return toast('Load a video first');
@@ -95,3 +96,4 @@ export function syncTrims() {
 $('btn-trim-start').addEventListener('click', markTrimStart);
 $('btn-trim-end').addEventListener('click', markTrimEnd);
 $('btn-add-tr-manual').addEventListener('click', addManualTrim);
+$('btn-auto-trim').addEventListener('click', openAutoTrimModal);

@@ -1,0 +1,10 @@
+{
+  "_comment": "ROI quadrilaterals per dataset entry, normalized 0-1 (x,y). 'tight' variants focus on table surface + immediate above (arms during rally) — excludes player body to reduce dead-time walking noise.",
+  "_order": "[top-left, top-right, bottom-right, bottom-left]",
+  "match_001_20260516_215553": [[0.22, 0.55], [0.60, 0.55], [0.62, 0.78], [0.20, 0.78]],
+  "match_001_20260516_223928": [[0.26, 0.57], [0.66, 0.57], [0.68, 0.78], [0.24, 0.78]],
+  "match_001_20260516_230801": [[0.22, 0.58], [0.60, 0.58], [0.62, 0.78], [0.20, 0.78]],
+  "_loose_match_001_20260516_215553": [[0.20, 0.52], [0.65, 0.52], [0.75, 0.98], [0.05, 0.98]],
+  "_loose_match_001_20260516_223928": [[0.25, 0.52], [0.68, 0.52], [0.75, 0.98], [0.08, 0.98]],
+  "_loose_match_001_20260516_230801": [[0.20, 0.52], [0.62, 0.52], [0.72, 0.98], [0.08, 0.98]]
+}

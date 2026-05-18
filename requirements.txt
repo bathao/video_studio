@@ -4,6 +4,20 @@ uvicorn[standard]==0.32.0
 python-multipart==0.0.12
 pydantic==2.9.2
 
+# Auto-trim feature: motion detection + ROI auto-detect. opencv-python
+# (~40 MB) includes numpy as transitive dep. Classical-CV stages still
+# rely on it even when YOLOv8 is available.
+opencv-python>=4.13.0
+
+# ROI auto-detect Phase B: YOLOv8-seg fine-tune for foreground-table
+# segmentation. Pulls torch (~700MB CUDA build) + ultralytics. Inference
+# is optional at import-time — `backend/roi_yolo.py` lazy-loads the
+# model only when `assets/models/roi_seg.pt` exists, so the project
+# still works on machines without the trained model checkpoint.
+# Training is operator-driven via `scripts/train_roi_seg.py` once
+# dataset/roi_groundtruth/ reaches ~25-30 confirmed examples.
+ultralytics>=8.3.0
+
 # Dev / test runner. Only needed when running the pytest suite; safe
 # to install everywhere since this is a single-operator tool with no
 # separate production deployment.

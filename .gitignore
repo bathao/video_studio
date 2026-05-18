@@ -7,14 +7,29 @@ __pycache__/
 # runtime artifacts
 temp/
 output/*.mp4
+output/*.groundtruth.json
+output/*.refframe.png
 videos/*
 projects/*.json
+dataset/
 # auto-generated stinger cache (regenerated when config / logo / spec changes)
 assets/branding/stinger_in.mp4
 assets/branding/stinger_out.mp4
 assets/branding/stinger.manifest.json
 assets/branding/stinger_*.ass
 assets/branding/_stinger_*
+
+# Phase B YOLOv8-seg artifacts. Trained model weights + training run
+# logs are operator-local; the source-of-truth is the dataset/roi_groundtruth/
+# confirms, from which any operator can re-train.
+assets/models/
+runs/
+# Pretrained YOLO base weights auto-downloaded by ultralytics at repo root.
+/yolo*.pt
+
+# Detector-development scratch dirs (overlay images, cached intermediates).
+scripts/_*/
+scripts/spike_out/
 
 # editor
 .vscode/

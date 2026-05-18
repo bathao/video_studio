@@ -1221,6 +1221,19 @@ def _finalize(ctx: RenderContext) -> None:
     s.message = "Render complete"
     s.output_path = str(final_path)
 
+    # Auto-export a labelled-ground-truth sidecar + reference frame for
+    # the auto-trim CV pipeline. Best-effort: failures append to
+    # s.message but don't fail the render.
+    from .groundtruth import export_groundtruth
+    export_groundtruth(ctx, final_path)
+
+    # Mirror everything (source + output + sidecars + project snapshot)
+    # into `dataset/<slug>/` so the manual workflow doubles as dataset
+    # accumulation. Reads the sidecar files written above so this MUST
+    # run after export_groundtruth. Same best-effort policy.
+    from .dataset import archive_to_dataset
+    archive_to_dataset(ctx, final_path)
+
     # Drop the per-job temp dir now that the final mp4 is safely in
     # output/. We only do this on success — on error we keep the
     # intermediate .ass / .mp4 / .concat.txt files so the operator

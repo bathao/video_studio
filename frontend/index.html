@@ -14,8 +14,9 @@
           colors: {
             ink: { 950: '#0a0c10', 900: '#0e1116', 800: '#141821', 700: '#1c222d', 600: '#2a3140', 500: '#3a4356' },
             accent: { 400: '#4ac8ff', 500: '#1ea7e6' },
-            warn: { 400: '#ffd24a' },
-            danger: { 500: '#ff5d6c' },
+            warn:    { 200: '#fef3c7', 300: '#fde68a', 400: '#ffd24a', 700: '#a16207', 900: '#5c3b00' },
+            success: { 400: '#4ade80', 500: '#22c55e' },
+            danger:  { 500: '#ff5d6c' },
           },
         },
       },
@@ -268,7 +269,10 @@
       <section class="panel">
         <div class="flex items-center justify-between">
           <h2 class="panel-h !mb-0">Trim <span class="text-slate-500 text-xs" id="tr-count">(0)</span></h2>
-          <button id="btn-add-tr-manual" class="btn-secondary text-xs">Add manual</button>
+          <div class="flex items-center gap-1.5">
+            <button id="btn-auto-trim" class="btn-secondary text-xs" title="Auto-detect dead time (Phase 1a: ROI confirmation only)">⚡ Auto Trim</button>
+            <button id="btn-add-tr-manual" class="btn-secondary text-xs">Add manual</button>
+          </div>
         </div>
         <ul id="tr-list" class="mt-2 space-y-1 max-h-[28rem] overflow-y-auto"></ul>
       </section>
@@ -281,6 +285,112 @@
 
   <!-- floating toast -->
   <div id="toast" class="fixed bottom-4 right-4 hidden bg-ink-800 border border-ink-600 px-4 py-2 rounded-md shadow-lg text-sm"></div>
+
+  <!-- auto-trim modal -->
+  <div id="modal-auto-trim" class="fixed inset-0 bg-black/80 hidden items-center justify-center z-40">
+    <div class="bg-ink-900 border border-ink-700 rounded-lg p-5 w-[95vw] h-[92vh] flex flex-col">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="text-lg font-semibold">Auto Trim — ROI calibration (Phase 1a)</h3>
+        <div class="flex items-center gap-2 text-xs text-slate-400">
+          <span id="at-roi-status" class="font-mono"></span>
+          <button id="at-close" class="btn-secondary text-xs">✕ Close</button>
+        </div>
+      </div>
+      <div class="mb-3 px-3 py-2 bg-warn-900/30 border border-warn-700/50 rounded-md text-[11px] text-warn-200">
+        <span class="font-semibold">⚠ Trim detection is DEFERRED.</span>
+        This modal only captures ROI groundtruth. Confirming saves the
+        4-corner table region to <code class="text-warn-300">project.info.roi_quadrilateral</code>
+        + appends to <code class="text-warn-300">dataset/roi_groundtruth/</code>.
+        Trim segments will NOT appear in the Trim panel yet — auto-trim logic
+        unlocks once ROI detection works on <span id="at-banner-need">10</span>+ different videos.
+      </div>
+
+      <div class="grid grid-cols-12 gap-4 flex-1 min-h-0">
+        <!-- left: canvas with refframe + ROI overlay -->
+        <div class="col-span-9 flex flex-col min-h-0">
+          <div class="flex items-center gap-2 mb-2">
+            <button id="at-redetect" class="btn-secondary text-xs">⟳ Re-detect</button>
+            <button id="at-reset-default" class="btn-secondary text-xs">↺ Default rect</button>
+            <span class="flex-1"></span>
+            <label class="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer">
+              <input type="checkbox" id="at-edit-mode" class="accent-accent-500" />
+              <span>Edit mode (drag corners)</span>
+            </label>
+          </div>
+          <div id="at-canvas-wrap" class="flex-1 min-h-0 bg-ink-950 rounded-md border border-ink-700 overflow-hidden relative">
+            <canvas id="at-canvas" class="w-full h-full block"></canvas>
+            <div id="at-canvas-empty" class="absolute inset-0 flex items-center justify-center text-slate-500 text-sm">
+              Load a video first, then press Auto Trim.
+            </div>
+            <div id="at-canvas-loading" class="absolute inset-0 hidden flex items-center justify-center bg-black/60 text-slate-200 text-sm font-mono">
+              Extracting refframe + running auto-detect...
+            </div>
+          </div>
+          <div class="mt-2 text-[11px] text-slate-500 font-mono" id="at-corner-readout">
+            corners: —
+          </div>
+          <!-- Per-corner zoom insets so operator can verify pixel alignment
+               against the table edge without needing a GT overlay reference. -->
+          <div class="mt-2 grid grid-cols-4 gap-2">
+            <div class="flex flex-col items-center gap-0.5">
+              <div class="text-[10px] text-slate-500 font-mono">TL · 3×</div>
+              <canvas id="at-zoom-tl" width="180" height="180" class="bg-ink-950 border border-ink-700 rounded w-full max-w-[180px] aspect-square"></canvas>
+            </div>
+            <div class="flex flex-col items-center gap-0.5">
+              <div class="text-[10px] text-slate-500 font-mono">TR · 3×</div>
+              <canvas id="at-zoom-tr" width="180" height="180" class="bg-ink-950 border border-ink-700 rounded w-full max-w-[180px] aspect-square"></canvas>
+            </div>
+            <div class="flex flex-col items-center gap-0.5">
+              <div class="text-[10px] text-slate-500 font-mono">BR · 3×</div>
+              <canvas id="at-zoom-br" width="180" height="180" class="bg-ink-950 border border-ink-700 rounded w-full max-w-[180px] aspect-square"></canvas>
+            </div>
+            <div class="flex flex-col items-center gap-0.5">
+              <div class="text-[10px] text-slate-500 font-mono">BL · 3×</div>
+              <canvas id="at-zoom-bl" width="180" height="180" class="bg-ink-950 border border-ink-700 rounded w-full max-w-[180px] aspect-square"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- right: info, controls, log -->
+        <div class="col-span-3 flex flex-col gap-3 min-h-0">
+          <section class="bg-ink-800 border border-ink-700 rounded-md p-3 text-xs">
+            <h4 class="text-slate-300 font-semibold mb-2">Detection</h4>
+            <dl class="space-y-1 font-mono text-[11px] text-slate-400">
+              <div class="flex justify-between"><dt>Video</dt><dd id="at-info-video" class="text-slate-200 truncate max-w-[10rem]" title="">—</dd></div>
+              <div class="flex justify-between"><dt>Method</dt><dd id="at-info-method" class="text-slate-200 truncate max-w-[10rem]" title="">—</dd></div>
+              <div class="flex justify-between"><dt>Confidence</dt><dd id="at-info-conf" class="text-slate-200">—</dd></div>
+              <div class="flex justify-between"><dt>Source</dt><dd id="at-info-source" class="text-slate-200">—</dd></div>
+            </dl>
+            <div id="at-info-nn" class="mt-2 pt-2 border-t border-ink-700 hidden">
+              <div class="text-slate-300 text-[11px] mb-1">Top similar groundtruth:</div>
+              <ul id="at-info-nn-list" class="font-mono text-[10px] text-slate-400 space-y-0.5"></ul>
+            </div>
+          </section>
+
+          <section class="bg-ink-800 border border-ink-700 rounded-md p-3 text-xs flex-1 min-h-0 flex flex-col">
+            <div class="flex items-center justify-between mb-2">
+              <h4 class="text-slate-300 font-semibold">Log</h4>
+              <button id="at-clear-log" class="text-slate-500 hover:text-slate-300 text-[10px]">clear</button>
+            </div>
+            <pre id="at-log" class="font-mono text-[10px] text-slate-400 flex-1 overflow-y-auto whitespace-pre-wrap m-0"></pre>
+          </section>
+
+          <section class="bg-ink-800 border border-ink-700 rounded-md p-3 text-xs">
+            <h4 class="text-slate-300 font-semibold mb-2">Groundtruth</h4>
+            <div class="font-mono text-[11px] text-slate-400">
+              Confirmed inputs: <span id="at-gt-count" class="text-slate-200">—</span>
+              <div class="text-[10px] text-slate-500 mt-1">Need ≥10 different videos to unlock Phase 1b.</div>
+            </div>
+          </section>
+
+          <div class="flex flex-col gap-2 pt-1">
+            <button id="at-confirm" class="btn-primary text-sm" disabled>✓ Confirm ROI</button>
+            <button id="at-cancel" class="btn-secondary text-sm">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- load project modal -->
   <div id="modal-load" class="fixed inset-0 bg-black/70 hidden items-center justify-center">

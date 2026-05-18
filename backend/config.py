@@ -47,6 +47,10 @@ class Config:
         return self.path("temp_dir")
 
     @property
+    def dataset_dir(self) -> Path:
+        return self.path("dataset_dir")
+
+    @property
     def assets_dir(self) -> Path:
         return self.path("assets_dir")
 

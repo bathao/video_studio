@@ -44,6 +44,9 @@ export const project = {
     p2_team: '',
     video_file: '',
     best_of: 5,
+    // 4 normalized [x, y] corners (TL, TR, BR, BL). null until the
+    // operator confirms ROI in the Auto-Trim modal at least once.
+    roi_quadrilateral: null,
   },
   trim_segments: [],
   highlights: [],

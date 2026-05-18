@@ -27,6 +27,12 @@ class ProjectInfo(BaseModel):
     # GAME POINT (next point wins this set) from MATCH POINT (next point
     # wins the entire match).
     best_of: int = 5
+    # 4 normalized [x, y] corners of the auto-trim ROI quadrilateral, ordered
+    # top-left → top-right → bottom-right → bottom-left. None means "not
+    # yet defined" — auto-trim modal will run roi_detector.detect_roi() and
+    # prompt the operator. Per-project so each match's camera angle / table
+    # position is captured separately.
+    roi_quadrilateral: Optional[list[list[float]]] = None
 
 
 class TrimSegment(BaseModel):

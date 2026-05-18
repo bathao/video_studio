@@ -48,6 +48,43 @@ backend/
                      against assets/avatars/<Name>.<ext>.
   config.py          Reads config.json into typed properties.
   models.py          Pydantic ProjectInfo / ProjectData / RenderRequest.
+  groundtruth.py     `export_groundtruth(ctx, output_mp4)` — writes
+                     `<name>.groundtruth.json` + `<name>.refframe.png`
+                     next to the rendered mp4. Project snapshot + derived
+                     `kept_segments` + source video metadata + stats
+                     (schema v2: `real_rally_count`, `avg_real_rally_seconds`
+                     derived from score events). Called from `_finalize`
+                     after every successful render.
+  dataset.py         `archive_to_dataset(ctx, output_mp4)` — mirrors the
+                     just-finished render into `dataset/<slug>/` via
+                     hardlinks (copy fallback cross-volume), copies the
+                     sidecars, snapshots project.json, auto-fills
+                     notes.md from project + groundtruth, appends to
+                     `dataset/manifest.json`. Runs AFTER `export_groundtruth`
+                     in `_finalize`. Best-effort: failures land in
+                     `RenderState.message` but never abort the render.
+  roi_detector.py    Multi-stage ROI quadrilateral detector for the Auto
+                     Trim modal. `detect_roi` runs YOLOv8-seg + ORB +
+                     color-contrast in parallel and cross-validates. Result
+                     tags: `yolo_seg+both_agree` / `+orb_agree` / `+color_agree`
+                     when classical CV confirms YOLO's pick (strongest);
+                     `orb_homography_vs_yolo` / `color_contrast_vs_yolo`
+                     when classical CV overrides YOLO (medium-strong); plain
+                     `yolo_seg` when no classical competitor (novel-arena
+                     fallback); `color_contrast+orb_agree` / `orb_homography`
+                     / `color_contrast_foreground` / `learned_nn/blend/mean`
+                     / `color_blue` for non-YOLO paths. `detect_roi_multiframe`
+                     aggregates 5 evenly-spaced refframes via tier-priority
+                     gates (not raw majority — `learned_*` votes correlated;
+                     `color_contrast_foreground` singleton REMOVED, 100%
+                     prod fail rate). YOLO confidence is uninformative
+                     (mean 0.99, fails at high conf possible) — agreement
+                     tags are the real trust signal.
+  roi_yolo.py        Lazy loader for `assets/models/roi_seg.pt`. Single-
+                     image inference returns the 4-corner quad from the
+                     highest-confidence mask. Caches `False` when the
+                     model file is missing so subsequent calls are a
+                     one-bool no-op.
   ass/
     __init__.py      Re-exports the public builders.
     common.py        Palette (C_*) + drawing primitives (_rect) +
@@ -96,7 +133,18 @@ frontend/
   score.js           Score logic (recompute, sync from time, score,
                      delete) + score-panel UI + events list.
   highlights.js      All highlight ops + list UI.
-  trims.js           All trim ops + list UI.
+  trims.js           All trim ops + list UI. Hosts the "⚡ Auto Trim"
+                     button that opens `auto_trim_modal.js`.
+  auto_trim_modal.js Auto Trim modal: fetches refframe + calls
+                     `/api/auto_trim/detect_roi`; renders proposed
+                     quadrilateral on canvas with 4 draggable corners
+                     (view/edit toggle); Confirm POSTs to
+                     `/api/auto_trim/confirm_roi` → saves to
+                     `project.info.roi_quadrilateral` AND appends to
+                     `dataset/roi_groundtruth/<video_id>.json`. Trim
+                     detection itself is gated — modal scope is ROI
+                     confirmation only until detector hits ≥99% on
+                     truly-unseen videos. See `docs/TODO.md`.
   project_io.js      Save / Load Project + load modal.
   render.js          startRender + pollRender + cancel + intro-style
                      mutual exclusion + Open output folder.
@@ -140,10 +188,46 @@ assets/sounds/       Optional music beds, all wired through the shared
                      spliced into main; `stinger_swoosh.wav` for the
                      stinger transition clips. Any missing file →
                      silent fallback for that slot.
+assets/models/       Trained ML models (gitignored, regenerable). Holds
+                     `roi_seg.pt` — YOLOv8-seg fine-tuned on
+                     `dataset/yolo_seg/`. Re-train via
+                     `scripts/train_roi_seg.py` (~1.3 min on RTX 5060 Ti).
+                     Lazy-loaded by `backend/roi_yolo.py`; missing file
+                     → tier 0 silently skips and pipeline falls to ORB.
 videos/              Source MP4s (gitignored).
 projects/            Saved project JSON files (gitignored).
-output/              Final rendered MP4s.
+output/              Final rendered MP4s + per-render sidecars:
+                     `<name>.groundtruth.json` + `<name>.refframe.png`
+                     written by `export_groundtruth` in `_finalize`.
 temp/                Per-job intermediates; cleaned up on success only.
+
+dataset/             Auto-accumulated training corpus (gitignored). TWO
+                     parallel datasets serving TWO different ML tasks —
+                     don't conflate. See "Dataset accumulation" section
+                     below for the auto-archive flows that fill these.
+  manifest.json        Index of `<slug>/` entries appended per render
+                       (schema v1). Downstream eval scripts enumerate
+                       via this rather than scanning folders.
+  <slug>/              One per successful render; `slug =
+                       <sanitised_project>_<YYYYMMDD_HHMMSS>`. Contains
+                       hardlinked source<.ext> + output.mp4, copied
+                       groundtruth.json + refframe.png, verbatim
+                       project.json snapshot, auto-filled notes.md.
+                       Used for auto-trim algorithm development
+                       (rally detection, segment timing).
+  roi_groundtruth/     `<video_id>.json` + sibling `<video_id>.jpg`
+                       per ROI confirmation. `video_id = sha1(absolute
+                       video path)`. Each json keeps `latest_corners`
+                       (canonical truth for that video) + `history[]`
+                       of every confirm with the detector's proposal
+                       at that time → algorithm-drift measurable from
+                       this log alone. Read directly by ORB / HSV tiers
+                       on every detect; YOLO consumes via the build
+                       script below.
+  yolo_seg/            YOLO segmentation format dataset (regenerable).
+                       Built from roi_groundtruth/ via
+                       `scripts/build_yolo_dataset.py`; deterministic
+                       80/20 train/val split by hash.
 
 config.json          Encoder + paths + intro tuning. See ConfigClass
                      in backend/config.py for accepted keys.
@@ -183,6 +267,89 @@ final concat demuxer stitches them without re-encoding.
 `RenderContext.make_progress(stage_name)` returns a callback that
 reads the live `completed_weight` at call time, so the running 0..1
 progress fraction stays correct as stages advance.
+
+## Dataset accumulation
+
+Every operator action that produces labelled output is auto-archived
+for ML training without changing the workflow. **TWO independent
+datasets serving TWO different tasks — do NOT conflate them.**
+
+### Post-render archive → `dataset/<slug>/` (fed by RENDER)
+
+Trigger: every successful render. Two-step pipeline at the tail of
+`_finalize` in `renderer.py`:
+
+```
+1. export_groundtruth(ctx, output_mp4)    # backend/groundtruth.py
+   → output/<name>.groundtruth.json       (project snapshot + kept_segments
+                                            + source video metadata + stats)
+   → output/<name>.refframe.png           (midpoint of first kept segment —
+                                            guaranteed to have a player)
+
+2. archive_to_dataset(ctx, output_mp4)    # backend/dataset.py
+   → dataset/<slug>/source.<ext>          (hardlink; copy fallback)
+   → dataset/<slug>/output.mp4            (hardlink; copy fallback)
+   → dataset/<slug>/project.json          (verbatim, reloadable in GUI)
+   → dataset/<slug>/groundtruth.json      (copy of output/ sidecar)
+   → dataset/<slug>/refframe.png          (copy of output/ sidecar)
+   → dataset/<slug>/notes.md              (auto-filled match info +
+                                            manual labels + rally stats +
+                                            dead-gap distribution +
+                                            highlights + permanent caveat
+                                            about noisy manual trims)
+   → dataset/manifest.json                (append entry with stats)
+```
+
+Used by the auto-trim algorithm spike (rally detection, segment
+timing). Best-effort — failures append warnings to `RenderState.message`
+but never abort the render; the mp4 in `output/` is canonical
+regardless of archive success. Hardlinks make this near-zero disk cost
+on same-volume NTFS (the existing ~17.8 GB dataset takes only marginal
+extra space).
+
+**Manual trims are NOT reliable ground truth.** `notes.md` auto-includes
+a permanent caveat: operator-marked `trim_segments` are a subjective
+partial label set — no duration threshold, can include short gaps,
+can miss long ones depending on what the operator happened to scrub
+past. Auto-trim is expected to be strictly more thorough; do NOT tune
+it to match this label set. Real precision/recall needs eyeball QA on
+rendered output, or one exhaustively-marked reference video.
+
+### ROI confirmation → `dataset/roi_groundtruth/` (fed by Auto Trim modal)
+
+Trigger: every Confirm click in the "⚡ Auto Trim" modal. Single endpoint
+`POST /api/auto_trim/confirm_roi`:
+
+```
+→ dataset/roi_groundtruth/<video_id>.json   (latest_corners + history[])
+→ dataset/roi_groundtruth/<video_id>.jpg    (refframe copy)
+```
+
+`video_id = sha1(absolute_source_path)` — re-opening the same file
+always lands on the same record. `history[]` appends every confirm
+along with the detector's proposal at that time → algorithm accuracy
+drift is measurable from this log alone. Re-confirming the same
+video **overwrites** `latest_corners` (use carefully — a bad re-confirm
+poisons the label) and appends to history.
+
+Three downstream consumers of this directory:
+
+- **ORB + HSV fallback tiers** in `roi_detector.py` query this dir
+  directly on every detect call. Confirms take effect on the **next
+  Auto Trim click** — no retrain needed.
+- **YOLOv8-seg (top-priority tier)** consumes via
+  `scripts/build_yolo_dataset.py` → `dataset/yolo_seg/` →
+  `scripts/train_roi_seg.py` → `assets/models/roi_seg.pt`. **Manual
+  trigger only** — confirming in the modal does NOT retrain the model.
+  Operator re-runs the two scripts at every milestone (~1.3 min on
+  RTX 5060 Ti for ~40 entries).
+- **`GET /api/auto_trim/groundtruth_count`** for milestone progress
+  tracking (number of unique videos confirmed).
+
+This dataset is for **ROI auto-detection only**, not trim detection.
+The ROI milestone gates everything downstream — see `docs/TODO.md`
+for unlock criteria (≥99% on truly-unseen videos unlocks Phase 1b
+trim detection backend).
 
 ## Key invariants
 
@@ -348,5 +515,12 @@ progress fraction stays correct as stages advance.
 | Score logic (replay, set wins)       | [frontend/score.js](frontend/score.js) — `recomputeAllEvents`, `scorePoint` |
 | Avatar lookup rules                  | [backend/avatars.py](backend/avatars.py) |
 | Render-time pipeline orchestration   | `_intro_stage` / `_main_stage` / `_outro_stage` / `_finalize` in [backend/renderer.py](backend/renderer.py) |
+| Post-render groundtruth sidecar      | `export_groundtruth` in [backend/groundtruth.py](backend/groundtruth.py) — called from `_finalize` |
+| Post-render dataset archive          | `archive_to_dataset` in [backend/dataset.py](backend/dataset.py) — called from `_finalize` after `export_groundtruth` |
+| Auto-filled `notes.md` template      | `build_notes_md` in [backend/dataset.py](backend/dataset.py) |
+| ROI auto-detect (multi-tier pipeline)| `detect_roi_multiframe` in [backend/roi_detector.py](backend/roi_detector.py); YOLO tier in [backend/roi_yolo.py](backend/roi_yolo.py) |
+| ROI confirm → groundtruth append     | `/api/auto_trim/confirm_roi` in [backend/server.py](backend/server.py); files land in `dataset/roi_groundtruth/<video_id>.{json,jpg}` |
+| YOLO ROI training                    | `scripts/build_yolo_dataset.py` then `scripts/train_roi_seg.py` → `assets/models/roi_seg.pt` |
+| Auto Trim modal (frontend)           | [frontend/auto_trim_modal.js](frontend/auto_trim_modal.js); button hosted in [frontend/trims.js](frontend/trims.js) |
 | Add a new HTTP endpoint              | [backend/server.py](backend/server.py) |
 | Add new project field                | [backend/models.py](backend/models.py) `ProjectInfo`, then frontend `project.info` schema in [frontend/state.js](frontend/state.js), then UI input in [frontend/index.html](frontend/index.html) |
