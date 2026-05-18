@@ -199,7 +199,27 @@ projects/            Saved project JSON files (gitignored).
 output/              Final rendered MP4s + per-render sidecars:
                      `<name>.groundtruth.json` + `<name>.refframe.png`
                      written by `export_groundtruth` in `_finalize`.
-temp/                Per-job intermediates; cleaned up on success only.
+
+temp/                Runtime caches and per-job intermediates (gitignored,
+                     fully regenerable). `run.bat` clears the volatile
+                     parts on every startup so behaviour is reproducible.
+  refframes/           Cache for `_extract_refframe` +
+                       `_extract_multi_refframes` (single midpoint + 5
+                       evenly-spaced frames per video, JPEG @ max_w=960).
+                       Keyed by `_video_identity = sha1(path|size|mtime)
+                       [:16]`. Wiped on every `run.bat` startup.
+  <job_id>/            Per-render scratch (intro.mp4, main.mp4,
+                       outro.mp4, .ass, concat.txt). Deleted on
+                       successful `_finalize`; preserved on failure so
+                       ffmpeg inputs are inspectable.
+
+runs/                 YOLO training output history (gitignored). Each
+                     `runs/segment/roi_seg-N/` is one full training run
+                     written by ultralytics — checkpoints, validation
+                     plots, args.yaml, results.csv. Operator only needs
+                     the latest; prune older runs after `train_roi_seg.py`
+                     copies `best.pt` to `assets/models/roi_seg.pt`. None
+                     of this is consumed at runtime.
 
 dataset/             Auto-accumulated training corpus (gitignored). TWO
                      parallel datasets serving TWO different ML tasks —
@@ -232,8 +252,48 @@ dataset/             Auto-accumulated training corpus (gitignored). TWO
 config.json          Encoder + paths + intro tuning. See ConfigClass
                      in backend/config.py for accepted keys.
 
+scripts/             Operator-triggered tooling, organized by purpose.
+                     None of this is imported by the running backend —
+                     it's all standalone CLI driven by the operator
+                     (retrain, regression test, diagnostic viz).
+  build_yolo_dataset.py    Convert dataset/roi_groundtruth/ → YOLO
+                           segmentation format under dataset/yolo_seg/.
+                           Multi-frame extraction (5 frames/video at
+                           10/30/50/70/90% duration). Flags:
+                           --search-path / --alias / --frames-per-video.
+  train_roi_seg.py         Fine-tune YOLOv8n-seg on dataset/yolo_seg/.
+                           Copies best.pt → assets/models/roi_seg.pt.
+                           ~1.3 min on RTX 5060 Ti for ~50-entry dataset.
+  test_roi_detector.py     LOO regression: runs detect_roi_multiframe
+                           on each groundtruth entry with that entry
+                           excluded from classical-CV NN lookup. Prints
+                           per-entry corner error + method tag. Honest
+                           for classical tiers; YOLO still trained on
+                           all entries (separate retrain to fully
+                           leave-one-out).
+  analyze_detector_errors.py
+                           Reads history[] from every groundtruth entry,
+                           summarizes per-method-tier error breakdown.
+                           Useful for "where is the detector failing
+                           in production" diagnostic between retrain
+                           milestones.
+  debug_roi_overlay.py     Render 3-panel diagnostic (overlay + blue
+                           mask + red mask) for one entry. CLI takes a
+                           video_id prefix.
+  spike/                   Historical Phase-0 (rally detection) spike
+                           scripts. Not part of any current code path.
+                           Kept for reference when Phase 1b (trim
+                           detection backend) is eventually unblocked.
+                           Outputs went to scripts/spike_out/ (deleted);
+                           PHASE0_REPORT.md preserved under
+                           docs/spike_archive/.
+
 docs/
-  PROGRESS.md, TODO.md, ROADMAP.md, README.md
+  PROGRESS.md, TODO.md, ROADMAP.md, README.md, AUTO_TRIM_DISCUSSION.md
+  spike_archive/
+    PHASE0_REPORT.md   Locked recipe + parameter sweep from the Phase 0
+                       rally-detector spike. Restore reading material
+                       when Phase 1b is unblocked.
 ```
 
 ## Render pipeline at a glance
