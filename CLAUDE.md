@@ -179,12 +179,27 @@ backend/
     common.py        Palette (C_*) + drawing primitives (_rect) +
                      text helpers (_trim_*, _ass_escape, _ass_rgb,
                      _bgr) + _fmt_time. Imported by every other ass/*.
-    scoreboard.py    Live + final scoreboard, recap/transition cards,
-                     GP/MP/DEUCE flag. Internally split into
-                     _Geometry + _AssetText + _emit_* helpers. Exports
-                     `resolve_row_names` so doubles' combined-name rule
-                     (last 2 words of each partner) is shared by every
-                     consumer.
+    scoreboard/      Live + final scoreboard, recap/transition cards,
+                     GP/MP/DEUCE flag. Exports `resolve_row_names` so
+                     doubles' combined-name rule (last 2 words of each
+                     partner) is shared by every consumer. Package
+                     layout:
+      __init__.py      Public re-exports (ScoreFrame, resolve_row_names,
+                       build_scoreboard_ass, build_scoreboard_ass_text)
+                       + the `_set_final_score` / `_walk_events`
+                       helpers used by the pure-logic test suite.
+      geometry.py      `_Geometry` + `_AssetText` dataclasses,
+                       `_compute_geometry`, `_scoreboard_header` style
+                       block, `_title_fscx_tag` width-fitter.
+      events.py        `ScoreFrame` dataclass, `_walk_events`,
+                       `_set_final_score`, `resolve_row_names`.
+                       Pure logic, tier-agnostic.
+      emit_live.py     Static live panel + per-event sets/pts numbers.
+      emit_cards.py    SET recap + transition cards + GP/MP/DEUCE
+                       pulsing flag.
+      emit_final.py    End-of-match summary card with per-set columns.
+      builder.py       `build_scoreboard_ass_text` orchestrator +
+                       `build_scoreboard_ass` file-write wrapper.
     intro.py         Text-only fallback intro + libass companion for
                      the cinematic intro. Same builder serves singles
                      (2 avatars) and doubles (4 avatars laid out as 2
@@ -547,15 +562,16 @@ trim detection backend).
 
 - **Scoreboard has one source of truth.** Both the burned-in render
   AND the live preview overlay call `build_scoreboard_ass_text` in
-  `backend/ass/scoreboard.py`. The render pipeline writes it to a file
-  for ffmpeg's `ass=` filter; the preview endpoint streams it to
-  JASSUB-in-browser. If you change how the scoreboard looks, change
-  `scoreboard.py` and both paths update — never duplicate the layout
-  logic on the frontend.
+  `backend/ass/scoreboard/builder.py`. The render pipeline writes it
+  to a file for ffmpeg's `ass=` filter; the preview endpoint streams
+  it to JASSUB-in-browser. If you change how the scoreboard looks,
+  change one of the `backend/ass/scoreboard/emit_*.py` modules and
+  both paths update — never duplicate the layout logic on the frontend.
 
 - **Doubles row-name rule is one function.** `resolve_row_names` in
-  `backend/ass/scoreboard.py` is the *only* place that decides how the
-  4 raw names (p1/p2/p3/p4) collapse to the 2 scoreboard row labels.
+  `backend/ass/scoreboard/events.py` is the *only* place that decides
+  how the 4 raw names (p1/p2/p3/p4) collapse to the 2 scoreboard row
+  labels.
   Both the scoreboard renderer AND `_intro_stage` (for the cinematic
   intro's name line) call into it. The frontend mirrors the rule for
   Live Score panel labels only — actual rendered output always goes
@@ -628,7 +644,7 @@ trim detection backend).
 ## When making changes
 
 - Don't add new ASS builders to `ass_builder.py` — that file is gone.
-  Pick one of `ass/scoreboard.py`, `ass/intro.py`, `ass/outro.py`,
+  Pick one of `ass/scoreboard/`, `ass/intro.py`, `ass/outro.py`,
   `ass/badges.py`, or create a new module under `ass/` and re-export
   from `ass/__init__.py`.
 
@@ -677,8 +693,8 @@ trim detection backend).
 | Intro duration / avatar size / blur / sound | [config.json](config.json) (`intro_*` keys) |
 | Outro on/off, text, duration, bg, sound | [config.json](config.json) (`outro_*` keys) |
 | Music bed shared helper (loop + fade + volume) | `music_input_args` / `music_filter_chain` in [backend/ffmpeg_runner.py](backend/ffmpeg_runner.py) |
-| Scoreboard layout / colours          | [backend/ass/scoreboard.py](backend/ass/scoreboard.py) |
-| Doubles combined-name rule           | `resolve_row_names` / `_combine_doubles_name` in [backend/ass/scoreboard.py](backend/ass/scoreboard.py) + [backend/ass/common.py](backend/ass/common.py) |
+| Scoreboard layout / colours          | [backend/ass/scoreboard/](backend/ass/scoreboard/) — `emit_*.py` for Dialogue emit, `geometry.py` for layout + style block |
+| Doubles combined-name rule           | `resolve_row_names` in [backend/ass/scoreboard/events.py](backend/ass/scoreboard/events.py) + `_combine_doubles_name` in [backend/ass/common.py](backend/ass/common.py) |
 | Cinematic intro filter graph         | [backend/intro_builder.py](backend/intro_builder.py) — branches on `is_doubles` for the 4-avatar layout |
 | Cinematic intro text overlays        | `build_cinematic_intro_ass` in [backend/ass/intro.py](backend/ass/intro.py) |
 | Outro card layout                    | `build_outro_card_ass` in [backend/ass/outro.py](backend/ass/outro.py); ffmpeg side in `render_outro_card` in [backend/renderer/](backend/renderer/) |

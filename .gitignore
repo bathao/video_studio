@@ -34,3 +34,6 @@ scripts/spike_out/
 # editor
 .vscode/
 .idea/
+
+# claude-code local runtime state (scheduled-task lock etc.)
+.claude/
