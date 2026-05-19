@@ -2,7 +2,8 @@
 
 ## 🧹 RESUME POINTER 2026-05-19 sáng — Code cleanup phase
 
-**Status:** disk cleanup + Step 1 + Step 2 DONE. Step 3 OPTIONAL.
+**Status:** disk cleanup + Steps 1 → 3 all DONE. (Step 3 staged
+locally; commit pending operator OK.)
 
 ### Done
 
@@ -15,25 +16,31 @@
   to baseline (mean err 0.0103, max 0.0281, all 53 entries unchanged).
   Pytest 137/137 pass. Operator smoke-tested modal.
 - **Step 2 — `backend/server.py` (1020 lines) → `backend/server/`
-  package.** 9 modules: `__init__.py`, `__main__.py`, `app.py`,
-  `state.py`, `utils.py`, `routes_videos.py`, `routes_projects.py`,
-  `routes_render.py`, `routes_auto_trim.py`. All 33 routes preserved
-  (same paths + methods). Pytest 137/137 pass. Live uvicorn boot
-  test on port 8799 confirmed every route group answers 200. Operator
-  smoke-tested full UI flow. Bundled with `frontend/index.html`
-  z-index fix: `#modal-load` was missing `z-40` so the JASSUB
-  scoreboard canvas (z-index 2) was painting on top of Load Project.
-
-### Optional
-
-3. **`backend/renderer.py` (1275 lines) + `frontend/auto_trim_modal.js`
-   (505).** Lower priority — renderer already has clear stage structure;
-   modal isn't yet painful. Defer unless operator wants to touch them.
+  package** (`fb4d2aa`). 9 modules: `__init__.py`, `__main__.py`,
+  `app.py`, `state.py`, `utils.py`, `routes_videos.py`,
+  `routes_projects.py`, `routes_render.py`, `routes_auto_trim.py`.
+  All 33 routes preserved. Pytest 137/137 pass. Live uvicorn boot
+  test confirmed every route group answers 200. Operator
+  smoke-tested. Bundled with `frontend/index.html` z-index fix:
+  `#modal-load` was missing `z-40` so the JASSUB scoreboard canvas
+  (z-index 2) was painting on top of Load Project.
+- **Step 3 (staged, awaiting commit)** — two parts in one working
+  tree:
+  - `backend/renderer.py` (1275 lines) → `backend/renderer/`
+    package. 6 modules: `__init__.py`, `state.py`, `segments.py`,
+    `replays.py`, `stages.py`, `orchestrator.py`. Pytest 137/137
+    pass. Live boot test OK.
+  - `frontend/auto_trim_modal.js` (505 lines) → `frontend/auto_trim/`
+    package. 7 modules: `index.js` (public entry), `state.js`,
+    `modal.js`, `log.js`, `canvas.js`, `info_panel.js`, `api.js`.
+    `frontend/trims.js` import updated to `./auto_trim/index.js`.
 
 ### How to resume
 
-1. Re-read this section.
-2. Apply, run tests + manual smoke, commit only after green.
+1. Operator browser-tests Auto Trim modal end-to-end after restarting
+   `run.bat` (refresh, click ⚡ Auto Trim, drag corner in edit mode,
+   Confirm).
+2. Operator green-lights Step 3 → commit renderer + modal together.
 3. Don't auto-commit — wait for explicit "commit đi" from operator.
 
 ---

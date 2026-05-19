@@ -67,8 +67,31 @@ backend/
                        `_video_identity`, `_extract_refframe`,
                        `_extract_multi_refframes`,
                        `_validate_roi_corners`).
-  renderer.py        Render orchestrator (RenderPlan + RenderContext +
-                     stage helpers). Owns the public `run_render(plan)`.
+  renderer/          Render orchestrator package. Owns the public
+                     `run_render(plan)`. 6 modules:
+    __init__.py        Re-exports public API (RenderPlan, RenderContext,
+                       RenderState, run_render) + segment / replay /
+                       stage helpers used by tests and the groundtruth
+                       sidecar.
+    state.py           RenderState dataclass (per-job progress + status
+                       snapshot). Lives in its own module so
+                       backend/server/state.py can import it without
+                       pulling the full ffmpeg dep graph.
+    segments.py        Segment math — `kept_segments_from_trims` +
+                       `remap_score_event_to_trimmed`. Pure logic, no
+                       I/O.
+    replays.py         Slow-mo replay plumbing — REPLAY_* constants,
+                       `ReplayInsert`, `build_replay_plan`,
+                       `remap_events_with_replays`, `_PlaylistEntry`,
+                       `build_main_playlist`. Pure logic.
+    stages.py          Stage helpers (kwargs-only, no ctx): `render_intro`,
+                       `render_main_with_scoreboard`, `render_outro_card`,
+                       `concat_parts`. These are the ffmpeg builders.
+    orchestrator.py    Top-level: `RenderPlan`, `RenderContext`,
+                       `_prepare_context`, `_resolve_source`,
+                       `all_intro_photos_present`, `_intro_stage`,
+                       `_main_stage`, `_outro_stage`, `_finalize`,
+                       `run_render`. Knows the pipeline shape.
   intro_builder.py   Cinematic intro ffmpeg filter graph (avatars +
                      bg blur + Ken-Burns zoom + libass text).
   stinger_builder.py Auto-stinger transition clip. Renders a 1s branded
@@ -200,8 +223,8 @@ frontend/
                      delete) + score-panel UI + events list.
   highlights.js      All highlight ops + list UI.
   trims.js           All trim ops + list UI. Hosts the "⚡ Auto Trim"
-                     button that opens `auto_trim_modal.js`.
-  auto_trim_modal.js Auto Trim modal: fetches refframe + calls
+                     button that opens `auto_trim/index.js`.
+  auto_trim/         Auto Trim modal package: fetches refframe + calls
                      `/api/auto_trim/detect_roi`; renders proposed
                      quadrilateral on canvas with 4 draggable corners
                      (view/edit toggle); Confirm POSTs to
@@ -211,6 +234,31 @@ frontend/
                      detection itself is gated — modal scope is ROI
                      confirmation only until detector hits ≥99% on
                      truly-unseen videos. See `docs/TODO.md`.
+                     Split into 7 ES modules:
+    index.js           Public entry — exports `openAutoTrimModal`,
+                       wires button bindings + window resize/Escape
+                       listeners. Importing this module arms the
+                       interaction layer.
+    state.js           `els` DOM refs + `state` session object +
+                       DEFAULT_CORNERS + CORNER_LABELS constants.
+                       No side effects.
+    modal.js           `closeModal()` — extracted so `api.js` can
+                       call it without an import cycle through
+                       `index.js`.
+    log.js             `log` + `clearLog` + `setLoading` UI helpers.
+    canvas.js          `redraw` + `drawCornerZooms` + `loadImage` +
+                       corner-drag handlers. Mousedown / window
+                       mousemove / mouseup listeners wired at import
+                       time so dragging works the moment the module
+                       loads.
+    info_panel.js      `updateInfoPanel` — video name, method tag,
+                       confidence, source kind, edit badge, top-3
+                       NN list. Read-only side: consumes
+                       `state.detectorResult`, writes the DOM.
+    api.js             Backend HTTP calls: `loadRefframeAndDetect`,
+                       `refreshGroundtruthCount`, `onConfirmClick`,
+                       plus the small `buildQuery` / `videoIdentBody`
+                       helpers.
   project_io.js      Save / Load Project + load modal.
   render.js          startRender + pollRender + cancel + intro-style
                      mutual exclusion + Open output folder.
@@ -403,7 +451,7 @@ datasets serving TWO different tasks — do NOT conflate them.**
 ### Post-render archive → `dataset/<slug>/` (fed by RENDER)
 
 Trigger: every successful render. Two-step pipeline at the tail of
-`_finalize` in `renderer.py`:
+`_finalize` in `renderer/orchestrator.py`:
 
 ```
 1. export_groundtruth(ctx, output_mp4)    # backend/groundtruth.py
@@ -516,7 +564,7 @@ trim detection backend).
 - **Main render splices slow-mo replays inline.** Every highlight
   becomes a 50%-speed replay inserted into main *right after* its
   real-time occurrence. `build_replay_plan` + `build_main_playlist` in
-  `renderer.py` produce a chronological list of (slice | stinger_in |
+  `renderer/replays.py` produce a chronological list of (slice | stinger_in |
   replay | stinger_out) entries; `remap_events_with_replays` shifts
   score events past each insert point by `replay_dur + 2 *
   stinger_dur`. Total main duration changes — the scoreboard
@@ -554,7 +602,7 @@ trim detection backend).
 ## Things that surprise people
 
 - **NVENC/AAC/hwaccel helpers live in `ffmpeg_runner.py`**, not
-  renderer.py. Both renderer.py and intro_builder.py import them.
+  renderer/stages.py. Both renderer/stages.py and intro_builder.py import them.
   Same with `TARGET_AUDIO_RATE`.
 
 - **`zoompan` doesn't support `t` in expressions** — only `on` (output
@@ -633,21 +681,21 @@ trim detection backend).
 | Doubles combined-name rule           | `resolve_row_names` / `_combine_doubles_name` in [backend/ass/scoreboard.py](backend/ass/scoreboard.py) + [backend/ass/common.py](backend/ass/common.py) |
 | Cinematic intro filter graph         | [backend/intro_builder.py](backend/intro_builder.py) — branches on `is_doubles` for the 4-avatar layout |
 | Cinematic intro text overlays        | `build_cinematic_intro_ass` in [backend/ass/intro.py](backend/ass/intro.py) |
-| Outro card layout                    | `build_outro_card_ass` in [backend/ass/outro.py](backend/ass/outro.py); ffmpeg side in `render_outro_card` in [backend/renderer.py](backend/renderer.py) |
-| Slow-mo replay plan / playlist       | `build_replay_plan` / `build_main_playlist` / `remap_events_with_replays` in [backend/renderer.py](backend/renderer.py) |
-| Slow-mo replay music                 | `replay_sound_path` / `replay_sound_volume` in [config.json](config.json); resolved via `config.replay_sound_path` and consumed by `render_main_with_scoreboard` in [backend/renderer.py](backend/renderer.py) |
+| Outro card layout                    | `build_outro_card_ass` in [backend/ass/outro.py](backend/ass/outro.py); ffmpeg side in `render_outro_card` in [backend/renderer/](backend/renderer/) |
+| Slow-mo replay plan / playlist       | `build_replay_plan` / `build_main_playlist` / `remap_events_with_replays` in [backend/renderer/](backend/renderer/) |
+| Slow-mo replay music                 | `replay_sound_path` / `replay_sound_volume` in [config.json](config.json); resolved via `config.replay_sound_path` and consumed by `render_main_with_scoreboard` in [backend/renderer/](backend/renderer/) |
 | SLOW MOTION badge                    | `build_slow_motion_badge_ass` in [backend/ass/badges.py](backend/ass/badges.py) |
 | Auto-stinger generation              | `get_or_build_stinger_pair` in [backend/stinger_builder.py](backend/stinger_builder.py) |
 | Brand identity (color / logo / channel name) | [config.json](config.json) `brand_color` / `brand_logo_path` / `channel_name` / `stinger_replay_label` / `stinger_duration_seconds` / `stinger_sound_path` |
 | Score logic (replay, set wins)       | [frontend/score.js](frontend/score.js) — `recomputeAllEvents`, `scorePoint` |
 | Avatar lookup rules                  | [backend/avatars.py](backend/avatars.py) |
-| Render-time pipeline orchestration   | `_intro_stage` / `_main_stage` / `_outro_stage` / `_finalize` in [backend/renderer.py](backend/renderer.py) |
+| Render-time pipeline orchestration   | `_intro_stage` / `_main_stage` / `_outro_stage` / `_finalize` in [backend/renderer/](backend/renderer/) |
 | Post-render groundtruth sidecar      | `export_groundtruth` in [backend/groundtruth.py](backend/groundtruth.py) — called from `_finalize` |
 | Post-render dataset archive          | `archive_to_dataset` in [backend/dataset.py](backend/dataset.py) — called from `_finalize` after `export_groundtruth` |
 | Auto-filled `notes.md` template      | `build_notes_md` in [backend/dataset.py](backend/dataset.py) |
 | ROI auto-detect (multi-tier pipeline)| `detect_roi_multiframe` in [backend/roi/detector.py](backend/roi/detector.py); tier modules under [backend/roi/](backend/roi/); YOLO loader in [backend/roi_yolo.py](backend/roi_yolo.py) |
 | ROI confirm → groundtruth append     | `/api/auto_trim/confirm_roi` in [backend/server/routes_auto_trim.py](backend/server/routes_auto_trim.py); files land in `dataset/roi_groundtruth/<video_id>.{json,jpg}` |
 | YOLO ROI training                    | `scripts/build_yolo_dataset.py` then `scripts/train_roi_seg.py` → `assets/models/roi_seg.pt` |
-| Auto Trim modal (frontend)           | [frontend/auto_trim_modal.js](frontend/auto_trim_modal.js); button hosted in [frontend/trims.js](frontend/trims.js) |
+| Auto Trim modal (frontend)           | [frontend/auto_trim/](frontend/auto_trim/) — public entry [frontend/auto_trim/index.js](frontend/auto_trim/index.js); button hosted in [frontend/trims.js](frontend/trims.js) |
 | Add a new HTTP endpoint              | pick the matching `backend/server/routes_*.py` (videos / projects / render / auto_trim), or [backend/server/app.py](backend/server/app.py) for cross-cutting endpoints |
 | Add new project field                | [backend/models.py](backend/models.py) `ProjectInfo`, then frontend `project.info` schema in [frontend/state.js](frontend/state.js), then UI input in [frontend/index.html](frontend/index.html) |
