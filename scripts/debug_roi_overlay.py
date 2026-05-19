@@ -16,7 +16,12 @@ import numpy as np
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
-from backend import roi_detector  # noqa: E402
+from backend import roi as roi_detector  # noqa: E402
+from backend.roi.color_contrast_tier import (  # noqa: E402
+    _TT_BLUE_LO, _TT_BLUE_HI,
+    _FLOOR_RED_LO_A, _FLOOR_RED_HI_A,
+    _FLOOR_RED_LO_B, _FLOOR_RED_HI_B,
+)
 
 
 _GT_DIR = _REPO_ROOT / "dataset" / "roi_groundtruth"
@@ -65,12 +70,12 @@ def main() -> int:
         _draw_quad(overlay, det.corners, (0, 0, 255), f"PRED: {det.method[:30]}")
 
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-        blue_mask = cv2.inRange(hsv, np.array(roi_detector._TT_BLUE_LO),
-                                np.array(roi_detector._TT_BLUE_HI))
-        red_a = cv2.inRange(hsv, np.array(roi_detector._FLOOR_RED_LO_A),
-                            np.array(roi_detector._FLOOR_RED_HI_A))
-        red_b = cv2.inRange(hsv, np.array(roi_detector._FLOOR_RED_LO_B),
-                            np.array(roi_detector._FLOOR_RED_HI_B))
+        blue_mask = cv2.inRange(hsv, np.array(_TT_BLUE_LO),
+                                np.array(_TT_BLUE_HI))
+        red_a = cv2.inRange(hsv, np.array(_FLOOR_RED_LO_A),
+                            np.array(_FLOOR_RED_HI_A))
+        red_b = cv2.inRange(hsv, np.array(_FLOOR_RED_LO_B),
+                            np.array(_FLOOR_RED_HI_B))
         red_mask = cv2.bitwise_or(red_a, red_b)
         blue_bgr = cv2.cvtColor(blue_mask, cv2.COLOR_GRAY2BGR)
         red_bgr = cv2.cvtColor(red_mask, cv2.COLOR_GRAY2BGR)

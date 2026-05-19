@@ -27,7 +27,7 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
-from backend import roi_detector  # noqa: E402
+from backend import roi as roi_detector  # noqa: E402
 
 _GT_DIR = _REPO_ROOT / "dataset" / "roi_groundtruth"
 _VIDEOS_DIR = _REPO_ROOT / "videos"

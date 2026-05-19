@@ -873,7 +873,7 @@ def auto_trim_detect_roi(payload: dict = Body(...)) -> dict:
     table in any single frame. Returns 4 normalized corners, a
     confidence score, the detection method, and debug fields the modal
     can show for troubleshooting."""
-    from .roi_detector import detect_roi_multiframe
+    from .roi import detect_roi_multiframe
     name = payload.get("name")
     token = payload.get("token")
     video = _resolve_video_for_auto_trim(name, token)
@@ -913,8 +913,8 @@ def auto_trim_confirm_roi(payload: dict = Body(...)) -> dict:
     The project-state mutation happens client-side (the modal sets
     `project.info.roi_quadrilateral` directly); this endpoint exists to
     capture the labeled training example so improvements to
-    roi_detector.py can be measured against many real inputs."""
-    from .roi_detector import detect_roi_multiframe
+    backend/roi/ can be measured against many real inputs."""
+    from .roi import detect_roi_multiframe
     import time
     name = payload.get("name")
     token = payload.get("token")

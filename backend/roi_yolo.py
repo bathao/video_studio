@@ -160,10 +160,10 @@ def _polygon_to_quad(polygon_xy: np.ndarray) -> np.ndarray | None:
 
 
 def _order_clockwise_from_tl_local(pts: list[list[float]]) -> list[list[float]]:
-    """Same ordering helper as roi_detector._order_clockwise_from_tl —
+    """Same ordering helper as backend.roi.quad._order_clockwise_from_tl —
     kept local so this module doesn't import the larger detector module.
     TL = topmost (smallest y); tiebreak leftmost (smallest x). See
-    roi_detector._order_clockwise_from_tl for the rationale (matches
+    backend.roi.quad._order_clockwise_from_tl for the rationale (matches
     operator's storage convention 23/30 vs 6/30 for min(x+y))."""
     arr = np.asarray(pts, dtype=np.float64)
     cx = arr[:, 0].mean()

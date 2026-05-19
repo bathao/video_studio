@@ -63,8 +63,8 @@ backend/
                      `dataset/manifest.json`. Runs AFTER `export_groundtruth`
                      in `_finalize`. Best-effort: failures land in
                      `RenderState.message` but never abort the render.
-  roi_detector.py    Multi-stage ROI quadrilateral detector for the Auto
-                     Trim modal. `detect_roi` runs YOLOv8-seg + ORB +
+  roi/               Multi-stage ROI quadrilateral detector package for the
+                     Auto Trim modal. `detect_roi` runs YOLOv8-seg + ORB +
                      color-contrast in parallel and cross-validates. Result
                      tags: `yolo_seg+both_agree` / `+orb_agree` / `+color_agree`
                      when classical CV confirms YOLO's pick (strongest);
@@ -79,7 +79,37 @@ backend/
                      `color_contrast_foreground` singleton REMOVED, 100%
                      prod fail rate). YOLO confidence is uninformative
                      (mean 0.99, fails at high conf possible) — agreement
-                     tags are the real trust signal.
+                     tags are the real trust signal. Split across 8 modules:
+    __init__.py        Re-exports public API (`detect_roi`,
+                       `detect_roi_multiframe`, `RoiDetection`,
+                       `render_debug_overlay`).
+    detector.py        Public entry points + cross-tier disagreement
+                       resolution in `detect_roi`, multi-frame priority
+                       gates + cross-tier IoU consensus in
+                       `detect_roi_multiframe`.
+    quad.py            `RoiDetection` dataclass + shared geometry helpers
+                       (`_default_roi`, `_fit_quad_to_blob`, `_quad_iou`,
+                       `_expand_rect`, `_order_clockwise_from_tl`,
+                       `render_debug_overlay`, `_GROUNDTRUTH_DIR`).
+                       Imports nothing from sibling tier modules — keeps
+                       the dependency graph acyclic.
+    yolo_tier.py       Stage -1: `_try_yolo_seg` thin wrapper over
+                       `backend.roi_yolo` with mask-area sanity bounds.
+    color_contrast_tier.py
+                       Stage 0: foreground table by blue/red colour
+                       contrast. Hosts `_try_foreground_by_color_contrast`
+                       + `_refine_quad_via_white_court_lines` + all
+                       `_TT_BLUE_*` / `_FLOOR_RED_*` / `_FG_*` / `_WHITE_*`
+                       constants.
+    orb_tier.py        Stage 1: ORB keypoint match + RANSAC homography
+                       transfer. Reads dataset via
+                       `learned_nn_tier._load_groundtruth_examples`.
+    learned_nn_tier.py Stage 1 fallback: HSV color-histogram nearest-
+                       neighbour with 3-tier prediction (exact / weighted
+                       blend / mean-of-all). Hosts the shared
+                       `_load_groundtruth_examples` loader.
+    naive_tier.py      Stage 2: HSV-color fallback when no groundtruth
+                       exists at all (cold start).
   roi_yolo.py        Lazy loader for `assets/models/roi_seg.pt`. Single-
                      image inference returns the 4-corner quad from the
                      highest-confidence mask. Caches `False` when the
@@ -394,9 +424,10 @@ poisons the label) and appends to history.
 
 Three downstream consumers of this directory:
 
-- **ORB + HSV fallback tiers** in `roi_detector.py` query this dir
-  directly on every detect call. Confirms take effect on the **next
-  Auto Trim click** — no retrain needed.
+- **ORB + HSV fallback tiers** in `backend/roi/` query this dir
+  directly on every detect call (via
+  `learned_nn_tier._load_groundtruth_examples`). Confirms take effect
+  on the **next Auto Trim click** — no retrain needed.
 - **YOLOv8-seg (top-priority tier)** consumes via
   `scripts/build_yolo_dataset.py` → `dataset/yolo_seg/` →
   `scripts/train_roi_seg.py` → `assets/models/roi_seg.pt`. **Manual
@@ -578,7 +609,7 @@ trim detection backend).
 | Post-render groundtruth sidecar      | `export_groundtruth` in [backend/groundtruth.py](backend/groundtruth.py) — called from `_finalize` |
 | Post-render dataset archive          | `archive_to_dataset` in [backend/dataset.py](backend/dataset.py) — called from `_finalize` after `export_groundtruth` |
 | Auto-filled `notes.md` template      | `build_notes_md` in [backend/dataset.py](backend/dataset.py) |
-| ROI auto-detect (multi-tier pipeline)| `detect_roi_multiframe` in [backend/roi_detector.py](backend/roi_detector.py); YOLO tier in [backend/roi_yolo.py](backend/roi_yolo.py) |
+| ROI auto-detect (multi-tier pipeline)| `detect_roi_multiframe` in [backend/roi/detector.py](backend/roi/detector.py); tier modules under [backend/roi/](backend/roi/); YOLO loader in [backend/roi_yolo.py](backend/roi_yolo.py) |
 | ROI confirm → groundtruth append     | `/api/auto_trim/confirm_roi` in [backend/server.py](backend/server.py); files land in `dataset/roi_groundtruth/<video_id>.{json,jpg}` |
 | YOLO ROI training                    | `scripts/build_yolo_dataset.py` then `scripts/train_roi_seg.py` → `assets/models/roi_seg.pt` |
 | Auto Trim modal (frontend)           | [frontend/auto_trim_modal.js](frontend/auto_trim_modal.js); button hosted in [frontend/trims.js](frontend/trims.js) |

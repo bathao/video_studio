@@ -29,7 +29,7 @@ class ProjectInfo(BaseModel):
     best_of: int = 5
     # 4 normalized [x, y] corners of the auto-trim ROI quadrilateral, ordered
     # top-left → top-right → bottom-right → bottom-left. None means "not
-    # yet defined" — auto-trim modal will run roi_detector.detect_roi() and
+    # yet defined" — auto-trim modal will run backend.roi.detect_roi() and
     # prompt the operator. Per-project so each match's camera angle / table
     # position is captured separately.
     roi_quadrilateral: Optional[list[list[float]]] = None
