@@ -29,8 +29,44 @@ pydantic. ffmpeg + ffprobe live on PATH. tkinter ships with Python.
 
 ```
 backend/
-  server.py          FastAPI endpoints (videos, projects, render jobs,
-                     avatars). One file. ~600 lines.
+  server/            FastAPI endpoints (videos, projects, render jobs,
+                     avatars, auto-trim). 9 modules under the package:
+    __init__.py        Re-exports `app` + `main` so historical entry
+                       points keep working (`uvicorn backend.server:app`,
+                       `python -m backend.server`).
+    __main__.py        Entry for `python -m backend.server` (run.bat).
+    app.py             Composition root — FastAPI instance + CORS +
+                       no-cache middleware + StaticFiles mount + `/`
+                       index + `/api/health` + `main()` uvicorn launcher.
+                       Includes every routes_*.py router.
+    state.py           Module-level state shared across routers:
+                       `_jobs` + `_jobs_lock` (render job registry),
+                       `_external_videos` + `_external_lock` (token →
+                       absolute path registry), `_REFFRAME_CACHE`,
+                       `_ROI_GROUNDTRUTH_DIR`, plus ROOT_DIR /
+                       FRONTEND_DIR / VIDEO_EXTS / SAFE_NAME_RE
+                       constants.
+    utils.py           Pure helpers — no app instance, no router:
+                       `_validate_video_path`, `_register_*` /
+                       `_resolve_external_video`, `_safe_name`,
+                       `_resolve_inside`, `_sanitize_for_json`, and
+                       the `_open_or_focus_explorer` PowerShell shim.
+    routes_videos.py   `/api/videos/*` (local list + probe + range-
+                       aware stream), `/api/videos/browse` (native
+                       picker), `/api/videos/external/*` (token-keyed
+                       arbitrary-path videos), `/api/avatars/*`.
+                       Hosts the shared `_stream_file` helper.
+    routes_projects.py `/api/projects/*` (list/get/save/delete).
+    routes_render.py   `/api/render/*` (start/status/cancel/list),
+                       `/api/output*`, `/api/output-folder/open`,
+                       `/api/outputs`, `/api/preview/scoreboard.ass`
+                       (+ ScoreboardPreviewRequest model).
+    routes_auto_trim.py `/api/auto_trim/*` (refframe / detect_roi /
+                       confirm_roi / groundtruth_count) + sidecar
+                       helpers (`_resolve_video_for_auto_trim`,
+                       `_video_identity`, `_extract_refframe`,
+                       `_extract_multi_refframes`,
+                       `_validate_roi_corners`).
   renderer.py        Render orchestrator (RenderPlan + RenderContext +
                      stage helpers). Owns the public `run_render(plan)`.
   intro_builder.py   Cinematic intro ffmpeg filter graph (avatars +
@@ -328,7 +364,7 @@ docs/
 
 ## Render pipeline at a glance
 
-`backend.server.start_render` (POST /api/render) builds a `RenderPlan`,
+`backend.server.routes_render.start_render` (POST /api/render) builds a `RenderPlan`,
 spawns a thread, and returns a job id. The thread runs:
 
 ```
@@ -610,8 +646,8 @@ trim detection backend).
 | Post-render dataset archive          | `archive_to_dataset` in [backend/dataset.py](backend/dataset.py) — called from `_finalize` after `export_groundtruth` |
 | Auto-filled `notes.md` template      | `build_notes_md` in [backend/dataset.py](backend/dataset.py) |
 | ROI auto-detect (multi-tier pipeline)| `detect_roi_multiframe` in [backend/roi/detector.py](backend/roi/detector.py); tier modules under [backend/roi/](backend/roi/); YOLO loader in [backend/roi_yolo.py](backend/roi_yolo.py) |
-| ROI confirm → groundtruth append     | `/api/auto_trim/confirm_roi` in [backend/server.py](backend/server.py); files land in `dataset/roi_groundtruth/<video_id>.{json,jpg}` |
+| ROI confirm → groundtruth append     | `/api/auto_trim/confirm_roi` in [backend/server/routes_auto_trim.py](backend/server/routes_auto_trim.py); files land in `dataset/roi_groundtruth/<video_id>.{json,jpg}` |
 | YOLO ROI training                    | `scripts/build_yolo_dataset.py` then `scripts/train_roi_seg.py` → `assets/models/roi_seg.pt` |
 | Auto Trim modal (frontend)           | [frontend/auto_trim_modal.js](frontend/auto_trim_modal.js); button hosted in [frontend/trims.js](frontend/trims.js) |
-| Add a new HTTP endpoint              | [backend/server.py](backend/server.py) |
+| Add a new HTTP endpoint              | pick the matching `backend/server/routes_*.py` (videos / projects / render / auto_trim), or [backend/server/app.py](backend/server/app.py) for cross-cutting endpoints |
 | Add new project field                | [backend/models.py](backend/models.py) `ProjectInfo`, then frontend `project.info` schema in [frontend/state.js](frontend/state.js), then UI input in [frontend/index.html](frontend/index.html) |

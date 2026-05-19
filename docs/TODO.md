@@ -1,5 +1,43 @@
 # TODO
 
+## 🧹 RESUME POINTER 2026-05-19 sáng — Code cleanup phase
+
+**Status:** disk cleanup + Step 1 + Step 2 DONE. Step 3 OPTIONAL.
+
+### Done
+
+- **Disk cleanup** (`37b474a`): freed ~330 MB regenerable + script
+  hygiene (see commit msg).
+- **Step 1 — `backend/roi_detector.py` (1650 lines) → `backend/roi/`
+  package** (`6993a37`). 8 modules: `__init__.py`, `detector.py`,
+  `quad.py`, `yolo_tier.py`, `color_contrast_tier.py`, `orb_tier.py`,
+  `learned_nn_tier.py`, `naive_tier.py`. LOO regression byte-identical
+  to baseline (mean err 0.0103, max 0.0281, all 53 entries unchanged).
+  Pytest 137/137 pass. Operator smoke-tested modal.
+- **Step 2 — `backend/server.py` (1020 lines) → `backend/server/`
+  package.** 9 modules: `__init__.py`, `__main__.py`, `app.py`,
+  `state.py`, `utils.py`, `routes_videos.py`, `routes_projects.py`,
+  `routes_render.py`, `routes_auto_trim.py`. All 33 routes preserved
+  (same paths + methods). Pytest 137/137 pass. Live uvicorn boot
+  test on port 8799 confirmed every route group answers 200. Operator
+  smoke-tested full UI flow. Bundled with `frontend/index.html`
+  z-index fix: `#modal-load` was missing `z-40` so the JASSUB
+  scoreboard canvas (z-index 2) was painting on top of Load Project.
+
+### Optional
+
+3. **`backend/renderer.py` (1275 lines) + `frontend/auto_trim_modal.js`
+   (505).** Lower priority — renderer already has clear stage structure;
+   modal isn't yet painful. Defer unless operator wants to touch them.
+
+### How to resume
+
+1. Re-read this section.
+2. Apply, run tests + manual smoke, commit only after green.
+3. Don't auto-commit — wait for explicit "commit đi" from operator.
+
+---
+
 ## ⚠ MILESTONE — ROI auto-detect gates everything (updated 2026-05-19 dawn)
 
 **Update 2026-05-19 dawn (latest):** Phase B.5 (cross-tier IoU clustering) +
