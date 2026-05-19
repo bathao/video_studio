@@ -33,8 +33,14 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DATA_YAML = _REPO_ROOT / "dataset" / "yolo_seg" / "data.yaml"
-_MODEL_OUT = _REPO_ROOT / "assets" / "models" / "roi_seg.pt"
+_MODELS_DIR = _REPO_ROOT / "assets" / "models"
+_MODEL_OUT = _MODELS_DIR / "roi_seg.pt"
 _RUNS_DIR = _REPO_ROOT / "runs" / "segment"
+# Default base for transfer learning. Living under assets/models/ keeps
+# the pretrained-checkpoint cache out of the repo root (and out of the
+# operator's ls). If the file doesn't exist locally, ultralytics will
+# auto-download it to exactly this path on first use.
+_DEFAULT_BASE = _MODELS_DIR / "yolov8n-seg.pt"
 
 
 def main() -> int:
@@ -48,9 +54,11 @@ def main() -> int:
                     help="Batch size (default 8 for ~10GB VRAM headroom).")
     ap.add_argument("--device", default="0",
                     help='CUDA device id or "cpu" (default "0").')
-    ap.add_argument("--base", default="yolov8n-seg.pt",
-                    help="Base model for transfer learning (default yolov8n-seg.pt;"
-                         " 's', 'm' variants are larger + slower).")
+    ap.add_argument("--base", default=str(_DEFAULT_BASE),
+                    help="Base model for transfer learning (default"
+                         " assets/models/yolov8n-seg.pt; 's', 'm' variants"
+                         " are larger + slower). Auto-downloaded to that"
+                         " path by ultralytics on first run.")
     ap.add_argument("--name", default="roi_seg",
                     help="Run name (saved under runs/segment/<name>).")
     ap.add_argument("--patience", type=int, default=30,

@@ -24,8 +24,6 @@ assets/branding/_stinger_*
 # confirms, from which any operator can re-train.
 assets/models/
 runs/
-# Pretrained YOLO base weights auto-downloaded by ultralytics at repo root.
-/yolo*.pt
 
 # Detector-development scratch dirs (overlay images, cached intermediates).
 scripts/_*/
