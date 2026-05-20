@@ -113,6 +113,18 @@ def _transfer_corners_via_homography(
     return [[float(p[0] / query_w), float(p[1] / query_h)] for p in query_px]
 
 
+def warm_up_orb_features(examples: list[dict]) -> None:
+    """Eagerly populate `ex["orb_features"]` on every cached groundtruth
+    example. Called from the server-startup warmup thread so the first
+    `_try_orb_match` call doesn't pay 53× cv2.imread + ORB extraction
+    in the critical path. Idempotent: skips entries already populated."""
+    for ex in examples:
+        if "orb_features" in ex:
+            continue
+        img = cv2.imread(str(_GROUNDTRUTH_DIR / f"{ex['video_id']}.jpg"))
+        ex["orb_features"] = _compute_orb_features(img) if img is not None else None
+
+
 def _try_orb_match(img: np.ndarray, exclude_video_id: str | None) -> tuple[RoiDetection | None, dict]:
     """Stage 0: ORB feature matching with homography transfer.
 

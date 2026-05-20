@@ -64,18 +64,11 @@ def warm_up_groundtruth_cache() -> int:
     ORB features) so the first Auto Trim click of a session doesn't pay
     ~53× cv2.imread + ~53× ORB extraction in the critical path. Returns
     the number of cached examples. Safe to call from a startup thread."""
-    import cv2
     from .learned_nn_tier import _load_groundtruth_examples
-    from .orb_tier import _compute_orb_features
-    from .quad import _GROUNDTRUTH_DIR
+    from .orb_tier import warm_up_orb_features
 
     examples = _load_groundtruth_examples()
-    for ex in examples:
-        if "orb_features" in ex:
-            continue
-        img_path = _GROUNDTRUTH_DIR / f"{ex['video_id']}.jpg"
-        img = cv2.imread(str(img_path))
-        ex["orb_features"] = _compute_orb_features(img) if img is not None else None
+    warm_up_orb_features(examples)
     return len(examples)
 
 
