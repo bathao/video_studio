@@ -1,47 +1,61 @@
 # TODO
 
-## 🧹 RESUME POINTER 2026-05-19 sáng — Code cleanup phase
+## Auto Trim perf phase ✅ SHIPPED 2026-05-20
 
-**Status:** disk cleanup + Steps 1 → 3 all DONE. (Step 3 staged
-locally; commit pending operator OK.)
+Algorithm-preserving plumbing pass on the Auto Trim modal. 6 fixes
+across 2 days; detector output byte-identical (verified deterministic
+re-run + pytest 135/135). Operator confirmed *"tốc độ cải thiện khá ok
+rồi, đạt yêu cầu"*.
 
-### Done
+### What shipped
 
-- **Disk cleanup** (`37b474a`): freed ~330 MB regenerable + script
-  hygiene (see commit msg).
-- **Step 1 — `backend/roi_detector.py` (1650 lines) → `backend/roi/`
-  package** (`6993a37`). 8 modules: `__init__.py`, `detector.py`,
-  `quad.py`, `yolo_tier.py`, `color_contrast_tier.py`, `orb_tier.py`,
-  `learned_nn_tier.py`, `naive_tier.py`. LOO regression byte-identical
-  to baseline (mean err 0.0103, max 0.0281, all 53 entries unchanged).
-  Pytest 137/137 pass. Operator smoke-tested modal.
-- **Step 2 — `backend/server.py` (1020 lines) → `backend/server/`
-  package** (`fb4d2aa`). 9 modules: `__init__.py`, `__main__.py`,
-  `app.py`, `state.py`, `utils.py`, `routes_videos.py`,
-  `routes_projects.py`, `routes_render.py`, `routes_auto_trim.py`.
-  All 33 routes preserved. Pytest 137/137 pass. Live uvicorn boot
-  test confirmed every route group answers 200. Operator
-  smoke-tested. Bundled with `frontend/index.html` z-index fix:
-  `#modal-load` was missing `z-40` so the JASSUB scoreboard canvas
-  (z-index 2) was painting on top of Load Project.
-- **Step 3 (staged, awaiting commit)** — two parts in one working
-  tree:
-  - `backend/renderer.py` (1275 lines) → `backend/renderer/`
-    package. 6 modules: `__init__.py`, `state.py`, `segments.py`,
-    `replays.py`, `stages.py`, `orchestrator.py`. Pytest 137/137
-    pass. Live boot test OK.
-  - `frontend/auto_trim_modal.js` (505 lines) → `frontend/auto_trim/`
-    package. 7 modules: `index.js` (public entry), `state.js`,
-    `modal.js`, `log.js`, `canvas.js`, `info_panel.js`, `api.js`.
-    `frontend/trims.js` import updated to `./auto_trim/index.js`.
+| # | Fix | Date | File(s) |
+|---|---|---|---|
+| 1 | Confirm reuses frontend detector result (avoids re-running `detect_roi_multiframe` server-side just to log it) | 2026-05-19 | [routes_auto_trim.py](../backend/server/routes_auto_trim.py), [frontend/auto_trim/api.js](../frontend/auto_trim/api.js) |
+| 2 | Parallelize the 4 `_extract_multi_refframes` ffmpeg fast-seek calls | 2026-05-19 | [routes_auto_trim.py](../backend/server/routes_auto_trim.py) |
+| 3 | Warm YOLO model + groundtruth cache in a daemon thread at uvicorn `lifespan` startup — moves the first-click cold-load tax (~2-3s) off the operator's critical path | 2026-05-20 | [app.py](../backend/server/app.py), [roi_yolo.py](../backend/roi_yolo.py), [roi/__init__.py](../backend/roi/__init__.py) |
+| 6 | **Process-wide cache of groundtruth examples** + ORB features. Invalidated by an mtime+size signature over `dataset/roi_groundtruth/`. Previously every detect call re-`imread`'d 53 jpgs and recomputed ORB features from scratch; now done once per process. | 2026-05-20 | [roi/learned_nn_tier.py](../backend/roi/learned_nn_tier.py) |
+| 7 | **Batch YOLO inference** across the 5 multiframe sample frames in one `model.predict()` call — single CUDA launch + single NMS instead of 5 sequential. | 2026-05-20 | [roi_yolo.py](../backend/roi_yolo.py), [roi/yolo_tier.py](../backend/roi/yolo_tier.py), [roi/detector.py](../backend/roi/detector.py) |
+| 8 | **ThreadPoolExecutor parallelization** of the 5 frames in `detect_roi_multiframe`. After Fix 7 each per-frame worker only runs the CPU tiers (ORB query + color-contrast); both release the GIL inside numpy/opencv hot loops, so the i9's 16 cores actually do something. | 2026-05-20 | [roi/detector.py](../backend/roi/detector.py) |
 
-### How to resume
+### Smoke-test numbers
 
-1. Operator browser-tests Auto Trim modal end-to-end after restarting
-   `run.bat` (refresh, click ⚡ Auto Trim, drag corner in edit mode,
-   Confirm).
-2. Operator green-lights Step 3 → commit renderer + modal together.
-3. Don't auto-commit — wait for explicit "commit đi" from operator.
+| Phase | Measured |
+|---|---|
+| `warm_up_groundtruth_cache` (one-time, in lifespan thread) | 0.71s for 53 examples (HSV feature + ORB features eager) |
+| Multiframe ×5 frames, warm | ~2.7s end-to-end |
+| Multiframe ×5 frames, re-run | ~2.7s (steady state — no drift) |
+| Corner output, two re-runs | byte-identical |
+
+Operator-perceived: first click of session no longer slow; subsequent
+clicks comfortable.
+
+### Things deliberately NOT done
+
+- **Fix 4 (precache refframes on video load)** — became premature
+  optimization once Fix 3+6 made first-click fast. Design notes are in
+  prior commit history if ever needed.
+- **Fix 5 (skip 1 of 5 frames in multiframe)** — operator vetoed:
+  *"không muốn chạy lại gì để ảnh hưởng tới kết quả ROI table
+  detection, vì kết quả đang tốt"*. Re-running LOO to validate would
+  risk invalidating accepted accuracy. ROI milestone gate >
+  hypothetical 40% speedup. See memory
+  `feedback_dont_touch_roi_algorithm_when_results_good.md`.
+
+### Lessons logged for future perf work in this area
+
+- Wall-clock for ⚡ Auto Trim was dominated by **detector compute** (YOLO
+  cold-load + 5× ORB tier rebuild), NOT by ffmpeg I/O — which is why
+  Fix 2 alone showed no perceptible change. Always profile the dominant
+  cost before optimizing the convenient one.
+- The pre-existing `ex["orb_features"]` cache only worked WITHIN a
+  single `_try_orb_match` call because the examples list was rebuilt
+  from disk every time. Persisting the dicts process-wide was the
+  single biggest win — same algorithm, ~5× ORB tier speedup.
+- ultralytics' `model.predict([img1, img2, ...])` correctly returns a
+  positionally-aligned list of Results identical to per-image calls.
+  Letterboxing per image keeps each frame's coordinate system
+  independent. Safe to batch.
 
 ---
 

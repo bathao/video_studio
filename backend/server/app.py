@@ -26,8 +26,15 @@ from .state import FRONTEND_DIR
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Install asyncio exception handler at server start to swallow benign
-    Windows-only ConnectionResetError noise from cancelled HTTP streams."""
+    Windows-only ConnectionResetError noise from cancelled HTTP streams.
+
+    Also kicks off ROI detector warmup in a background daemon thread:
+    YOLO weights load + CUDA JIT (~2-3s) and groundtruth example cache
+    build (53 imreads + ORB feature extraction) move from the operator's
+    first ⚡ Auto Trim click to server startup. Threaded so it doesn't
+    block uvicorn from accepting connections."""
     import asyncio
+    import threading
     if sys.platform == "win32":
         def _handler(loop, context):
             exc = context.get("exception")
@@ -35,6 +42,36 @@ async def _lifespan(app: FastAPI):
                 return
             loop.default_exception_handler(context)
         asyncio.get_running_loop().set_exception_handler(_handler)
+
+    def _warmup_worker() -> None:
+        import logging
+        log = logging.getLogger("roi.warmup")
+        try:
+            from ..roi_yolo import warm_up as _warm_yolo
+            from ..roi import warm_up_groundtruth_cache as _warm_cache
+        except Exception:
+            log.exception("ROI warmup imports failed")
+            return
+        import time
+        t0 = time.monotonic()
+        try:
+            ok_yolo = _warm_yolo()
+        except Exception:
+            log.exception("YOLO warmup failed")
+            ok_yolo = False
+        t1 = time.monotonic()
+        try:
+            n_examples = _warm_cache()
+        except Exception:
+            log.exception("Groundtruth cache warmup failed")
+            n_examples = -1
+        t2 = time.monotonic()
+        log.info(
+            "ROI warmup done: yolo=%s (%.2fs), groundtruth_examples=%s (%.2fs)",
+            "ok" if ok_yolo else "skipped", t1 - t0, n_examples, t2 - t1,
+        )
+
+    threading.Thread(target=_warmup_worker, daemon=True, name="roi_warmup").start()
     yield
 
 

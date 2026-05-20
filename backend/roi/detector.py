@@ -16,17 +16,24 @@ gates + cross-tier IoU clustering.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
 import numpy as np
 
 from .quad import RoiDetection, _default_roi, _quad_iou
-from .yolo_tier import _try_yolo_seg
+from .yolo_tier import _try_yolo_seg, _try_yolo_seg_batch
 from .color_contrast_tier import _try_foreground_by_color_contrast
 from .orb_tier import _try_orb_match
 from .learned_nn_tier import _try_learned_nn
 from .naive_tier import _naive_detect
+
+
+# Sentinel for the optional `precomputed_yolo` argument to detect_roi(),
+# so callers can explicitly pass None to mean "this frame returned no
+# YOLO detection" without triggering the default "run YOLO yourself" path.
+_YOLO_UNSET = object()
 
 
 # When ORB and color-contrast both succeed, IoU threshold to consider
@@ -35,24 +42,52 @@ from .naive_tier import _naive_detect
 _AGREEMENT_IOU = 0.45
 
 
-def detect_roi(refframe_path: Path | str, exclude_video_id: str | None = None) -> RoiDetection:
+def detect_roi(
+    refframe_path: Path | str,
+    exclude_video_id: str | None = None,
+    *,
+    precomputed_yolo: object = _YOLO_UNSET,
+) -> RoiDetection:
     """Detect the operator's table in a single refframe.
 
     `exclude_video_id` lets the caller skip a specific groundtruth entry
     during NN lookup (useful for "what would the algorithm have proposed
     BEFORE the operator confirmed this video?" introspection — required
     for honest leave-one-out validation).
+
+    `precomputed_yolo` (`RoiDetection | None`) is the multiframe batching
+    hatch: when provided, skip the per-frame YOLO call and use the passed
+    result directly. Defaults to the sentinel `_YOLO_UNSET` so single-frame
+    callers retain the original "always run YOLO" behaviour without
+    knowing about it.
     """
     img = cv2.imread(str(refframe_path))
     if img is None:
         return _default_roi(reason="cannot read image")
+    return _detect_roi_for_img(
+        img, exclude_video_id, precomputed_yolo=precomputed_yolo,
+    )
 
+
+def _detect_roi_for_img(
+    img: np.ndarray,
+    exclude_video_id: str | None,
+    *,
+    precomputed_yolo: object = _YOLO_UNSET,
+) -> RoiDetection:
+    """Core detector logic operating on an already-decoded BGR image.
+    Factored out so `detect_roi_multiframe` can decode each frame once
+    and pass the array straight through instead of re-decoding inside
+    `detect_roi`."""
     # Run YOLO + ORB + color-contrast in parallel so we can cross-validate.
     # Pre-retrain analysis showed YOLO at high confidence (~0.99) was still
     # picking the WRONG table in ~12% of multi-table scenes — confidence
     # tracks segmentation quality, not table identity. Classical-CV tiers
     # are an independent vote on which table is the operator's.
-    yolo_result = _try_yolo_seg(img)
+    if precomputed_yolo is _YOLO_UNSET:
+        yolo_result = _try_yolo_seg(img)
+    else:
+        yolo_result = precomputed_yolo  # type: ignore[assignment]
     color_result, color_debug = _try_foreground_by_color_contrast(img)
     orb_result, orb_debug = _try_orb_match(img, exclude_video_id)
 
@@ -219,12 +254,50 @@ def detect_roi_multiframe(
     if not refframe_paths:
         return _default_roi(reason="no frames provided")
 
-    per_frame: list[dict] = []
+    # Decode all images up front. Cheap (~5 jpeg decodes on a fast SSD)
+    # and lets us batch YOLO + parallelize CPU tiers below.
+    loaded: list[tuple[int, np.ndarray]] = []
     for i, p in enumerate(refframe_paths):
-        det = detect_roi(p, exclude_video_id=exclude_video_id)
-        if det.method == "default":
+        img = cv2.imread(str(p))
+        if img is None:
             continue
-        per_frame.append({"frame_idx": i, "det": det})
+        loaded.append((i, img))
+
+    if not loaded:
+        return _default_roi(reason="all refframes unreadable")
+
+    # Batch YOLO across all frames in ONE GPU launch instead of N. The
+    # individual frames are still independent — output is positionally
+    # aligned with `loaded`.
+    imgs_only = [img for _, img in loaded]
+    yolo_batch = _try_yolo_seg_batch(imgs_only)
+
+    # Parallelize the CPU tiers (ORB + color-contrast) across frames.
+    # YOLO is already done above so the worker only runs CPU-bound numpy/
+    # opencv code, which releases the GIL during heavy calls — threading
+    # gives close-to-linear scaling here on the operator's 16-core i9.
+    # max_workers capped at frame count; small thread pool keeps context-
+    # switching overhead negligible.
+    n_frames = len(loaded)
+    per_frame_results: list[RoiDetection | None] = [None] * n_frames
+
+    def _worker(slot: int) -> None:
+        _, img = loaded[slot]
+        per_frame_results[slot] = _detect_roi_for_img(
+            img, exclude_video_id, precomputed_yolo=yolo_batch[slot],
+        )
+
+    if n_frames == 1:
+        _worker(0)
+    else:
+        with ThreadPoolExecutor(max_workers=n_frames) as pool:
+            list(pool.map(_worker, range(n_frames)))
+
+    per_frame: list[dict] = []
+    for slot, det in enumerate(per_frame_results):
+        if det is None or det.method == "default":
+            continue
+        per_frame.append({"frame_idx": loaded[slot][0], "det": det})
 
     if not per_frame:
         return _default_roi(reason="all frames failed detection")

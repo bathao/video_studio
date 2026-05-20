@@ -16,6 +16,7 @@ import json
 import shutil
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi import APIRouter, Body, HTTPException
@@ -141,6 +142,11 @@ def _extract_multi_refframes(video_path: Path, *, max_w: int = 960,
         fractions = [_MULTIFRAME_MARGIN + i * step for i in range(n)]
 
     mid_idx = n // 2
+
+    # Plan the per-frame work. Each entry is either a "reuse" (copy the
+    # already-extracted midpoint into the f{mid_idx} slot) or an
+    # "extract" (run ffmpeg with input-side fast-seek).
+    extract_jobs: list[tuple[Path, float]] = []
     for i, frac in enumerate(fractions):
         out = cache_paths[i]
         if out.exists():
@@ -154,7 +160,16 @@ def _extract_multi_refframes(video_path: Path, *, max_w: int = 960,
                 continue
             except Exception:
                 pass
-        t = max(0.0, dur * frac)
+        extract_jobs.append((out, max(0.0, dur * frac)))
+
+    # Run the ffmpeg extractions in parallel. Sequential was the easy
+    # default but multi-GB MP4s pay ~few-hundred-ms per ffmpeg fast-seek
+    # (read enough of the file to land on a keyframe), so 4 of them
+    # in a row was the dominant cost in the Auto Trim modal latency.
+    # max_workers caps at n so we never spin up more threads than jobs;
+    # 5 concurrent ffmpegs are cheap on a modern SSD + the operator's
+    # 16-core CPU. Each subprocess is independent — no shared state.
+    def _extract_one(out: Path, t: float) -> None:
         cmd = [
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
             "-ss", f"{t:.3f}",
@@ -164,9 +179,14 @@ def _extract_multi_refframes(video_path: Path, *, max_w: int = 960,
             "-q:v", "3",
             str(out),
         ]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        if proc.returncode != 0 or not out.exists():
-            continue
+        subprocess.run(cmd, capture_output=True, text=True)
+        # On failure (corrupt GOP, etc.) we just leave the file absent;
+        # detect_roi_multiframe tolerates fewer than n inputs.
+
+    if extract_jobs:
+        with ThreadPoolExecutor(max_workers=min(n, len(extract_jobs))) as pool:
+            for out, t in extract_jobs:
+                pool.submit(_extract_one, out, t)
 
     # Mirror the mid-index frame to the single-frame cache path so a
     # subsequent _extract_refframe call returns instantly.
@@ -235,8 +255,14 @@ def auto_trim_confirm_roi(payload: dict = Body(...)) -> dict:
     The project-state mutation happens client-side (the modal sets
     `project.info.roi_quadrilateral` directly); this endpoint exists to
     capture the labeled training example so improvements to
-    backend/roi/ can be measured against many real inputs."""
-    from ..roi import detect_roi_multiframe
+    backend/roi/ can be measured against many real inputs.
+
+    The detector's proposal (corners + method + confidence) is taken
+    from the request body — the modal already ran detection on open and
+    has the result in memory. Re-running detect_roi_multiframe here
+    just to record it would cost the operator another 5–10 s per confirm
+    for zero new information. When the fields are absent (older client
+    OR a recovery path), fall back to re-running."""
     name = payload.get("name")
     token = payload.get("token")
     corners = _validate_roi_corners(payload.get("corners"))
@@ -245,11 +271,23 @@ def auto_trim_confirm_roi(payload: dict = Body(...)) -> dict:
     video = _resolve_video_for_auto_trim(name, token)
     video_id = _video_identity(video)
 
-    # Compute what auto-detect would have returned so we can compare in
-    # the groundtruth file → measures detector accuracy automatically.
+    # Refframe extract is cheap if cached (modal-open already triggered it)
+    # — needed for the dataset/roi_groundtruth jpg copy below.
     refframe = _extract_refframe(video)
-    refframes = _extract_multi_refframes(video)
-    det = detect_roi_multiframe(refframes)
+
+    # Detector proposal from the request body. Frontend sends what it
+    # already computed in loadRefframeAndDetect; absence triggers the
+    # legacy re-run path.
+    det_corners = payload.get("detector_proposed")
+    det_method = payload.get("detector_method")
+    det_confidence = payload.get("detector_confidence")
+    if det_corners is None or det_method is None or det_confidence is None:
+        from ..roi import detect_roi_multiframe
+        refframes = _extract_multi_refframes(video)
+        det = detect_roi_multiframe(refframes)
+        det_corners = det.corners
+        det_method = det.method
+        det_confidence = det.confidence
 
     _ROI_GROUNDTRUTH_DIR.mkdir(parents=True, exist_ok=True)
     # Copy the refframe alongside the groundtruth json so the learned
@@ -281,9 +319,9 @@ def auto_trim_confirm_roi(payload: dict = Body(...)) -> dict:
         "confirmed_at": time.time(),
         "corners": corners,
         "was_edited": was_edited,
-        "detector_proposed": det.corners,
-        "detector_method": det.method,
-        "detector_confidence": det.confidence,
+        "detector_proposed": det_corners,
+        "detector_method": det_method,
+        "detector_confidence": det_confidence,
     }))
     record = {
         "video_id": video_id,

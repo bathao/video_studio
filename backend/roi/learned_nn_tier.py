@@ -8,6 +8,7 @@ that both this tier and `orb_tier` consume.
 from __future__ import annotations
 
 import json
+import threading
 
 import cv2
 import numpy as np
@@ -54,10 +55,46 @@ def _hist_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return max(0.0, min(1.0, s))
 
 
-def _load_groundtruth_examples(exclude_video_id: str | None = None) -> list[dict]:
-    """Enumerate dataset/roi_groundtruth/*.json + matching *.jpg pairs.
-    Skips entries whose video_id matches `exclude_video_id` so a detector
-    call on a re-confirm doesn't trivially self-match."""
+# Process-wide cache of the groundtruth example set. Invalidated by an
+# mtime+size signature over the dataset/roi_groundtruth/ directory, so any
+# add/remove/edit of a .json or .jpg there is picked up automatically.
+#
+# Why cache: each detect_roi_multiframe() call invokes detect_roi() 5×,
+# and each detect_roi() previously rebuilt this list from disk = 5 × 53 =
+# 265 file reads + 265 cv2.imread + 265 HSV histogram computes per Auto Trim
+# click. The orb tier additionally re-extracts ORB features on every call
+# because its cache lived inside `ex` dicts that were thrown away after
+# each load. Persisting the dicts across calls (and keeping the lazy
+# `ex["orb_features"]` mutation) collapses all of that to a one-time cost
+# at server startup (or first detect call if warmup didn't run).
+_examples_cache: list[dict] | None = None
+_examples_cache_sig: tuple | None = None
+_examples_cache_lock = threading.Lock()
+
+
+def _compute_groundtruth_signature() -> tuple:
+    """Compact fingerprint of dataset/roi_groundtruth/ for cache
+    invalidation. Cheap (one stat per file, no reads) so safe to call on
+    every detect."""
+    if not _GROUNDTRUTH_DIR.exists():
+        return ()
+    items = []
+    for p in sorted(_GROUNDTRUTH_DIR.iterdir()):
+        if p.suffix.lower() not in (".json", ".jpg"):
+            continue
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        items.append((p.name, int(st.st_mtime_ns), int(st.st_size)))
+    return tuple(items)
+
+
+def _build_examples_from_disk() -> list[dict]:
+    """Heavy build path: reads every .json + .jpg pair under the groundtruth
+    dir, computes the HSV histogram feature once per example. ORB features
+    are NOT computed here (left to orb_tier's lazy path), so this function
+    is safe to call from learned_nn_tier without an orb_tier import."""
     if not _GROUNDTRUTH_DIR.exists():
         return []
     out = []
@@ -67,8 +104,6 @@ def _load_groundtruth_examples(exclude_video_id: str | None = None) -> list[dict
         except Exception:
             continue
         vid = data.get("video_id") or json_path.stem
-        if exclude_video_id is not None and vid == exclude_video_id:
-            continue
         img_path = _GROUNDTRUTH_DIR / f"{vid}.jpg"
         if not img_path.exists():
             continue
@@ -85,6 +120,26 @@ def _load_groundtruth_examples(exclude_video_id: str | None = None) -> list[dict
             "features": _compute_image_features(img),
         })
     return out
+
+
+def _load_groundtruth_examples(exclude_video_id: str | None = None) -> list[dict]:
+    """Enumerate dataset/roi_groundtruth/*.json + matching *.jpg pairs.
+
+    Process-wide memoized: subsequent calls hit RAM unless the directory
+    signature changed (file added/removed/edited via the Auto Trim Confirm
+    flow). `exclude_video_id` filters the cached list at return time so
+    leave-one-out callers still see a fresh-looking result without
+    invalidating the cache for the rest of the session."""
+    global _examples_cache, _examples_cache_sig
+    sig = _compute_groundtruth_signature()
+    with _examples_cache_lock:
+        if _examples_cache is None or _examples_cache_sig != sig:
+            _examples_cache = _build_examples_from_disk()
+            _examples_cache_sig = sig
+        cached = _examples_cache
+    if exclude_video_id is None:
+        return cached
+    return [e for e in cached if e.get("video_id") != exclude_video_id]
 
 
 def _weighted_average_corners(scored: list[dict], weights: list[float], total_w: float) -> list[list[float]]:

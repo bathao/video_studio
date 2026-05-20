@@ -99,10 +99,19 @@ export async function onConfirmClick() {
     snapshot();
     project.info.roi_quadrilateral = state.corners.map((p) => [p[0], p[1]]);
 
+    // Pass the detector's most recent proposal so the backend doesn't
+    // have to re-run detect_roi_multiframe just to log it. The result
+    // is already in state.detectorResult from loadRefframeAndDetect.
+    // Backend falls back to re-running only when these fields are
+    // absent (defensive — should never happen in practice).
+    const det = state.detectorResult;
     const body = {
       ...videoIdentBody(),
       corners: state.corners,
       was_edited: state.wasEdited,
+      detector_proposed: det?.corners ?? null,
+      detector_method: det?.method ?? null,
+      detector_confidence: det?.confidence ?? null,
     };
     log('POST /api/auto_trim/confirm_roi ...');
     const r = await fetch('/api/auto_trim/confirm_roi', {
