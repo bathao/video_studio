@@ -85,8 +85,15 @@ backend/
                        `remap_events_with_replays`, `_PlaylistEntry`,
                        `build_main_playlist`. Pure logic.
     stages.py          Stage helpers (kwargs-only, no ctx): `render_intro`,
-                       `render_main_with_scoreboard`, `render_outro_card`,
-                       `concat_parts`. These are the ffmpeg builders.
+                       `pre_concat_slices`, `render_main_with_scoreboard`,
+                       `render_outro_card`, `concat_parts`. These are
+                       the ffmpeg builders. `pre_concat_slices` runs
+                       optionally before the main render when the playlist
+                       has more "slice" entries than the GPU's NVDEC
+                       session budget (~6), consolidating kept segments
+                       into one intermediate via the concat demuxer so
+                       the main stage can consume them through `split`
+                       + `trim` instead of N parallel `-i src` inputs.
     orchestrator.py    Top-level: `RenderPlan`, `RenderContext`,
                        `_prepare_context`, `_resolve_source`,
                        `all_intro_photos_present`, `_intro_stage`,

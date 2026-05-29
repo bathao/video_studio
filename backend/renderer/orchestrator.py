@@ -37,6 +37,7 @@ from .replays import build_main_playlist, build_replay_plan, remap_events_with_r
 from .segments import kept_segments_from_trims, remap_score_event_to_trimmed
 from .stages import (
     concat_parts,
+    pre_concat_slices,
     render_intro,
     render_main_with_scoreboard,
     render_outro_card,
@@ -389,6 +390,46 @@ def _main_stage(ctx: RenderContext) -> None:
             ],
         )
 
+    # Pre-concat optimization: when the playlist has more "slice"
+    # entries than the GPU's NVDEC session budget, we can't feed each
+    # slice as its own `-i src` (CUDA_ERROR_OUT_OF_MEMORY on cuvidCreate
+    # at ~5-8 concurrent sessions; the software-decode fallback then
+    # exhausts RAM with per-input HEVC ref-frame buffers). Solution:
+    # consolidate every slice into a single intermediate via the concat
+    # demuxer (one NVDEC + one NVENC), then let the main render consume
+    # that file through `split` + `trim` per slice entry — one decoder
+    # context, dozens of virtual sub-slices.
+    SLICE_PRECONCAT_THRESHOLD = 6
+    slice_ranges = [
+        (e.src_start, e.src_end) for e in playlist if e.kind == "slice"
+    ]
+    main_slices_path: Optional[Path] = None
+    if len(slice_ranges) > SLICE_PRECONCAT_THRESHOLD:
+        main_slices_path = ctx.job_dir / "main_slices.mp4"
+        # Pre-concat consumes the first ~25 % of the "main" weight; the
+        # filter-graph render stage gets the remaining ~75 %. Empirical
+        # split — pre-concat is sequential decode+encode (fast on NVENC),
+        # filter-graph render does the per-replay slow-mo + 2 ass burns
+        # so it's the slower of the two.
+        pre_share = 0.25
+        main_cb = ctx.make_progress("main")
+        def _pre_cb(frac: float, msg: str) -> None:
+            main_cb(frac * pre_share, f"pre-concat: {msg}")
+        def _render_cb(frac: float, msg: str) -> None:
+            main_cb(pre_share + (1.0 - pre_share) * frac, msg)
+        pre_concat_slices(
+            src=ctx.src,
+            slice_ranges=slice_ranges,
+            out_path=main_slices_path,
+            width=ctx.width, height=ctx.height, fps=ctx.fps,
+            has_audio=ctx.has_audio,
+            on_progress=_pre_cb,
+            cancel_check=ctx.cancel_check,
+        )
+        render_progress = _render_cb
+    else:
+        render_progress = ctx.make_progress("main")
+
     main_path = ctx.job_dir / "main.mp4"
     render_main_with_scoreboard(
         src=ctx.src,
@@ -398,10 +439,11 @@ def _main_stage(ctx: RenderContext) -> None:
         playlist=playlist,
         width=ctx.width, height=ctx.height, fps=ctx.fps,
         has_audio=ctx.has_audio,
-        on_progress=ctx.make_progress("main"),
+        on_progress=render_progress,
         cancel_check=ctx.cancel_check,
         replay_sound_path=config.replay_sound_path,
         replay_sound_volume=config.replay_sound_volume,
+        main_slices_path=main_slices_path,
     )
     ctx.parts.append(main_path)
     ctx.completed_weight += ctx.weight_lookup["main"]

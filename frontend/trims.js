@@ -64,8 +64,12 @@ export function syncTrims() {
   project.trim_segments.forEach((t, i) => {
     const li = document.createElement('li');
     li.className = 'list-row';
+    const badge = t.source === 'auto'
+      ? '<span class="font-mono text-[9px] px-1 py-0.5 rounded bg-accent-900/40 text-accent-300 border border-accent-700/50" title="Auto-detected by rally detector">AUTO</span>'
+      : '';
     li.innerHTML = `
       <span class="font-mono text-warn-400 text-[11px]">#${i + 1}</span>
+      ${badge}
       <input type="text" value="${fmt(t.start)}" class="ipt w-20 text-[11px] py-0.5 font-mono" data-field="start" title="m:ss.xx" />
       <span class="text-slate-500">→</span>
       <input type="text" value="${fmt(t.end)}" class="ipt w-20 text-[11px] py-0.5 font-mono" data-field="end" title="m:ss.xx" />

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -38,6 +38,12 @@ class ProjectInfo(BaseModel):
 class TrimSegment(BaseModel):
     start: float
     end: float
+    # "manual" (operator-marked, default for legacy projects) or "auto"
+    # (Auto Trim modal's Apply). The Apply path filters existing
+    # source=="auto" trims before appending fresh ones, so re-running
+    # auto-trim replaces only its own output and leaves manual trims
+    # untouched.
+    source: Literal["manual", "auto"] = "manual"
 
 
 class Highlight(BaseModel):

@@ -30,6 +30,13 @@ import {
   refreshGroundtruthCount,
 } from './api.js';
 import { redraw } from './canvas.js';
+import {
+  onApplyClick,
+  onCancelDetectionClick,
+  onDiscardClick,
+  onRunDetectionClick,
+  syncDetectionUI,
+} from './detection.js';
 import { clearLog, log } from './log.js';
 import { closeModal } from './modal.js';
 import { updateInfoPanel } from './info_panel.js';
@@ -56,6 +63,19 @@ export async function openAutoTrimModal() {
   state.wasEdited = false;
   state.dragging = -1;
   state.confirmed = false;
+  // Reset Phase B detection state too — a stale jobId from a prior
+  // open would otherwise let the Cancel button POST against a job
+  // belonging to the previous video.
+  state.detection.status = 'idle';
+  state.detection.jobId = null;
+  state.detection.eventSource = null;
+  state.detection.stage = '';
+  state.detection.progress = 0;
+  state.detection.trims = [];
+  state.detection.done = null;
+  state.detection.error = null;
+  state.detection.cacheHit = false;
+  state.detection.cacheKey = null;
   els.modal.classList.remove('hidden');
   els.modal.classList.add('flex');
   els.canvasEmpty.classList.add('hidden');
@@ -64,6 +84,7 @@ export async function openAutoTrimModal() {
   els.confirm.textContent = '✓ Confirm ROI';
   clearLog();
   log(`opened modal — video=${state.videoName || `<token:${state.videoToken}>`}`);
+  syncDetectionUI();
   await loadRefframeAndDetect();
   await refreshGroundtruthCount();
 }
@@ -79,6 +100,7 @@ els.redetect.addEventListener('click', async () => {
   state.wasEdited = false;
   state.confirmed = false;
   els.confirm.textContent = '✓ Confirm ROI';
+  syncDetectionUI();
   await loadRefframeAndDetect();
 });
 
@@ -91,6 +113,12 @@ els.resetDefault.addEventListener('click', () => {
 
 els.editMode.addEventListener('change', redraw);
 els.clearLog.addEventListener('click', clearLog);
+
+// Phase B — rally detection panel buttons.
+els.detRun.addEventListener('click', onRunDetectionClick);
+els.detCancel.addEventListener('click', onCancelDetectionClick);
+els.detApply.addEventListener('click', onApplyClick);
+els.detDiscard.addEventListener('click', onDiscardClick);
 
 window.addEventListener('resize', () => {
   if (state.open) redraw();

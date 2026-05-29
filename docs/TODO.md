@@ -1,5 +1,243 @@
 # TODO
 
+## ✅ Phase 1b VERIFIED + COMMITTED 2026-05-29
+
+Operator tested end-to-end in browser ("chạy ok với auto trim basic
+level"). Bundled commit covers:
+
+- Phase 1b Auto Trim end-to-end (see section below for the 5-step
+  breakdown).
+- **NVDEC session-budget fix** (`pre_concat_slices` in
+  [renderer/stages.py](../backend/renderer/stages.py) +
+  [renderer/orchestrator.py](../backend/renderer/orchestrator.py)).
+  Auto Trim's 60+ trims / kept segments previously OOM'd the GPU's
+  NVDEC session cap (~6 concurrent on RTX 5060 Ti) when each segment
+  was opened as its own `-hwaccel cuda -i src`; the software-decode
+  fallback then exhausted RAM holding 90+ HEVC ref-frame buffers.
+  Fix: when slice count > 6, pre-concat all slices into a single
+  intermediate via the concat demuxer (one decoder context), then
+  the main render consumes it through `split` + `trim` per slice
+  entry. Replay + stinger entries keep their own inputs (replays need
+  precise frame-accurate seek for slow-mo; stingers come from cached
+  files). Pre-concat takes ~25% of "main" weight; filter-graph render
+  gets the remaining ~75%.
+- New player avatar `assets/avatars/Nguyễn Văn Trung.jpg`.
+
+### Follow-ups discussed (operator picks when ready)
+
+- (A) Test on a fresh match outside the 3 PHASE0_REPORT spike entries
+  to measure real-world recall on truly-unseen audio + venue.
+- (B) Optimise detect speed 2.2× → 6-8× realtime (plumbing only —
+  greyscale decode from NV12 luma instead of per-frame cvtColor;
+  numpy mask sum hot loop). Algorithm-preserving fixes per memory
+  `feedback_dont_touch_roi_algorithm_when_results_good.md` apply
+  equally to the rally detector.
+
+---
+
+## ✅ Phase 1b SHIPPED 2026-05-26 — Auto Trim end-to-end
+
+Operator workflow now works end-to-end:
+
+```
+⚡ Auto Trim  →  Confirm ROI  →  Run detection  →  Apply  →  trims appear
+   modal         Phase A           Phase B          with [AUTO] badge
+```
+
+### What landed (all 5 steps in one bundle per operator preference)
+
+| Step | What | Files |
+|---|---|---|
+| 1 | Backend rally detector (NVDEC decode → motion → adaptive p70 → score-anchored gap detection → trims). Pure `gaps_to_trims` core split out. Hardcoded Balanced preset. | [backend/rally_detector.py](../backend/rally_detector.py), [tests/test_rally_detector.py](../tests/test_rally_detector.py) (22 tests), [scripts/verify_rally_detector.py](../scripts/verify_rally_detector.py) |
+| 2 | SSE orchestration: 4 new endpoints (`/start`, `/events/{id}`, `/cancel/{id}`, `/job/{id}`) + `AutoTrimJobState` + `queue.Queue` per job + `temp/auto_trim_cache/<sha1>.json` cache layer keyed by (video_id + roi + score events + params). Cache hit replays events in ms. | [backend/server/routes_auto_trim.py](../backend/server/routes_auto_trim.py), [backend/server/state.py](../backend/server/state.py) |
+| 3 | Modal Phase B: detection section in right column (status / stage / progress bar / live log / results / Run / Cancel / Apply / Discard buttons). EventSource client + state machine in new module. | [frontend/index.html](../frontend/index.html), [frontend/auto_trim/detection.js](../frontend/auto_trim/detection.js) (NEW), [state.js](../frontend/auto_trim/state.js), [index.js](../frontend/auto_trim/index.js), [api.js](../frontend/auto_trim/api.js), [modal.js](../frontend/auto_trim/modal.js) |
+| 4 | `TrimSegment.source: Literal["manual", "auto"] = "manual"`. Apply filters existing `source=="auto"` trims first → re-run replaces only auto, preserves manual. Trim panel renders `[AUTO]` badge. | [backend/models.py](../backend/models.py), [frontend/trims.js](../frontend/trims.js) |
+| 5 | Cache key determinism + TrimSegment BC tests (9 new). Total suite 166 pass. Validation in `/start`: ≥10 score events required; `duration < 60 s` rejected. | [tests/test_auto_trim_routes.py](../tests/test_auto_trim_routes.py) (NEW) |
+
+### Verify results — all 3 PHASE0_REPORT spike entries PASS
+
+| Entry | Source | Recall | Extras | Trims | Detect speed | PHASE0_REPORT Balanced |
+|---|---|---:|---:|---:|---|---|
+| E1 `match_001_20260516_215553` | 22:00 | **0.993** | **352.7s** | 71 | 2.2× realtime | 97.6% / 323s |
+| E2 `match_001_20260516_223928` | 20:41 | **0.968** | **319.6s** | 72 | 2.2× realtime | 92.2% / 289s |
+| E3 `match_001_20260516_230801` | 13:54 | **0.957** | **303.7s** | 62 | 2.1× realtime | 94.9% / 276s |
+
+Recall exceeds PHASE0_REPORT on every entry (better ROI fit from
+`detect_roi_multiframe` vs spike's hand-eyeballed corners). Extras
+slightly higher than spike target (~10–30 s per entry) but well within
+tolerance. All 3 used `multiframe[5/5]:yolo_seg+orb_agree` for ROI
+(high-trust cross-validated tag).
+
+### Known concern: detect speed
+
+~2.2× realtime, so a 22-min source ≈ 10 min wall-clock. Below
+PHASE0_REPORT's 8× decode claim. Hypotheses: per-frame `cv2.cvtColor`
+on CPU (could decode greyscale directly from NV12 luma plane), Python
+fancy-indexing on `diff[mask_bool].sum()` per frame, or NVDEC not
+actually engaging on this driver/build. **Not blocking** — algorithm
+correctness verified; perf optimisation is a plumbing-only follow-up.
+
+### Operator end-to-end test checklist
+
+Restart `run.bat` and test in browser at http://127.0.0.1:8765/ :
+
+1. Load a video, score ≥10 points with A/D throughout the match
+2. Click ⚡ Auto Trim → ROI canvas loads → Confirm ROI (Phase A unchanged)
+3. After Confirm, "Run detection" button enables; score event count shown
+4. Click Run → progress bar streams; log shows `stage` and `progress` events
+5. Done → results panel shows `Trims found / Dead time / Cache miss`,
+   Apply + Discard buttons appear
+6. Click Apply → trims appended to Trim panel with `[AUTO]` badge
+7. Re-run on same project → `Cache hit ⚡` → done in milliseconds
+8. Cancel mid-run → status flips to `cancelled` within ~1 s
+9. Open modal again with a different video → no stale state leaks
+
+If all 9 pass, the only remaining task is the single commit covering
+Phase 1b end-to-end.
+
+---
+
+## Phase 1b plan (draft, 2026-05-20)
+
+Operator clicks ⚡ Auto Trim → confirm ROI (already shipped) → click
+"Run detection" → backend extracts motion signal + runs detector +
+streams progress + per-rally / per-trim events via SSE → operator
+reviews + Apply → trims append to `project.trim_segments` with
+`source="auto"`.
+
+**Estimate:** ~2 days focused work (down from 4.5 days in the older
+2026-05-17 plan, because the refactor + perf bundle already shipped
+much of the supporting infra).
+
+### Step 1 — Backend rally detector  (~6-8h)
+
+New file `backend/rally_detector.py` (single file, package only if it
+overflows). Rebuilt from PHASE0_REPORT.md spec because the spike was
+deleted; report is the authoritative source for parameters.
+
+- ffmpeg NVDEC decode pipeline: `-hwaccel cuda -hwaccel_output_format
+  cuda -vf "scale_cuda=480:270,hwdownload,format=nv12,format=rgb24"`.
+  Spike measured 240-263 fps decode (8× realtime) on RTX 5060 Ti.
+- ROI mask via `cv2.fillPoly` on the 4-corner quad.
+- Motion signal: `mean(abs(curr - prev) * roi_mask)` per frame.
+- Smooth: moving average window 0.5s.
+- Adaptive threshold: per-match p70 percentile of smoothed signal
+  (Balanced default; spike showed adaptive p65/p70 added ~7-8% recall
+  over fixed threshold).
+- Score-event-anchored gap detection:
+  - For each consecutive pair `(t_i, t_{i+1})` in score events.
+  - Backward-scan from `t_{i+1} - 0.5s` looking for 1.5s of sustained
+    idle (motion below threshold).
+  - Apply `rally_dur_min ≥ 5s` gate (Balanced).
+  - Emit trim `(t_i - 0.7s lag + 0.5s tail, rally_start - 1.0s pre_pad)`.
+- Edges: pre-first-score (treat as gap from 0 to first event), post-
+  last-score (treat as gap from last event to video end).
+- Public API:
+  ```
+  def run_rally_detection(
+      video_path, roi_corners, score_events, params,
+      cancel_check: Callable[[], bool] = lambda: False,
+      emit: Callable[[str, dict], None] = lambda *a: None,
+  ) -> list[TrimSegment]
+  ```
+- Pure-logic split: `gaps_to_trims(score_events, motion_signal,
+  threshold, params) -> list[TrimSegment]` unit-testable without ffmpeg.
+
+### Step 2 — Backend SSE orchestration  (~3-4h)
+
+Extend `backend/server/routes_auto_trim.py` + `backend/server/state.py`.
+
+- Add `_auto_trim_jobs: dict[str, AutoTrimJobState]` + `_auto_trim_lock`
+  to state.py — mirror the existing render-job pattern.
+- Endpoints:
+  - `POST /api/auto_trim/start` body `{video_token|name, roi,
+    score_events, params}` → returns `{job_id}`.
+  - `GET /api/auto_trim/events/{job_id}` → SSE stream
+    (`text/event-stream`). Events: `stage`, `progress`, `log`,
+    `motion_sample` (subsampled to ~10/s), `rally`, `trim`, `done`,
+    `error`.
+  - `POST /api/auto_trim/cancel/{job_id}` → flip cancel flag; detector
+    polls `cancel_check()` each frame.
+- Cache layer at `temp/auto_trim_cache/<sha1>.json`. Key = sha1(video_id
+  + roi + score_events + params). Cache hit replays all stored events
+  + emits `done` in milliseconds.
+- Thread spawns a worker that runs `run_rally_detection(...)` with an
+  `emit` callback that pushes events into a queue the SSE handler
+  drains.
+
+### Step 3 — Frontend modal extension  (~3-4h)
+
+Extend `frontend/auto_trim/` package — modal becomes two-phase:
+
+- **Phase A (existing):** confirm ROI.
+- **Phase B (new, unlocked after confirm):**
+  - "Run detection" button (disabled until score_events ≥ 10).
+  - Stage indicator ("Decoding frame 4521/79320").
+  - Progress bar.
+  - Live log (scroll-to-bottom, color-coded levels).
+  - Optional motion mini-plot canvas (subsamples `motion_sample`
+    events).
+  - Results panel after `done`: "78 rallies, 41 trims, 12.3 min
+    trimmed" + Apply / Discard buttons.
+- New modules under `frontend/auto_trim/`:
+  - `detection.js` — SSE client (`EventSource`) + state machine
+    (idle / running / done / error).
+  - Possibly `motion_plot.js` for the mini-plot (defer if running tight
+    on time).
+
+### Step 4 — Apply / persist  (~2h)
+
+- `backend/models.py`: `TrimSegment.source: Literal["manual", "auto"]
+  = "manual"`. Update `ProjectData` save/load tolerance for legacy
+  projects (default to "manual" when field absent).
+- `frontend/state.js`: trim shape includes `source`.
+- Apply button: filter out existing `source=="auto"` trims, append new
+  ones from job result, then trigger `syncAllUI()`.
+- `frontend/trims.js`: render small `[AUTO]` badge next to trims with
+  `source=="auto"`.
+- Re-run replaces only auto trims; manual ones are preserved.
+
+### Step 5 — Tests + edge cases  (~2h)
+
+Pytest pure-logic suite (under `tests/`):
+
+- `gaps_to_trims_score_anchored` — gap edge cases (pre-first-score,
+  post-last-score, missed score with very long gap, score events spaced
+  closer than `rally_dur_min`).
+- `lag_correction` — operator-press-lag math correctness.
+- `cache_key_determinism` — same inputs produce same sha1 across runs;
+  different score-event order doesn't reorder cache key.
+
+Edge cases in code:
+
+- `score_events < 10` → log warning, disable Run button (per
+  PHASE0_REPORT: Balanced requires score events). Future: optional
+  blanket-MOG2 fallback (defer to Phase 6 if ever needed).
+- Cancel mid-run → cleanup partial state (motion signal half-computed
+  cache file deleted).
+- Source video < 60s → button stays disabled (no auto-trim use case).
+- Score event lands inside an auto trim → frontend toast warning.
+
+### Phase 1b acceptance
+
+- Operator clicks ⚡ Auto Trim → ROI confirm → Run → ~2-3 minutes for a
+  22-minute source (per PHASE0_REPORT) → results panel shows trims →
+  Apply → trim list updates with `[AUTO]` badges.
+- Re-running auto-trim on the same project (no input change) hits cache
+  and completes in < 1s.
+- Cancel during decode actually stops within ~1s.
+- ≥ 95% recall vs. operator-marked manual trims on the 3 spike entries
+  in `dataset/<slug>/`.
+
+### Phases 2-5 (post Phase 1b)
+
+Phase 5 from the original sketch (headless auto-trim inside Render
+button) and Phase 6 (YOLOv8-pose escalation) remain deferred — revisit
+only after operator runs Phase 1b on enough fresh matches to decide
+whether algorithm reliability is high enough to skip the modal.
+
+---
+
 ## Auto Trim perf phase ✅ SHIPPED 2026-05-20
 
 Algorithm-preserving plumbing pass on the Auto Trim modal. 6 fixes
@@ -59,7 +297,26 @@ clicks comfortable.
 
 ---
 
-## ⚠ MILESTONE — ROI auto-detect gates everything (updated 2026-05-19 dawn)
+## 🔓 ROI MILESTONE UNBLOCKED 2026-05-20
+
+Operator confirmed ROI detect quality acceptable on truly-unseen videos
+across the recent batch (53-entry dataset, multi-tier pipeline with
+cross-tier IoU consensus + B.5 + B.6 polish + perf bundle 50b8058
+shipping the modal latency reduction). The `[ ] Algorithm reach ≥99%
+on unseen arenas with no operator edit` gate is considered satisfied
+for practical purposes — accuracy is "đạt yêu cầu" per operator.
+
+**Phase 1b (backend trim detector + SSE) is now unblocked.** See the
+new "Phase 1b plan" section toward the bottom of this file. The earlier
+"Phase 1-5" sketch from 2026-05-17 still applies in spirit; Phase 1b
+updates it for the post-refactor layout (server / renderer / auto_trim
+are now packages, not single files) and replaces "port the spike script"
+with "rebuild from PHASE0_REPORT.md spec" because the spike script was
+deleted in 37b474a's disk cleanup (only the report survived).
+
+---
+
+## ⚠ HISTORICAL MILESTONE — ROI auto-detect gates everything (updated 2026-05-19 dawn)
 
 **Update 2026-05-19 dawn (latest):** Phase B.5 (cross-tier IoU clustering) +
 Phase B.6 (modal UX with 4 corner zoom panels at 3× + state-leak fix) shipped.

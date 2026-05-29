@@ -290,19 +290,18 @@
   <div id="modal-auto-trim" class="fixed inset-0 bg-black/80 hidden items-center justify-center z-40">
     <div class="bg-ink-900 border border-ink-700 rounded-lg p-5 w-[95vw] h-[92vh] flex flex-col">
       <div class="flex items-center justify-between mb-2">
-        <h3 class="text-lg font-semibold">Auto Trim — ROI calibration (Phase 1a)</h3>
+        <h3 class="text-lg font-semibold">Auto Trim</h3>
         <div class="flex items-center gap-2 text-xs text-slate-400">
           <span id="at-roi-status" class="font-mono"></span>
           <button id="at-close" class="btn-secondary text-xs">✕ Close</button>
         </div>
       </div>
-      <div class="mb-3 px-3 py-2 bg-warn-900/30 border border-warn-700/50 rounded-md text-[11px] text-warn-200">
-        <span class="font-semibold">⚠ Trim detection is DEFERRED.</span>
-        This modal only captures ROI groundtruth. Confirming saves the
-        4-corner table region to <code class="text-warn-300">project.info.roi_quadrilateral</code>
-        + appends to <code class="text-warn-300">dataset/roi_groundtruth/</code>.
-        Trim segments will NOT appear in the Trim panel yet — auto-trim logic
-        unlocks once ROI detection works on <span id="at-banner-need">10</span>+ different videos.
+      <div class="mb-3 px-3 py-2 bg-ink-800 border border-ink-700 rounded-md text-[11px] text-slate-300">
+        <span class="font-semibold text-slate-200">2-step flow:</span>
+        <span class="text-slate-400">①</span> Confirm the 4-corner table ROI <span class="text-slate-500">·</span>
+        <span class="text-slate-400">②</span> Run rally detection — backend analyses motion in ROI between
+        your score events to find dead-time segments. Apply → trims append to the Trim panel
+        with <span class="text-accent-400 font-mono">[AUTO]</span> badge.
       </div>
 
       <div class="grid grid-cols-12 gap-4 flex-1 min-h-0">
@@ -379,13 +378,37 @@
             <h4 class="text-slate-300 font-semibold mb-2">Groundtruth</h4>
             <div class="font-mono text-[11px] text-slate-400">
               Confirmed inputs: <span id="at-gt-count" class="text-slate-200">—</span>
-              <div class="text-[10px] text-slate-500 mt-1">Need ≥10 different videos to unlock Phase 1b.</div>
+            </div>
+          </section>
+
+          <section id="at-detect-section" class="bg-ink-800 border border-ink-700 rounded-md p-3 text-xs">
+            <h4 class="text-slate-300 font-semibold mb-2">Rally detection</h4>
+            <div class="font-mono text-[11px] text-slate-400 space-y-1">
+              <div class="flex justify-between"><span>Score events</span><span id="at-det-score-count" class="text-slate-200">0</span></div>
+              <div class="flex justify-between"><span>Status</span><span id="at-det-status" class="text-slate-200">idle</span></div>
+              <div class="flex justify-between"><span>Stage</span><span id="at-det-stage" class="text-slate-200">—</span></div>
+            </div>
+            <div id="at-det-progress-wrap" class="mt-2 h-1.5 bg-ink-950 rounded overflow-hidden hidden">
+              <div id="at-det-progress" class="h-full bg-accent-500 transition-all" style="width: 0%"></div>
+            </div>
+            <div id="at-det-results" class="mt-2 pt-2 border-t border-ink-700 hidden font-mono text-[11px] text-slate-300 space-y-0.5">
+              <div class="flex justify-between"><span>Trims found</span><span id="at-det-trim-count" class="text-success-400 font-semibold">—</span></div>
+              <div class="flex justify-between"><span>Dead time</span><span id="at-det-trim-total" class="text-slate-200">—</span></div>
+              <div class="flex justify-between"><span>Cache</span><span id="at-det-cache" class="text-slate-400">—</span></div>
+            </div>
+            <div class="mt-2 flex flex-col gap-1.5">
+              <button id="at-det-run" class="btn-secondary text-xs" disabled title="Confirm ROI first">▶ Run detection</button>
+              <button id="at-det-cancel" class="btn-secondary text-xs hidden">✕ Cancel detection</button>
+              <div id="at-det-apply-row" class="grid grid-cols-2 gap-1.5 hidden">
+                <button id="at-det-apply" class="btn-primary text-xs">✓ Apply</button>
+                <button id="at-det-discard" class="btn-secondary text-xs">Discard</button>
+              </div>
             </div>
           </section>
 
           <div class="flex flex-col gap-2 pt-1">
             <button id="at-confirm" class="btn-primary text-sm" disabled>✓ Confirm ROI</button>
-            <button id="at-cancel" class="btn-secondary text-sm">Cancel</button>
+            <button id="at-cancel" class="btn-secondary text-sm">Close</button>
           </div>
         </div>
       </div>

@@ -34,6 +34,21 @@ export const els = {
   confirm: $('at-confirm'),
   cancel: $('at-cancel'),
   close: $('at-close'),
+  // Phase B — rally detection panel
+  detScoreCount: $('at-det-score-count'),
+  detStatus: $('at-det-status'),
+  detStage: $('at-det-stage'),
+  detProgressWrap: $('at-det-progress-wrap'),
+  detProgress: $('at-det-progress'),
+  detResults: $('at-det-results'),
+  detTrimCount: $('at-det-trim-count'),
+  detTrimTotal: $('at-det-trim-total'),
+  detCache: $('at-det-cache'),
+  detRun: $('at-det-run'),
+  detCancel: $('at-det-cancel'),
+  detApplyRow: $('at-det-apply-row'),
+  detApply: $('at-det-apply'),
+  detDiscard: $('at-det-discard'),
 };
 
 // Mutable session state for the open modal. Reset by openAutoTrimModal()
@@ -52,6 +67,21 @@ export const state = {
   wasEdited: false,
   dragging: -1,        // index of corner being dragged, or -1
   confirmed: false,    // true after a successful confirm POST in this session
+
+  // Phase B — rally detection runtime state. Reset on every modal open
+  // (in openAutoTrimModal) and again at the start of every Run click.
+  detection: {
+    status: 'idle',   // 'idle' | 'running' | 'done' | 'cancelled' | 'error'
+    jobId: null,
+    eventSource: null,   // active EventSource, or null
+    stage: '',
+    progress: 0,         // 0..1
+    trims: [],           // [{start, end, source: "auto"}] collected from stream
+    done: null,          // {trims, total_trimmed_s, threshold, duration} or null
+    error: null,
+    cacheHit: false,
+    cacheKey: null,
+  },
 };
 
 export const DEFAULT_CORNERS = [

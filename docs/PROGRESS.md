@@ -1,21 +1,33 @@
 # Progress Status
 
-Last update: 2026-05-16 (v2.0 — manual-mode final)
+Last update: 2026-05-29 (Phase 1b verified in browser + NVDEC session-budget fix — see [TODO.md](TODO.md))
 
 ## Module map
 
+Several packages here used to be single-file modules. After the
+refactor pass shipped in commits fb4d2aa / 6993a37 / 3c4f167 /
+0072cab, each public name is a re-export from the package
+`__init__.py` so existing callers keep working. See
+[CLAUDE.md](../CLAUDE.md) for per-module file layout.
+
 | Module | Status | File |
 |---|---|---|
-| Backend skeleton (FastAPI) | ✅ done | [backend/server.py](../backend/server.py) |
+| Backend skeleton (FastAPI) | ✅ done | [backend/server/](../backend/server/) (package) |
 | Config loader | ✅ done | [backend/config.py](../backend/config.py) |
 | Pydantic models | ✅ done | [backend/models.py](../backend/models.py) |
 | FFmpeg / FFprobe wrapper | ✅ done | [backend/ffmpeg_runner.py](../backend/ffmpeg_runner.py) |
 | ASS overlay builders | ✅ done | [backend/ass/](../backend/ass/) |
-| Render orchestrator | ✅ done | [backend/renderer.py](../backend/renderer.py) |
+| Render orchestrator | ✅ done | [backend/renderer/](../backend/renderer/) (package) |
 | Cinematic intro builder | ✅ done | [backend/intro_builder.py](../backend/intro_builder.py) |
 | Auto-stinger builder | ✅ done | [backend/stinger_builder.py](../backend/stinger_builder.py) |
+| Post-render groundtruth sidecar | ✅ done | [backend/groundtruth.py](../backend/groundtruth.py) |
+| Post-render dataset archive | ✅ done | [backend/dataset.py](../backend/dataset.py) |
+| Auto Trim ROI auto-detect | ✅ done (gate unblocked 2026-05-20) | [backend/roi/](../backend/roi/) + [backend/roi_yolo.py](../backend/roi_yolo.py) |
+| Auto Trim rally detector | ✅ done | [backend/rally_detector.py](../backend/rally_detector.py) |
+| Auto Trim SSE orchestration (job state + cache + endpoints) | ✅ done | [backend/server/routes_auto_trim.py](../backend/server/routes_auto_trim.py) + [state.py](../backend/server/state.py) |
 | Frontend HTML + Tailwind | ✅ done | [frontend/index.html](../frontend/index.html) |
-| Frontend logic (player + state) | ✅ done | [frontend/app.js](../frontend/app.js) |
+| Frontend logic (player + state) | ✅ done | [frontend/app.js](../frontend/app.js) (boot) + 12 ES6 modules |
+| Auto Trim modal (Phase A ROI + Phase B detection) | ✅ done | [frontend/auto_trim/](../frontend/auto_trim/) (8 modules) |
 | Frontend styles | ✅ done | [frontend/styles.css](../frontend/styles.css) |
 | Run launcher (Windows) | ✅ done | [run.bat](../run.bat) |
 | Virtual environment | ✅ done | `venv/` |
@@ -145,6 +157,19 @@ render started splicing a full 50% replay after every highlight.)
 - ✅ Final concat (concat demuxer, no re-encode)
 - ✅ NVENC h264 (configurable to hevc / av1)
 - ✅ NVDEC via `-hwaccel cuda`
+- ✅ NVDEC session-budget guard for high slice counts. When the main
+      playlist has > 6 "slice" entries (Auto Trim with many trims —
+      one consumer GPU run hit 91 slices), the renderer first
+      consolidates every kept segment into a single intermediate via
+      the concat demuxer (`pre_concat_slices` in `renderer/stages.py`),
+      then the main filter graph consumes it through `split` + `trim`
+      per slice entry. One decoder context for every slice instead of
+      N parallel `-i src` opens — escapes both CUDA_ERROR_OUT_OF_MEMORY
+      on `cuvidCreate` (NVDEC session cap) and the software-decode RAM
+      blowup from 90+ HEVC ref-frame buffers. Replays + stingers keep
+      their own inputs (replays need precise frame-accurate seek for
+      slow-mo). Pre-concat consumes ~25 % of the "main" stage weight;
+      filter-graph render gets ~75 %.
 - ✅ Per-stage progress reporting via `-progress pipe:1` — progress
       messages format the elapsed / expected time as `m:ss` (or
       `h:mm:ss` past an hour) instead of raw seconds so operator can
@@ -195,33 +220,100 @@ render started splicing a full 50% replay after every highlight.)
 - ✅ Pytest suite for pure logic (segment math, text helpers,
       avatar lookup, scoreboard event walk, builder smoke tests, main
       playlist + stinger bracket + event remap + intro photo gate +
-      stinger cache). 109 tests, runs in
-      <0.2 s. Configured in `pyproject.toml`,
+      stinger cache + dataset archive + groundtruth sidecar + rally
+      detector gaps-to-trims + auto-trim cache key + TrimSegment.source).
+      **166 tests**, runs in <0.8 s. Configured in `pyproject.toml`,
       basetemp pinned to `temp/pytest/` to dodge sandbox-denied
       access on the user-temp dir.
 
+### Auto Trim (Phase 1a + ROI gate)
+- ✅ Auto Trim modal opens via "⚡ Auto Trim" button on the Trim panel.
+      Modal extracts a midpoint refframe, runs `detect_roi_multiframe`
+      against 5 evenly-spaced frames, renders the proposed quad on a
+      canvas with 4 draggable corners + always-on 3×-zoom inset panels.
+      Confirm saves to `project.info.roi_quadrilateral` AND appends to
+      `dataset/roi_groundtruth/<video_id>.json` (latest_corners + full
+      history of detector-proposed-vs-confirmed for drift measurement).
+- ✅ Multi-tier ROI detector (`backend/roi/` package): YOLOv8-seg
+      + ORB-keypoint homography + HSV color-contrast foreground + HSV
+      learned-NN + naive color-blue. 5 frames per detect, cross-tier
+      IoU consensus prefers geometric agreement across tier tags over
+      single-tier vote. Mask mAP50-95 = 0.921 on 53-entry dataset.
+- ✅ Perf bundle (commit 50b8058): YOLO model warmup at uvicorn
+      startup, process-wide ORB feature cache + groundtruth example
+      cache invalidated by dir mtime, batched YOLO inference, parallel
+      multi-frame worker pool, parallel ffmpeg refframe extracts.
+      First-click ~3× faster; steady-state click ~2.7s for 5 frames.
+- ✅ **ROI gate unblocked 2026-05-20.** Operator confirmed accuracy
+      acceptable for production.
+
+### Auto Trim (Phase 1b — rally detection end-to-end, shipped 2026-05-26)
+- ✅ Score-event-anchored rally detector (`backend/rally_detector.py`).
+      NVDEC decode → 480×270 RGB → ROI motion → 0.5 s moving avg →
+      adaptive p70 threshold → backward-scan gap detection → 5 s rally
+      minimum gate. Pure `gaps_to_trims` core split out for unit-test
+      coverage without ffmpeg. Hardcoded Balanced preset
+      (`J_fg_p70_rmin5`) — same params validated in PHASE0_REPORT.
+      Verify on 3 spike entries: recall 0.957-0.993 (≥ PHASE0_REPORT
+      Balanced 0.922-0.976), extras 303.7-352.7s within tolerance.
+      Detect speed ~2.2× realtime.
+- ✅ Backend SSE orchestration (`backend/server/routes_auto_trim.py` +
+      `state.py`). New endpoints:
+      `POST /api/auto_trim/start` → spawns worker thread, returns job_id;
+      `GET /api/auto_trim/events/{job_id}` → SSE stream of stage /
+      progress / trim / done / error events;
+      `POST /api/auto_trim/cancel/{job_id}` → flip cancel flag;
+      `GET /api/auto_trim/job/{job_id}` → snapshot for debug.
+      Cache layer at `temp/auto_trim_cache/<sha1>.json` keyed by
+      (video_id + roi + score events + params); cache hit replays
+      events in ms. Worker mirrors the render-job pattern (one dict +
+      one lock in `state.py`) but with a `queue.Queue` per job that
+      the SSE handler drains.
+- ✅ Frontend Phase B in the Auto Trim modal. After confirming ROI,
+      "Rally detection" section unlocks: shows score event count, Run
+      button (disabled until ≥10 score events), progress bar that
+      tracks decode frames, live log of stage events, results panel
+      with trim count + total dead time + cache hit/miss, Apply /
+      Discard buttons. Re-running auto-trim filters out existing
+      `source=="auto"` trims first so manual trims are preserved.
+      New module `frontend/auto_trim/detection.js` (state machine +
+      EventSource client + Apply/Discard handlers).
+- ✅ `TrimSegment.source: Literal["manual", "auto"]` field. Legacy
+      project JSONs without the field default to `"manual"` via
+      Pydantic. Trim panel renders an `[AUTO]` badge next to
+      `source=="auto"` rows.
+- 9 new pytest tests (`tests/test_auto_trim_routes.py`): cache key
+      determinism (same inputs / event-order invariance / float jitter /
+      different video / different roi / different params) + TrimSegment
+      backwards compat. Total suite 166 pass.
+
 ### Code organisation
 - ✅ ASS overlay generators live in the `backend/ass/` package —
-      `common` / `scoreboard` / `intro` / `outro` / `badges` /
-      `stinger`. Public re-exports in `__init__.py`. (Originally
-      split from a 1208-line `ass_builder.py` monolith; the v1.5
-      pipeline simplification later retired the `intermission` and
-      `transition` submodules.)
-- ✅ `build_scoreboard_ass` decomposed into `_Geometry` dataclass +
-      `_AssetText` + 5 emit helpers (`_emit_live_panel`,
-      `_emit_dynamic_numbers`, `_emit_recap_cards`,
-      `_emit_flag_overlays`, `_emit_final_scoreboard`). Public function
-      now a thin dispatcher.
-- ✅ `run_render` decomposed into `RenderContext` + 4 stage helpers
-      (`_resolve_source` + `_prepare_context` + `_intro_stage` +
-      `_main_stage` + `_outro_stage` + `_finalize`). Public function
-      is a short orchestrator.
+      `common` / `scoreboard` (sub-package) / `intro` / `outro` /
+      `badges` / `stinger`. Public re-exports in `__init__.py`.
+- ✅ Scoreboard subdivided into `backend/ass/scoreboard/` package —
+      `geometry` / `events` / `emit_live` / `emit_cards` / `emit_final` /
+      `builder`. Public function is a thin dispatcher.
+- ✅ `run_render` lives in the `backend/renderer/` package (split
+      across `state` / `segments` / `replays` / `stages` /
+      `orchestrator` / `__init__`). Public API re-exported from
+      `__init__.py` so historical `from backend.renderer import ...`
+      calls still work.
+- ✅ HTTP endpoints split across the `backend/server/` package —
+      `app` (composition root + main) / `state` (job registry + path
+      constants) / `utils` (shared helpers) / four `routes_*.py`
+      routers (videos / projects / render / auto_trim).
 - ✅ NVENC / AAC / hwaccel helpers + audio rate constants centralised
       in `ffmpeg_runner.py` (was duplicated between renderer.py and
       intro_builder.py).
 - ✅ Frontend `app.js` (915 lines) split into 12 ES6 modules under
       `frontend/*.js` — state, dom, timecode, toast, avatars, score,
       player, highlights, trims, project_io, render + the boot file.
+- ✅ Auto Trim modal split into `frontend/auto_trim/` package —
+      `index` (public entry + listeners) / `state` (DOM refs +
+      session state) / `modal` (close helper) / `log` / `canvas` /
+      `info_panel` / `api`. ROI confirmation is wired up; Phase B
+      (rally detection UI) lands with Step 3 of Phase 1b.
 
 ## Known gaps
 

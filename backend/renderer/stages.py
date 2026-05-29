@@ -190,6 +190,81 @@ def render_intro(
     )
 
 
+def pre_concat_slices(
+    *,
+    src: Path,
+    slice_ranges: list[tuple[float, float]],
+    out_path: Path,
+    width: int,
+    height: int,
+    fps: float,
+    has_audio: bool,
+    on_progress: Callable[[float, str], None],
+    cancel_check: Optional[Callable[[], bool]] = None,
+) -> Path:
+    """Concat the kept-segment slices from `src` into a single intermediate.
+
+    Used by the main render stage when slice count exceeds the NVDEC
+    session budget (~6 concurrent on consumer GPUs). The concat demuxer
+    opens `src` ONCE for the whole pass (one decoder context, one NVENC
+    context), iterates through `inpoint`/`outpoint` ranges sequentially,
+    and writes a continuous mp4 at the target resolution / fps / codec.
+
+    Output is normalised so the downstream main render can treat it as a
+    single linear input fed through `split` + `trim` per slice entry —
+    that's how the main render escapes the 91-input filter graph that
+    used to OOM both VRAM (NVDEC session cap) and RAM (per-input HEVC
+    ref-frame buffers).
+    """
+    if not slice_ranges:
+        raise FFmpegError("pre_concat_slices: no slice ranges given")
+
+    # ffmpeg's concat demuxer needs a text file; lay one entry per slice
+    # with absolute-time inpoint / outpoint. Forward slashes work on
+    # Windows too and avoid escape issues. -safe 0 lets us reference an
+    # absolute path outside the demuxer file's directory.
+    list_path = out_path.with_suffix(".concat.txt")
+    abs_src = src.resolve().as_posix()
+    lines: list[str] = []
+    for (s, e) in slice_ranges:
+        lines.append(f"file '{abs_src}'")
+        lines.append(f"inpoint {s:.3f}")
+        lines.append(f"outpoint {e:.3f}")
+    list_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    total_duration = sum(e - s for s, e in slice_ranges)
+
+    args: list[str] = [
+        *hwaccel_input_args(),
+        "-f", "concat",
+        "-safe", "0",
+        "-i", str(list_path),
+        "-vf", f"scale={width}:{height},fps={fps}",
+        *nvenc_args(),
+    ]
+    if has_audio:
+        args += [
+            "-af", f"aformat=sample_rates={TARGET_AUDIO_RATE}:channel_layouts=stereo",
+            *aac_args(),
+        ]
+    else:
+        # Skip writing a silent audio track here — the downstream main
+        # render injects anullsrc when has_audio is False anyway, so
+        # mixing layouts at the pre-concat stage would just complicate
+        # the filter graph that consumes this intermediate.
+        args += ["-an"]
+    args += [str(out_path)]
+
+    run_ffmpeg_with_progress(
+        args,
+        expected_out_seconds=total_duration,
+        on_progress=on_progress,
+        log_prefix="pre-concat: ",
+        cancel_check=cancel_check,
+    )
+    return out_path
+
+
 def render_main_with_scoreboard(
     *,
     src: Path,
@@ -205,6 +280,7 @@ def render_main_with_scoreboard(
     cancel_check: Optional[Callable[[], bool]] = None,
     replay_sound_path: Optional[Path] = None,
     replay_sound_volume: float = 0.7,
+    main_slices_path: Optional[Path] = None,
 ) -> float:
     """
     Render the main match: open the source once per playlist entry with
@@ -218,19 +294,59 @@ def render_main_with_scoreboard(
     the spliced-in replay clip lands at 50% speed. The concat demuxer
     can't do this rewind-inside-stream gymnastics, hence the single big
     filter_complex.
+
+    When `main_slices_path` is supplied, all "slice" playlist entries
+    are sourced from that pre-concat'd intermediate via a single input
+    + `split` + `trim` filter chain (one decoder context for every
+    slice). Replays + stingers keep their own inputs because replays
+    need precise source seeking for slow-mo and stingers come from
+    cached files. This path is required when slice count exceeds the
+    NVDEC session limit (~6) — without it, opening `-hwaccel cuda -i src`
+    once per kept segment goes CUDA_ERROR_OUT_OF_MEMORY on consumer
+    GPUs and ffmpeg's software fallback then exhausts RAM holding 90+
+    HEVC decoder ref-frame buffers.
     """
     if not playlist:
         raise FFmpegError("No content kept after trim segments")
 
+    use_pre_concat = main_slices_path is not None
+    # Slice playlist entries are chronological + match the order of
+    # kept segments fed to pre_concat_slices, so the offset of slice i
+    # inside `main_slices_path` is the cumulative duration of preceding
+    # slices.
+    slice_offsets_in_concat: dict[int, float] = {}
+    if use_pre_concat:
+        cumulative = 0.0
+        for i, entry in enumerate(playlist):
+            if entry.kind == "slice":
+                slice_offsets_in_concat[i] = cumulative
+                cumulative += entry.src_end - entry.src_start
+
     args: list[str] = []
-    for entry in playlist:
+    # ffmpeg input index for each playlist entry. Slices reuse input 0
+    # (the pre-concat intermediate) in pre-concat mode, so they're not
+    # registered here; replay + stinger entries always claim their own.
+    input_idx_for_entry: dict[int, int] = {}
+    next_input_idx = 0
+
+    if use_pre_concat:
+        args += [*hwaccel_input_args(), "-i", str(main_slices_path)]
+        next_input_idx = 1
+
+    for i, entry in enumerate(playlist):
         if entry.kind in ("stinger_in", "stinger_out"):
             # Stinger is a pre-rendered mp4 already at the right
             # resolution / fps / codec — feed it as a plain input, no
             # seek, no NVDEC (the file is short so software decode is
             # fine and avoids holding an extra NVDEC session).
             args += ["-i", str(entry.src_path)]
-        else:
+            input_idx_for_entry[i] = next_input_idx
+            next_input_idx += 1
+        elif entry.kind == "replay":
+            # Replays always come from the original source — slow-mo
+            # needs precise seek-to-keyframe + frame-accurate -t which
+            # the pre-concat intermediate (re-encoded at target codec)
+            # can drift on by a frame or two.
             slice_len = entry.src_end - entry.src_start
             args += [
                 *hwaccel_input_args(),
@@ -238,18 +354,32 @@ def render_main_with_scoreboard(
                 "-t", f"{slice_len:.3f}",
                 "-i", str(src),
             ]
+            input_idx_for_entry[i] = next_input_idx
+            next_input_idx += 1
+        else:  # slice
+            if not use_pre_concat:
+                slice_len = entry.src_end - entry.src_start
+                args += [
+                    *hwaccel_input_args(),
+                    "-ss", f"{entry.src_start:.3f}",
+                    "-t", f"{slice_len:.3f}",
+                    "-i", str(src),
+                ]
+                input_idx_for_entry[i] = next_input_idx
+                next_input_idx += 1
+            # In pre-concat mode slice entries don't get their own input;
+            # they consume from input 0 via the split+trim filter chain
+            # built below.
     n = len(playlist)
     expected_total = sum(e.final_end - e.final_start for e in playlist)
 
     # Per-replay music inputs — one `-stream_loop -1 -t r_dur -i <file>`
     # per replay so a short mp3 loops to fill and a long mp3 gets
-    # trimmed. Indexed right after the n source clip inputs. Disabled
-    # when the source has no audio track — the concat=a=1 path needs
-    # every entry to produce audio, and synthesising silence per slice
-    # just to keep one branch alive isn't worth the filter-complex
-    # noise.
+    # trimmed. Disabled when the source has no audio track — the
+    # concat=a=1 path needs every entry to produce audio, and
+    # synthesising silence per slice just to keep one branch alive isn't
+    # worth the filter-complex noise.
     replay_music_idx_map: dict[int, int] = {}
-    next_input_idx = n
     if has_audio and replay_sound_path is not None:
         for i, entry in enumerate(playlist):
             if entry.kind != "replay":
@@ -265,25 +395,58 @@ def render_main_with_scoreboard(
 
     # If the source has no audio, we still need an audio stream in the
     # output (so the final concat-demuxer doesn't fail on stream mismatch).
-    # Goes AFTER the replay music inputs so indices stay valid.
     silent_idx: Optional[int] = None
     if not has_audio:
         silent_idx = next_input_idx
         args += ["-f", "lavfi", "-i", f"anullsrc=r={TARGET_AUDIO_RATE}:cl=stereo"]
         next_input_idx += 1
 
+    # Pre-concat slice plumbing: split input 0 (main_slices.mp4) into
+    # one parallel stream per slice playlist entry, then per-slice trim
+    # at the slice's offset+duration. ffmpeg decodes input 0 once; split
+    # is refcounted so this doesn't multiply memory by N. atrim mirrors
+    # for audio when present.
+    slice_split_labels: dict[int, tuple[str, str]] = {}
+    pre_split_parts: list[str] = []
+    if use_pre_concat:
+        slice_entry_idxs = [i for i, e in enumerate(playlist) if e.kind == "slice"]
+        n_slices = len(slice_entry_idxs)
+        if n_slices == 1:
+            # split=1 is illegal in ffmpeg; just alias the input.
+            i0 = slice_entry_idxs[0]
+            slice_split_labels[i0] = ("pcv0", "pca0" if has_audio else "")
+            pre_split_parts.append("[0:v]null[pcv0]")
+            if has_audio:
+                pre_split_parts.append("[0:a]anull[pca0]")
+        elif n_slices > 1:
+            v_labels = [f"pcv{k}" for k in range(n_slices)]
+            pre_split_parts.append(
+                f"[0:v]split={n_slices}[" + "][".join(v_labels) + "]"
+            )
+            if has_audio:
+                a_labels = [f"pca{k}" for k in range(n_slices)]
+                pre_split_parts.append(
+                    f"[0:a]asplit={n_slices}[" + "][".join(a_labels) + "]"
+                )
+            for k, i_entry in enumerate(slice_entry_idxs):
+                slice_split_labels[i_entry] = (
+                    f"pcv{k}",
+                    f"pca{k}" if has_audio else "",
+                )
+
     # Build the per-entry processing chains. Replay entries stretch
     # video PTS to 2× and halve audio tempo so they play at half speed.
     # Stinger entries pass through (they're pre-rendered at the right
     # spec already; just scale/fps-normalise defensively and reset PTS).
     inv_speed = 1.0 / REPLAY_SPEED
-    v_parts: list[str] = []
+    v_parts: list[str] = list(pre_split_parts)
     a_parts: list[str] = []
     concat_inputs: list[str] = []
     for i, entry in enumerate(playlist):
         if entry.kind == "replay":
+            idx = input_idx_for_entry[i]
             v_parts.append(
-                f"[{i}:v]setpts={inv_speed:.3f}*(PTS-STARTPTS),"
+                f"[{idx}:v]setpts={inv_speed:.3f}*(PTS-STARTPTS),"
                 f"scale={width}:{height},fps={fps}[vk{i}]"
             )
             if has_audio:
@@ -309,22 +472,39 @@ def render_main_with_scoreboard(
                     # source audio at half tempo (REPLAY_VOLUME=0). The
                     # atempo=0.5 doubles audio length to match setpts*2.
                     a_parts.append(
-                        f"[{i}:a]asetpts=PTS-STARTPTS,atempo={REPLAY_SPEED},"
+                        f"[{idx}:a]asetpts=PTS-STARTPTS,atempo={REPLAY_SPEED},"
                         f"volume={REPLAY_VOLUME},"
                         f"afade=t=in:st=0:d={fade_d:.3f},"
                         f"afade=t=out:st={fade_out_st:.3f}:d={fade_d:.3f},"
                         f"aformat=sample_rates={TARGET_AUDIO_RATE}:channel_layouts=stereo[ak{i}]"
                     )
-        else:
-            # Slice OR stinger. Stinger inputs are already at target
-            # resolution/fps from the cache, but we keep the scale/fps
-            # filter as a safety net (no-op when the input matches).
+        elif entry.kind == "slice" and use_pre_concat:
+            # Slice in pre-concat mode — consume from split labels with
+            # an absolute-time trim window inside main_slices.mp4.
+            off = slice_offsets_in_concat[i]
+            dur = entry.src_end - entry.src_start
+            vlbl, albl = slice_split_labels[i]
             v_parts.append(
-                f"[{i}:v]setpts=PTS-STARTPTS,scale={width}:{height},fps={fps}[vk{i}]"
+                f"[{vlbl}]trim=start={off:.3f}:end={off + dur:.3f},"
+                f"setpts=PTS-STARTPTS,scale={width}:{height},fps={fps}[vk{i}]"
             )
             if has_audio:
                 a_parts.append(
-                    f"[{i}:a]asetpts=PTS-STARTPTS,"
+                    f"[{albl}]atrim=start={off:.3f}:end={off + dur:.3f},"
+                    f"asetpts=PTS-STARTPTS,"
+                    f"aformat=sample_rates={TARGET_AUDIO_RATE}:channel_layouts=stereo[ak{i}]"
+                )
+        else:
+            # Per-input slice (legacy path) OR stinger entry. Stinger
+            # inputs are already at target resolution/fps from the cache,
+            # but we keep the scale/fps filter as a safety net.
+            idx = input_idx_for_entry[i]
+            v_parts.append(
+                f"[{idx}:v]setpts=PTS-STARTPTS,scale={width}:{height},fps={fps}[vk{i}]"
+            )
+            if has_audio:
+                a_parts.append(
+                    f"[{idx}:a]asetpts=PTS-STARTPTS,"
                     f"aformat=sample_rates={TARGET_AUDIO_RATE}:channel_layouts=stereo[ak{i}]"
                 )
         if has_audio:

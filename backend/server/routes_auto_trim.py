@@ -1,33 +1,52 @@
-"""Auto-trim ROI workflow routes.
+"""Auto-trim ROI workflow + rally detection routes.
 
-Phase 1a: operator clicks "Auto Trim" → modal opens → backend extracts a
-midpoint refframe → backend runs auto-detect across 5 frames → modal
-shows refframe + proposed ROI → operator confirms or edits the 4 corners
-→ confirmed ROI saves to `project.info.roi_quadrilateral` AND appends to
-a growing groundtruth dataset at
-`dataset/roi_groundtruth/<video_hash>.json` for improving the detector
-over time.
+Phase 1a (ROI confirmation):
+    operator clicks "Auto Trim" → modal opens → backend extracts a
+    midpoint refframe → backend runs auto-detect across 5 frames → modal
+    shows refframe + proposed ROI → operator confirms or edits the 4
+    corners → confirmed ROI saves to `project.info.roi_quadrilateral`
+    AND appends to a growing groundtruth dataset at
+    `dataset/roi_groundtruth/<video_hash>.json` for improving the
+    detector over time.
+
+Phase 1b (rally detection, Step 2):
+    After confirming ROI, operator clicks "Run detection" → backend
+    streams a rally-detector job via SSE: stage / progress / trim
+    events as the detector decodes the video + runs gap analysis.
+    The job-and-stream pattern mirrors render jobs but with SSE
+    instead of polling. Cache layer at `temp/auto_trim_cache/<sha1>.json`
+    keyed by (video_id + roi + score_events + params) lets a re-run
+    replay the same events in milliseconds.
 """
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import hashlib
 import json
 import shutil
 import subprocess
+import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi import APIRouter, Body, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from ..config import config
 from ..ffmpeg_runner import probe_video
+from ..models import ScoreEvent, TrimSegment
 from .state import (
     ROOT_DIR,
+    _AUTOTRIM_CACHE_DIR,
     _REFFRAME_CACHE,
     _ROI_GROUNDTRUTH_DIR,
+    _auto_trim_jobs,
+    _auto_trim_lock,
+    AutoTrimJobState,
 )
 from .utils import (
     _resolve_external_video,
@@ -358,3 +377,378 @@ def auto_trim_groundtruth_count() -> dict:
         except Exception:
             continue
     return {"count": len(files), "videos": videos}
+
+
+# ===========================================================================
+# Phase 1b — rally detection (Step 2: backend SSE orchestration)
+# ===========================================================================
+#
+# Lifecycle:
+#   1. Frontend POSTs /api/auto_trim/start with {video, roi, score_events,
+#      params?} → backend returns {job_id}. Worker thread spins up. If
+#      a matching cache entry exists, the worker replays it; otherwise
+#      it runs run_rally_detection from scratch.
+#   2. Frontend opens EventSource at /api/auto_trim/events/{job_id} and
+#      consumes stage / progress / trim / done events as they arrive.
+#   3. On Apply (Step 4), frontend uses the trims it collected from the
+#      stream — no backend round-trip needed. Server-side `job.trims` is
+#      still populated for /api/auto_trim/job/{id} debug introspection.
+#
+# Cache key: sha1 over a canonical JSON of (video_identity + roi corners
+# + score events + detector params). Score events are sorted by
+# (timestamp, who) before hashing so a noop reordering on the frontend
+# doesn't invalidate. Params are dataclasses.asdict()'d with sort_keys
+# at json.dumps time → deterministic across runs.
+# ===========================================================================
+
+
+def _autotrim_cache_key(
+    video_id: str,
+    roi: list[list[float]],
+    score_events: list[ScoreEvent],
+    params_dict: dict,
+) -> str:
+    """Deterministic sha1 over the inputs that affect detector output.
+
+    Rounded to 3 decimals (timestamps) / 6 decimals (roi) so floating-
+    point jitter from JSON round-trips doesn't bust the cache."""
+    payload = {
+        "video_id": video_id,
+        "roi": [[round(float(x), 6), round(float(y), 6)] for x, y in roi],
+        "score_events": sorted(
+            [
+                {"t": round(float(e.timestamp), 3), "who": int(e.who)}
+                for e in score_events
+            ],
+            key=lambda e: (e["t"], e["who"]),
+        ),
+        "params": params_dict,
+    }
+    blob = json.dumps(payload, sort_keys=True).encode("utf-8")
+    return hashlib.sha1(blob).hexdigest()
+
+
+def _autotrim_cache_path(key: str) -> Path:
+    return _AUTOTRIM_CACHE_DIR / f"{key}.json"
+
+
+def _run_auto_trim_job_worker(
+    job_id: str,
+    video_path: Path,
+    roi: list[list[float]],
+    score_events: list[ScoreEvent],
+    params,  # RallyDetectorParams
+) -> None:
+    """Background worker for one rally-detection run.
+
+    Two paths:
+      A. Cache hit  — load cached events from disk, replay them into the
+         job's event queue, populate `job.trims`, push "done", exit.
+      B. Cache miss — call `run_rally_detection` with an `emit` callback
+         that BOTH pushes into the queue (live to SSE consumer) AND
+         buffers into `captured_events` for caching on success.
+
+    Either path ends by pushing `None` into the queue so the SSE
+    generator knows to close the stream."""
+    job = _auto_trim_jobs[job_id]
+    cache_path = _autotrim_cache_path(job.cache_key)
+
+    try:
+        # ---------------- Cache hit path ----------------
+        if cache_path.exists():
+            try:
+                cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            except Exception:
+                cached = None
+            if cached is not None:
+                job.status = "running"
+                job.cache_hit = True
+                job.event_queue.put((
+                    "log", {"msg": f"cache hit ({job.cache_key[:8]}...) replaying"},
+                ))
+                for ev in cached.get("events", []):
+                    et = ev.get("type")
+                    data = ev.get("data", {})
+                    job.event_queue.put((et, data))
+                    if et == "progress":
+                        total = max(1, int(data.get("frame_total", 1)))
+                        job.progress = min(1.0, int(data.get("frame_n", 0)) / total)
+                    elif et == "stage":
+                        job.stage = str(data.get("name", job.stage))
+                for t in cached.get("trims", []):
+                    try:
+                        job.trims.append(TrimSegment(**t))
+                    except Exception:
+                        continue
+                job.progress = 1.0
+                job.status = "done"
+                job.finished_at = time.time()
+                done_payload = cached.get("done", {
+                    "trims": len(job.trims),
+                    "total_trimmed_s": round(
+                        sum(t.end - t.start for t in job.trims), 1,
+                    ),
+                })
+                job.event_queue.put(("done", done_payload))
+                return
+
+        # ---------------- Fresh run path ----------------
+        from ..rally_detector import run_rally_detection
+
+        job.status = "running"
+        captured_events: list[dict] = []
+        captured_done: dict = {}
+
+        def emit(event_type: str, data: dict) -> None:
+            # Mutate job-level fields for /job/{id} status polls.
+            if event_type == "progress":
+                total = max(1, int(data.get("frame_total", 1)))
+                job.progress = min(1.0, int(data.get("frame_n", 0)) / total)
+            elif event_type == "stage":
+                job.stage = str(data.get("name", job.stage))
+            elif event_type == "done":
+                captured_done.update(data)
+            # Buffer for cache (everything except "done" — that's stored
+            # separately so the replay path can re-emit it at the end).
+            if event_type != "done":
+                captured_events.append({"type": event_type, "data": data})
+            # Push live to SSE consumer.
+            job.event_queue.put((event_type, data))
+
+        def cancel_check() -> bool:
+            return job.cancel
+
+        trims = run_rally_detection(
+            video_path=video_path,
+            roi_corners=roi,
+            score_events=score_events,
+            params=params,
+            cancel_check=cancel_check,
+            emit=emit,
+        )
+        job.trims = list(trims)
+
+        if job.cancel:
+            job.status = "cancelled"
+        else:
+            job.status = "done"
+            # Persist cache for next run. Failure to write the cache is
+            # non-fatal — next run will just recompute.
+            try:
+                _AUTOTRIM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                cache_path.write_text(
+                    json.dumps(
+                        {
+                            "events": captured_events,
+                            "trims": [t.model_dump() for t in trims],
+                            "done": captured_done,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+            except Exception as e:
+                job.event_queue.put((
+                    "log", {"msg": f"cache write failed: {e}"},
+                ))
+
+        job.finished_at = time.time()
+
+    except RuntimeError as e:
+        if str(e) == "cancelled":
+            job.status = "cancelled"
+        else:
+            job.status = "error"
+            job.error = str(e)
+            job.event_queue.put(("error", {"msg": str(e)}))
+        job.finished_at = time.time()
+    except Exception as e:
+        job.status = "error"
+        job.error = repr(e)
+        job.event_queue.put(("error", {"msg": repr(e)}))
+        job.finished_at = time.time()
+    finally:
+        # Close the stream regardless of how we got here.
+        job.event_queue.put(None)
+
+
+@router.post("/api/auto_trim/start")
+def auto_trim_start(payload: dict = Body(...)) -> dict:
+    """Kick off a rally-detection job. Body fields:
+
+      name | token              source video (one of)
+      roi  | corners            4 normalized [x, y] pairs (TL TR BR BL)
+      score_events              list of {timestamp, who, ...} dicts
+      params (optional)         partial RallyDetectorParams override
+
+    Returns {job_id, cache_key, will_cache_hit}. The frontend should
+    immediately open EventSource('/api/auto_trim/events/<job_id>')."""
+    from ..rally_detector import BALANCED, RallyDetectorParams
+
+    name = payload.get("name")
+    token = payload.get("token")
+    roi = _validate_roi_corners(payload.get("roi") or payload.get("corners"))
+
+    raw_events = payload.get("score_events") or []
+    if not isinstance(raw_events, list):
+        raise HTTPException(status_code=400, detail="score_events must be a list")
+    score_events: list[ScoreEvent] = []
+    for e in raw_events:
+        try:
+            score_events.append(ScoreEvent.model_validate(e))
+        except Exception:
+            # Defensive: skip malformed events rather than fail the whole
+            # job. Real frontend always sends valid shape (frontend
+            # mirrors backend ScoreEvent).
+            continue
+    if len(score_events) < 10:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Auto-trim needs ≥10 score events (got {len(score_events)}). "
+                   "Operator should bấm A/D throughout the match first.",
+        )
+
+    # Merge param overrides into BALANCED defaults.
+    params_override = payload.get("params") or {}
+    if not isinstance(params_override, dict):
+        raise HTTPException(status_code=400, detail="params must be an object")
+    merged = {**dataclasses.asdict(BALANCED), **params_override}
+    try:
+        params = RallyDetectorParams(**merged)
+    except TypeError as e:
+        raise HTTPException(status_code=400, detail=f"bad params: {e}")
+
+    video = _resolve_video_for_auto_trim(name, token)
+    # Probe early so a bad video errors HERE (synchronous) instead of
+    # opaquely on the worker thread 200ms later.
+    try:
+        info = probe_video(video)
+        duration = float(info.get("duration", 0.0))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"probe failed: {e}")
+    if duration < 60.0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Source video too short for auto-trim ({duration:.1f}s)",
+        )
+
+    video_id = _video_identity(video)
+    cache_key = _autotrim_cache_key(
+        video_id, roi, score_events, dataclasses.asdict(params),
+    )
+    will_hit = _autotrim_cache_path(cache_key).exists()
+
+    job_id = uuid.uuid4().hex[:12]
+    job = AutoTrimJobState(
+        job_id=job_id,
+        cache_key=cache_key,
+        started_at=time.time(),
+    )
+    with _auto_trim_lock:
+        _auto_trim_jobs[job_id] = job
+
+    threading.Thread(
+        target=_run_auto_trim_job_worker,
+        args=(job_id, video, roi, score_events, params),
+        daemon=True,
+        name=f"auto_trim_{job_id}",
+    ).start()
+
+    return {
+        "job_id": job_id,
+        "cache_key": cache_key,
+        "will_cache_hit": will_hit,
+        "video_duration": duration,
+    }
+
+
+@router.get("/api/auto_trim/events/{job_id}")
+async def auto_trim_events(job_id: str) -> StreamingResponse:
+    """SSE stream of detector events for a running (or just-finished) job.
+
+    Event types pushed by the detector:
+      stage    {name, ...}            major pipeline transition
+      progress {stage, frame_n, frame_total}    decode progress
+      trim     {start, end, source}   one trim emitted at end of pipeline
+      done     {trims, total_trimmed_s, threshold, duration}    final summary
+      log      {msg}                  free-form log line from the worker
+      error    {msg}                  job failed (caller can show toast)
+
+    The handler also emits a final synthetic `close` event with the
+    job's terminal status so the frontend can distinguish done /
+    cancelled / error without a separate API call."""
+    job = _auto_trim_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"job {job_id} not found")
+
+    async def generator():
+        loop = asyncio.get_running_loop()
+        # Initial hello so the EventSource readyState flips to OPEN on
+        # the client before the first detector event (which can take a
+        # few seconds while ffmpeg starts).
+        yield (
+            f"event: hello\n"
+            f"data: {json.dumps({'job_id': job_id, 'cache_key': job.cache_key})}\n\n"
+        )
+        try:
+            while True:
+                ev = await loop.run_in_executor(None, job.event_queue.get)
+                if ev is None:
+                    break
+                event_type, data = ev
+                clean = _sanitize_for_json(data)
+                yield (
+                    f"event: {event_type}\n"
+                    f"data: {json.dumps(clean, ensure_ascii=False)}\n\n"
+                )
+        finally:
+            yield (
+                f"event: close\n"
+                f"data: {json.dumps({'status': job.status, 'error': job.error})}\n\n"
+            )
+
+    return StreamingResponse(
+        generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # nginx hint; harmless locally
+        },
+    )
+
+
+@router.post("/api/auto_trim/cancel/{job_id}")
+def auto_trim_cancel(job_id: str) -> dict:
+    """Request cancellation. The detector polls the cancel flag every
+    ~30 frames (~1 s) and raises RuntimeError("cancelled") which the
+    worker converts to status=='cancelled'. Idempotent."""
+    job = _auto_trim_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"job {job_id} not found")
+    if job.status in ("done", "cancelled", "error"):
+        return {"ok": True, "already": job.status}
+    job.cancel = True
+    return {"ok": True, "job_id": job_id, "status": job.status}
+
+
+@router.get("/api/auto_trim/job/{job_id}")
+def auto_trim_job_status(job_id: str) -> dict:
+    """Snapshot status. Mostly for debugging — the SSE stream is the
+    canonical way to follow a job. Useful when reopening the modal
+    after a refresh: frontend can check `status` + `trims` without
+    re-running."""
+    job = _auto_trim_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"job {job_id} not found")
+    return {
+        "job_id": job.job_id,
+        "status": job.status,
+        "progress": job.progress,
+        "stage": job.stage,
+        "error": job.error,
+        "cache_key": job.cache_key,
+        "cache_hit": job.cache_hit,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+        "trims": [t.model_dump() for t in job.trims],
+    }

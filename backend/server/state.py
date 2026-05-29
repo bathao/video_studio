@@ -8,8 +8,10 @@ tokens on project load.
 
 from __future__ import annotations
 
+import queue
 import re
 import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..renderer import RenderState
@@ -40,3 +42,39 @@ _external_lock = threading.Lock()
 # Auto-trim runtime caches.
 _REFFRAME_CACHE = ROOT_DIR / "temp" / "refframes"
 _ROI_GROUNDTRUTH_DIR = ROOT_DIR / "dataset" / "roi_groundtruth"
+
+# Auto-trim job registry — Phase 1b Step 2. Mirrors the render-job
+# pattern (one dict + one lock), but each entry also owns a queue.Queue
+# of events that the SSE handler drains. The worker thread pushes
+# (event_type, data) tuples; None is the sentinel for "stream done".
+_AUTOTRIM_CACHE_DIR = ROOT_DIR / "temp" / "auto_trim_cache"
+
+
+@dataclass
+class AutoTrimJobState:
+    """Per-job state for one rally-detection run.
+
+    Lives in `_auto_trim_jobs` keyed by `job_id`. Held by both the worker
+    thread (writer) and the SSE handler (reader of `event_queue`). The
+    primitive fields are written from the worker and read everywhere,
+    but they're only ever read for status display — eventual consistency
+    is fine here, no per-field lock needed."""
+    job_id: str
+    status: str = "queued"  # queued | running | done | error | cancelled
+    progress: float = 0.0
+    stage: str = ""
+    error: str = ""
+    cancel: bool = False
+    trims: list = field(default_factory=list)
+    cache_key: str = ""
+    cache_hit: bool = False
+    started_at: float = 0.0
+    finished_at: float = 0.0
+    # SSE event stream. Worker pushes (event_type, data); a final None
+    # closes the stream. Unbounded — events fit in memory easily for a
+    # 22 min video (~150 progress emits + a few dozen trims).
+    event_queue: "queue.Queue" = field(default_factory=queue.Queue)
+
+
+_auto_trim_jobs: dict[str, AutoTrimJobState] = {}
+_auto_trim_lock = threading.Lock()

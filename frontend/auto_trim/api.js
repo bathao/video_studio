@@ -10,9 +10,9 @@
 import { project, snapshot } from '../state.js';
 import { toast } from '../toast.js';
 import { redraw, loadImage } from './canvas.js';
+import { syncDetectionUI } from './detection.js';
 import { log, setLoading } from './log.js';
 import { updateInfoPanel } from './info_panel.js';
-import { closeModal } from './modal.js';
 import { els, state } from './state.js';
 
 
@@ -89,10 +89,7 @@ export async function refreshGroundtruthCount() {
 }
 
 export async function onConfirmClick() {
-  if (state.confirmed) {
-    closeModal();
-    return;
-  }
+  if (state.confirmed) return;
   if (!state.corners) return;
   els.confirm.disabled = true;
   try {
@@ -122,15 +119,17 @@ export async function onConfirmClick() {
     if (!r.ok) throw new Error(`confirm_roi ${r.status}: ${await r.text()}`);
     const j = await r.json();
     log(`saved → ${j.saved_to} (history: ${j.history_count})`);
-    log('Modal stays open. Trim detection is NOT yet wired — see banner above.');
     toast(state.wasEdited
       ? 'ROI corrected — saved as groundtruth'
       : 'ROI confirmed as-detected');
     await refreshGroundtruthCount();
-    // Toggle button so a 2nd click closes (instead of re-POSTing).
+    // ROI now locked in. Button becomes informational; close happens via
+    // the bottom Close button or the ✕ in the modal header.
     state.confirmed = true;
-    els.confirm.textContent = '✓ Saved — close modal';
-    els.confirm.disabled = false;
+    els.confirm.textContent = '✓ ROI confirmed';
+    els.confirm.disabled = true;
+    // Unlock the Rally-detection panel now that ROI is locked in.
+    syncDetectionUI();
   } catch (e) {
     log(`ERROR: ${e.message || e}`);
     toast(`Save failed: ${e.message || e}`);
