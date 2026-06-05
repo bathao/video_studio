@@ -168,16 +168,151 @@ function updateHud() {
   $('btn-play').textContent = player.paused ? 'Play' : 'Pause';
 }
 
+// ---------- preview cut: play the trimmed timeline ---------------------------
+// When preview mode is on, playback (and manual seeks) jump past every
+// trim_segment so the operator watches only what the render would keep —
+// the same set the render's kept_segments use, both manual + auto trims.
+// The dedicated "preview-bar" transport seeks on KEPT time (trims removed),
+// so ⏪/⏩ stay inside the cut and the readout shows kept-position / total.
+// The scoreboard overlay (JASSUB on source time) stays correct because
+// score events live inside kept segments, not the skipped dead-time.
+
+// Kept segments = complement of trim_segments within [0, duration].
+function keptSegments() {
+  const dur = player.duration || 0;
+  const trims = [...(project.trim_segments || [])]
+    .map((t) => [Math.max(0, Math.min(dur, t.start)), Math.max(0, Math.min(dur, t.end))])
+    .filter(([s, e]) => e > s)
+    .sort((a, b) => a[0] - b[0]);
+  const kept = [];
+  let cursor = 0;
+  for (const [s, e] of trims) {
+    if (s > cursor) kept.push([cursor, s]);
+    cursor = Math.max(cursor, e);
+  }
+  if (cursor < dur) kept.push([cursor, dur]);
+  return kept;
+}
+
+const keptTotal = (kept) => kept.reduce((a, [s, e]) => a + (e - s), 0);
+
+function sourceToKept(src, kept) {
+  let acc = 0;
+  for (const [s, e] of kept) {
+    if (src < s) break;            // src sits in a trimmed gap before this kept seg
+    if (src <= e) return acc + (src - s);
+    acc += e - s;
+  }
+  return acc;
+}
+
+function keptToSource(k, kept) {
+  let acc = 0;
+  for (const [s, e] of kept) {
+    const len = e - s;
+    if (k <= acc + len) return s + (k - acc);
+    acc += len;
+  }
+  return kept.length ? kept[kept.length - 1][1] : 0;
+}
+
+function jumpPastTrims() {
+  if (!mut.previewSkipTrims) return;
+  const segs = project.trim_segments;
+  if (!segs || !segs.length) return;
+  let t = player.currentTime;
+  let moved = false;
+  // Collapse consecutive/adjacent trims so we land on the next kept frame
+  // in a single jump instead of flickering through tiny gaps.
+  for (let guard = 0; guard <= segs.length; guard++) {
+    const seg = segs.find((s) => t >= s.start - 0.05 && t < s.end - 0.03);
+    if (!seg) break;
+    t = seg.end + 0.03;
+    moved = true;
+  }
+  if (!moved) return;
+  const dur = player.duration || Infinity;
+  if (t >= dur - 0.1) {
+    player.pause();
+  } else if (Math.abs(t - player.currentTime) > 0.01) {
+    player.currentTime = t;
+  }
+}
+
+// Seek by `deltaKept` seconds along the kept timeline (trims skipped).
+function previewSeek(deltaKept) {
+  const kept = keptSegments();
+  if (!kept.length) { seekBy(deltaKept); return; }
+  const total = keptTotal(kept);
+  const k = Math.max(0, Math.min(total, sourceToKept(player.currentTime, kept) + deltaKept));
+  player.currentTime = keptToSource(k, kept);
+}
+
+function updatePreviewTime() {
+  if (!mut.previewSkipTrims) return;
+  const kept = keptSegments();
+  $('pv-time').textContent = `${fmt(sourceToKept(player.currentTime, kept))} / ${fmt(keptTotal(kept))}`;
+}
+
+function updatePvPlay() {
+  const b = $('pv-play');
+  if (b) b.textContent = player.paused ? 'Play' : 'Pause';
+}
+
+function syncPvRate() {
+  document.querySelectorAll('.pv-rate').forEach((b) => {
+    const active = parseFloat(b.dataset.pvRate) === player.playbackRate;
+    b.classList.toggle('bg-accent-500', active);
+    b.classList.toggle('text-ink-950', active);
+    b.classList.toggle('text-slate-300', !active);
+  });
+}
+
+function setPvRate(r) {
+  player.playbackRate = r;
+  $('in-rate').value = String(r);   // keep the main speed selector in sync
+  syncPvRate();
+}
+
+function setPreviewSkip(on) {
+  mut.previewSkipTrims = on;
+  $('btn-preview-trims').classList.toggle('btn-primary', on);
+  $('btn-preview-trims').classList.toggle('btn-ctl', !on);
+  $('preview-bar').classList.toggle('hidden', !on);
+  if (on) {
+    const n = project.trim_segments?.length || 0;
+    toast(n ? `Preview: skipping ${n} trimmed segment(s)` : 'Preview on (no trims to skip)');
+    syncPvRate();
+    updatePvPlay();
+    jumpPastTrims();
+    updatePreviewTime();
+    player.play().catch(() => {});
+  } else {
+    toast('Preview off');
+  }
+}
+
 player.addEventListener('timeupdate', () => {
+  jumpPastTrims();
   updateHud();
+  updatePreviewTime();
   // Live panel reflects the score AT the current playback position,
   // so scrubbing the timeline shows you "what was the score here?".
   syncLiveFromTime(player.currentTime);
   syncScore();
 });
+player.addEventListener('seeked', () => { jumpPastTrims(); updatePreviewTime(); });
 player.addEventListener('durationchange', updateHud);
-player.addEventListener('play', updateHud);
-player.addEventListener('pause', updateHud);
+player.addEventListener('play', () => { updateHud(); updatePvPlay(); });
+player.addEventListener('pause', () => { updateHud(); updatePvPlay(); });
+
+$('btn-preview-trims').addEventListener('click', () => setPreviewSkip(!mut.previewSkipTrims));
+$('pv-play').addEventListener('click', togglePlay);
+$('pv-exit').addEventListener('click', () => setPreviewSkip(false));
+$('preview-bar').querySelectorAll('[data-pv-seek]').forEach((b) =>
+  b.addEventListener('click', () => previewSeek(parseFloat(b.dataset.pvSeek))));
+$('preview-bar').querySelectorAll('[data-pv-rate]').forEach((b) =>
+  b.addEventListener('click', () => setPvRate(parseFloat(b.dataset.pvRate))));
 
 $('seek').addEventListener('input', (e) => {
   const t = parseFloat(e.target.value);
@@ -190,6 +325,7 @@ document.querySelectorAll('button[data-skip]').forEach((b) => {
 $('btn-play').addEventListener('click', togglePlay);
 $('in-rate').addEventListener('change', (e) => {
   player.playbackRate = parseFloat(e.target.value);
+  syncPvRate();
 });
 
 $('in-video').addEventListener('change', (e) => {

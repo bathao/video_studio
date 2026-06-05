@@ -63,6 +63,7 @@
           <button class="btn-ctl" data-skip="5">+5s</button>
           <button class="btn-ctl" data-skip="10">+10s</button>
           <button class="btn-ctl" data-skip="20">+20s</button>
+          <button id="btn-preview-trims" class="btn-ctl" title="Play kept segments only — skip trimmed dead-time">▶ Preview cut</button>
           <span class="ml-auto flex items-center gap-2 text-xs text-slate-400">
             <span>speed</span>
             <select id="in-rate" class="ipt py-0.5 text-xs w-20">
@@ -76,6 +77,28 @@
           <button id="btn-mark-hl" class="btn-secondary" title="H">Highlight start/end</button>
           <button id="btn-trim-start" class="btn-secondary">Trim start</button>
           <button id="btn-trim-end" class="btn-secondary">Trim end</button>
+        </div>
+        <!-- Preview-cut transport: visible only while "Preview cut" is on.
+             Every seek here operates on KEPT time (trims skipped), not
+             raw source time, so back/forward stay inside the cut. -->
+        <div id="preview-bar" class="hidden px-3 py-2 border-t border-accent-500/40 bg-accent-500/5 flex items-center gap-2 text-sm flex-wrap">
+          <span class="flex items-center gap-1.5 text-accent-400 font-semibold text-[11px] uppercase tracking-wider">
+            <span class="w-2 h-2 rounded-full bg-accent-400 animate-pulse"></span> Preview cut
+          </span>
+          <span class="flex items-center gap-1 ml-1">
+            <button class="btn-ctl" data-pv-seek="-10" title="Back 10s (kept time)">⏪ 10s</button>
+            <button id="pv-play" class="btn-primary px-4">Pause</button>
+            <button class="btn-ctl" data-pv-seek="10" title="Forward 10s (kept time)">10s ⏩</button>
+          </span>
+          <span class="flex items-center gap-1 ml-1 text-xs text-slate-400">
+            <span class="mr-0.5">speed</span>
+            <button class="pv-rate rounded px-2 py-0.5 text-xs border border-ink-700 text-slate-300 hover:bg-ink-700" data-pv-rate="0.5">0.5x</button>
+            <button class="pv-rate rounded px-2 py-0.5 text-xs border border-ink-700 text-slate-300 hover:bg-ink-700" data-pv-rate="1">1x</button>
+            <button class="pv-rate rounded px-2 py-0.5 text-xs border border-ink-700 text-slate-300 hover:bg-ink-700" data-pv-rate="1.5">1.5x</button>
+            <button class="pv-rate rounded px-2 py-0.5 text-xs border border-ink-700 text-slate-300 hover:bg-ink-700" data-pv-rate="2">2x</button>
+          </span>
+          <span class="ml-auto font-mono text-xs text-accent-400" id="pv-time" title="kept position / total kept">0:00.00 / 0:00.00</span>
+          <button id="pv-exit" class="btn-ctl text-xs" title="Exit preview">✕</button>
         </div>
         <div class="px-3 pb-3">
           <input id="seek" type="range" min="0" max="0" step="0.05" value="0" class="w-full" />

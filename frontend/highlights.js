@@ -56,6 +56,50 @@ function removeHighlight(idx) {
   syncHighlights();
 }
 
+// Cut the raw source-video segment for one highlight. Backend saves it
+// to output/ AND we trigger a browser download of the same file.
+async function exportHighlight(idx, btn) {
+  const h = project.highlights[idx];
+  if (!h) return;
+  const token = mut.externalToken;
+  const videoFile = (project.info?.video_file || '').trim();
+  if (!token && !videoFile) {
+    toast('Load a video first');
+    return;
+  }
+  const projName = ($('in-project')?.value || 'match').trim();
+  const body = {
+    token: token || null,
+    video_file: videoFile || null,  // durable fallback if the token is stale
+    start: h.start,
+    end: h.end,
+    project_name: projName,
+    index: idx + 1,
+  };
+  const prev = btn ? btn.textContent : null;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+  toast(`Exporting highlight #${idx + 1}…`);
+  try {
+    const r = await fetch('/api/highlights/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      let detail = await r.text();
+      try { detail = JSON.parse(detail).detail ?? detail; } catch {}
+      toast(`Export failed: ${detail}`);
+      return;
+    }
+    const data = await r.json();
+    toast(`Saved to output/${data.name}`);
+  } catch (e) {
+    toast(`Export error: ${e}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = prev; }
+  }
+}
+
 function setHighlightField(idx, field, value) {
   snapshot();
   project.highlights[idx][field] = parseFloat(value);
@@ -78,8 +122,11 @@ export function syncHighlights() {
       <input type="text" value="${fmt(h.start)}" class="ipt w-20 text-[11px] py-0.5 font-mono" data-field="start" title="m:ss.xx" />
       <span class="text-slate-500">→</span>
       <input type="text" value="${fmt(h.end)}" class="ipt w-20 text-[11px] py-0.5 font-mono" data-field="end" title="m:ss.xx" />
-      <button class="text-slate-400 hover:text-accent-400 ml-auto" title="Jump to start" data-jump>↦</button>
-      <button class="text-slate-400 hover:text-danger-500" title="Delete" data-del>✕</button>
+      <span class="flex items-center gap-4 ml-auto pl-2">
+        <button class="text-slate-400 hover:text-accent-400 px-1" title="Export clip to output/" data-export>⤓</button>
+        <button class="text-slate-400 hover:text-accent-400 px-1" title="Jump to start" data-jump>↦</button>
+        <button class="text-slate-400 hover:text-danger-500 px-1" title="Delete" data-del>✕</button>
+      </span>
     `;
     li.querySelectorAll('input').forEach((el) => {
       el.addEventListener('change', () => {
@@ -91,6 +138,7 @@ export function syncHighlights() {
         }
       });
     });
+    li.querySelector('[data-export]').addEventListener('click', (e) => exportHighlight(i, e.currentTarget));
     li.querySelector('[data-jump]').addEventListener('click', () => {
       player.currentTime = h.start;
       player.play().catch(() => {});

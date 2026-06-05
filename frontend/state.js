@@ -63,6 +63,7 @@ export const mut = {
   externalToken: null,
   lastSourcedFile: '',
   pollTimer: null,
+  previewSkipTrims: false,   // when true, playback auto-jumps past trim_segments
 };
 
 export function snapshot() {
