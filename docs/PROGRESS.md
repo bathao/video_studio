@@ -1,6 +1,6 @@
 # Progress Status
 
-Last update: 2026-05-29 (Phase 1b verified in browser + NVDEC session-budget fix — see [TODO.md](TODO.md))
+Last update: 2026-05-29 (Phase 1b verified + NVDEC fix committed; scoreboard inter-set recap redesigned, awaiting render test — see [TODO.md](TODO.md))
 
 ## Module map
 
@@ -187,11 +187,17 @@ render started splicing a full 50% replay after every highlight.)
       points column at a glance
 - ✅ Compact cell sizing — fonts one step smaller, padding tightened so
       borders sit close to the digits
-- ✅ Set-transition card ("SET 2/3/4/5") holds for 4.5 s after each set
-      (was 1.5 s) so the viewer has time to read it
+- ✅ Inter-set recap: same bottom-right scoreboard panel as the final
+      summary, expanded by one set column each time. After set 1 the
+      panel shows 1 set column; after set 2, 2 columns; etc. Each
+      recap holds for 4 s (clipped to 0.3 s before the next score
+      event). Match-ending set falls through to the dedicated final
+      scoreboard. Replaces the previous centred 140 px / 200 px
+      "SET N" + "SET N+1" cards which were hard to read.
 - ✅ End-of-match final scoreboard anchored at the same bottom-right
       corner with identical fonts/colours/opacities; just adds one
-      column per played set
+      column per played set. Shares `_emit_scoreboard_panel` with the
+      inter-set recap path — single layout, two call sites.
 - ✅ Vietnamese diacritics (UTF-8 .ass + Arial fallback via libass + DirectWrite)
 - ✅ Pre-render scoreboard preview: same `build_scoreboard_ass_text` the
       render pipeline burns in is streamed to JASSUB (libass-WASM) in the

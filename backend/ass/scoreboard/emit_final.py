@@ -1,9 +1,12 @@
-"""End-of-match final scoreboard with per-set columns.
+"""End-of-match summary + inter-set recap panel.
 
-Shares every layout constant with the live panel (`_Geometry`); the
-only new column widths are derived from the live `sets_col` / `pts_col`
-so visual rhythm matches across the cut from the live panel to the
-final summary.
+Two callers, one panel layout. The end-of-match summary calls it with
+the full set history at the match-end timestamp; the inter-set recap
+(`_emit_recap_cards` in `emit_cards.py`) calls it after each
+non-match-ending set with the history sliced to the just-ended set.
+Width grows by one set column each time, anchored at the same right
+edge as the live panel so the visual transition reads as "live panel
+grows" rather than a separate popup.
 """
 
 from __future__ import annotations
@@ -17,16 +20,17 @@ from ..common import (
 from .geometry import _AssetText, _Geometry, _title_fscx_tag
 
 
-def _emit_final_scoreboard(lines: list[str], g: _Geometry, t: _AssetText,
-                           set_history: list[tuple[int, int, int]],
-                           final_p1_sets: int, final_p2_sets: int,
-                           match_end_t: float, end_ts: float) -> None:
-    """End-of-match summary card with one column per played set,
-    anchored at the same bottom-right corner as the live panel. Shares
-    every constant with the live panel — the only new column widths
-    are derived from the live `sets_col` / `pts_col` so visual rhythm
-    matches across the cut."""
-    n_sets = len(set_history)
+def _emit_scoreboard_panel(lines: list[str], g: _Geometry, t: _AssetText,
+                           set_history_so_far: list[tuple[int, int, int]],
+                           p1_sets: int, p2_sets: int,
+                           start_t: float, end_t: float,
+                           fade_in_ms: int = 500,
+                           fade_out_ms: int = 300) -> None:
+    """Bottom-right scoreboard panel with one column per set in
+    `set_history_so_far`. Used both by the end-of-match summary and
+    by every inter-set recap — the only differences between the two
+    are which slice of history gets passed in and the time window."""
+    n_sets = len(set_history_so_far)
     F_TOTAL_COL = g.sets_col
     F_SET_COL   = g.pts_col
     F_BAR_W = g.pad_x + g.team_col + g.name_col + F_TOTAL_COL + n_sets * F_SET_COL
@@ -59,11 +63,9 @@ def _emit_final_scoreboard(lines: list[str], g: _Geometry, t: _AssetText,
         F_total_x + F_TOTAL_COL + i * F_SET_COL for i in range(n_sets)
     ]
 
-    F_start = match_end_t
-    F_end   = end_ts
-    fade = "\\fad(500,300)"
-    s_fmt = _fmt_time(F_start)
-    e_fmt = _fmt_time(F_end)
+    fade = f"\\fad({fade_in_ms},{fade_out_ms})"
+    s_fmt = _fmt_time(start_t)
+    e_fmt = _fmt_time(end_t)
 
     def fbox(x: int, y: int, w: int, h: int, color: str, alpha: str = "00", layer: int = 6) -> str:
         # Compose `_rect`'s payload + a Dialogue wrapper + a \fad tag
@@ -120,14 +122,14 @@ def _emit_final_scoreboard(lines: list[str], g: _Geometry, t: _AssetText,
             f"{{\\an4\\pos({F_name_text_x},{cy_row})\\q2{fade}}}{name}"
         )
 
-    for cy_row, total in ((F_row1_cy, final_p1_sets), (F_row2_cy, final_p2_sets)):
+    for cy_row, total in ((F_row1_cy, p1_sets), (F_row2_cy, p2_sets)):
         lines.append(
             f"Dialogue: 7,{s_fmt},{e_fmt},SetNum,,0,0,0,,"
             f"{{\\an5\\pos({F_total_cx},{cy_row}){fade}}}{total}"
         )
 
     # Per-set point columns — winner of each set highlighted gold.
-    for i, (p1_s, p2_s, w) in enumerate(set_history):
+    for i, (p1_s, p2_s, w) in enumerate(set_history_so_far):
         cx_set = F_set_cxs[i]
         p1_c = C_GOLD_BRIGHT if w == 1 else C_WHITE
         p2_c = C_GOLD_BRIGHT if w == 2 else C_WHITE
@@ -139,3 +141,19 @@ def _emit_final_scoreboard(lines: list[str], g: _Geometry, t: _AssetText,
             f"Dialogue: 7,{s_fmt},{e_fmt},PtsNum,,0,0,0,,"
             f"{{\\an5\\pos({cx_set},{F_row2_cy}){fade}\\c{p2_c}}}{p2_s}"
         )
+
+
+def _emit_final_scoreboard(lines: list[str], g: _Geometry, t: _AssetText,
+                           set_history: list[tuple[int, int, int]],
+                           final_p1_sets: int, final_p2_sets: int,
+                           match_end_t: float, end_ts: float) -> None:
+    """End-of-match summary anchored at the bottom-right corner — thin
+    wrapper around `_emit_scoreboard_panel` for callsite clarity. The
+    fade defaults (500 in / 300 out) match the prior behaviour so the
+    final scoreboard is byte-identical to the pre-refactor output."""
+    _emit_scoreboard_panel(
+        lines, g, t,
+        set_history,
+        final_p1_sets, final_p2_sets,
+        match_end_t, end_ts,
+    )

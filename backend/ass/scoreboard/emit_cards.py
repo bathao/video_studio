@@ -1,35 +1,40 @@
-"""Recap / transition cards + GP / MP / DEUCE flag overlay.
+"""Inter-set recap panel + GP / MP / DEUCE flag overlay.
 
-Two transient-overlay emitters that ride on top of the live panel:
-  - `_emit_recap_cards`: after each completed (non-match-ending) set,
-    fade in a "SET N" recap card showing the final score, then a
-    "SET N+1" transition card before the next set's first point.
-  - `_emit_flag_overlays`: anchored above the panel, pulsing flag for
-    DEUCE / GAME POINT / MATCH POINT while the state holds.
+Two transient overlays riding on top of the live panel:
+  - `_emit_recap_cards`: after each completed non-match-ending set,
+    expand the bottom-right scoreboard panel with one column per set
+    played so far. Same layout as the end-of-match summary — visually
+    reads as "live panel grows" rather than a centred popup. Delegates
+    to `_emit_scoreboard_panel` in `emit_final.py`.
+  - `_emit_flag_overlays`: anchored just above the panel, pulsing flag
+    for DEUCE / GAME POINT / MATCH POINT while the state holds.
 """
 
 from __future__ import annotations
 
-from ..common import C_GOLD_BRIGHT, C_GREY, C_WHITE, _fmt_time
+from ..common import _fmt_time
+from .emit_final import _emit_scoreboard_panel
 from .events import ScoreFrame, _set_final_score
-from .geometry import _Geometry
+from .geometry import _AssetText, _Geometry
 
 
-def _emit_recap_cards(lines: list[str], g: _Geometry,
+def _emit_recap_cards(lines: list[str], g: _Geometry, t: _AssetText,
                       events: list[ScoreFrame],
                       end_ts: float, sets_to_win: int) -> None:
-    """SET N recap (label + final score) followed by a SET N+1 transition
-    card after each completed (non-match-ending) set."""
+    """After each non-match-ending set, expand the bottom-right
+    scoreboard panel with one column per set played so far. The
+    match-ending set falls through to `_emit_final_scoreboard`, which
+    renders the same panel with the full history at the match-end
+    timestamp.
+
+    Recap window starts at the winning-point event (which already
+    carries the post-reset state: set += 1, score = 0–0) and runs for
+    `RECAP_DUR` seconds, clipped to `NEXT_EVENT_GUARD` before the next
+    score event so a fast-served next point isn't visually swallowed."""
     RECAP_DUR = 4.0
-    TRANS_DUR = 4.5
+    NEXT_EVENT_GUARD = 0.3
 
-    def _recap_score_text(p1_final: int, p2_final: int, winner: int) -> str:
-        if winner == 1:
-            return (f"{{\\c{C_GOLD_BRIGHT}}}{p1_final}{{\\c{C_GREY}}}  —  "
-                    f"{{\\c{C_WHITE}}}{p2_final}")
-        return (f"{{\\c{C_WHITE}}}{p1_final}{{\\c{C_GREY}}}  —  "
-                f"{{\\c{C_GOLD_BRIGHT}}}{p2_final}")
-
+    running_history: list[tuple[int, int, int]] = []
     for i in range(1, len(events)):
         prev = events[i - 1]
         cur = events[i]
@@ -39,40 +44,29 @@ def _emit_recap_cards(lines: list[str], g: _Geometry,
             won_by = 2
         else:
             continue
-        # Skip recap for the match-ending set — the final scoreboard
-        # takes the centre of the screen at that moment.
+        p1_final, p2_final = _set_final_score(prev.p1_score, prev.p2_score, won_by)
+        running_history.append((p1_final, p2_final, won_by))
+
+        # Match-ending set: fall through. _emit_final_scoreboard owns
+        # this window with a longer fade-in and runs to the credits.
         if max(cur.p1_set, cur.p2_set) >= sets_to_win:
             continue
-        p1_final, p2_final = _set_final_score(prev.p1_score, prev.p2_score, won_by)
 
-        ended_set_n = cur.p1_set + cur.p2_set
-        next_set_n  = ended_set_n + 1
+        start_t = max(0.0, cur.timestamp)
+        end_t = start_t + RECAP_DUR
+        if i + 1 < len(events):
+            end_t = min(end_t, events[i + 1].timestamp - NEXT_EVENT_GUARD)
+        end_t = min(end_t, end_ts)
+        if end_t <= start_t:
+            continue
 
-        T = max(0.0, cur.timestamp)
-        recap_start = T
-        recap_end   = min(end_ts, T + RECAP_DUR)
-        trans_start = recap_end
-        trans_end   = min(end_ts, trans_start + TRANS_DUR)
-
-        recap_lbl_y   = g.cy - int(110 * g.scale)
-        recap_score_y = g.cy + int(40  * g.scale)
-
-        lines.append(
-            f"Dialogue: 5,{_fmt_time(recap_start)},{_fmt_time(recap_end)},SetLabel,,0,0,0,,"
-            f"{{\\an5\\pos({g.cx},{recap_lbl_y})\\fad(300,400)}}SET {ended_set_n}"
+        _emit_scoreboard_panel(
+            lines, g, t,
+            running_history,
+            cur.p1_set, cur.p2_set,
+            start_t, end_t,
+            fade_in_ms=350, fade_out_ms=300,
         )
-        score_text = _recap_score_text(p1_final, p2_final, won_by)
-        lines.append(
-            f"Dialogue: 5,{_fmt_time(recap_start)},{_fmt_time(recap_end)},SetRecap,,0,0,0,,"
-            f"{{\\an5\\pos({g.cx},{recap_score_y})\\fad(300,400)}}{score_text}"
-        )
-
-        if trans_end > trans_start:
-            lines.append(
-                f"Dialogue: 5,{_fmt_time(trans_start)},{_fmt_time(trans_end)},SetTransition,,0,0,0,,"
-                f"{{\\an5\\pos({g.cx},{g.cy})\\fad(300,300)"
-                f"\\fscx80\\fscy80\\t(0,400,\\fscx100\\fscy100)}}SET {next_set_n}"
-            )
 
 
 def _emit_flag_overlays(lines: list[str], g: _Geometry,

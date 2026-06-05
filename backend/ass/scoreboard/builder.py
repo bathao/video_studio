@@ -39,13 +39,16 @@ def build_scoreboard_ass_text(
     p3_name: str = "",
     p4_name: str = "",
 ) -> str:
-    """Build the scoreboard ASS content as a string. Six sections:
+    """Build the scoreboard ASS content as a string. Five sections:
 
       1. Static live panel (header, rows, accents, dividers, names)
       2. Per-event live numbers (sets / pts updates)
-      3. SET N recap + SET N+1 transition cards
+      3. Inter-set recap panels — the bottom-right scoreboard expanded
+         with one column per set played so far, ~4 s per set
       4. GAME POINT / MATCH POINT / DEUCE flag pulses
-      5. End-of-match final scoreboard with per-set columns
+      5. End-of-match final scoreboard with per-set columns (same
+         panel layout as the recap, called with the full history at
+         the match-end timestamp)
 
     Each section emits Dialogue lines with non-overlapping layer + time
     ranges, so libass composites them in a deterministic z-order.
@@ -87,13 +90,12 @@ def build_scoreboard_ass_text(
 
     lines: list[str] = [_scoreboard_header(
         video_w, video_h,
-        g.fs_header, g.fs_name, g.fs_sets, g.fs_pts,
-        g.fs_recap_lbl, g.fs_recap_score, g.fs_transition, g.fs_gp,
+        g.fs_header, g.fs_name, g.fs_sets, g.fs_pts, g.fs_gp,
     )]
 
     _emit_live_panel(lines, g, text, scoreboard_end_t)
     _emit_dynamic_numbers(lines, g, events, scoreboard_end_t, end_ts)
-    _emit_recap_cards(lines, g, events, end_ts, sets_to_win)
+    _emit_recap_cards(lines, g, text, events, end_ts, sets_to_win)
     _emit_flag_overlays(lines, g, events, scoreboard_end_t, end_ts, sets_to_win)
 
     if match_end_t is not None and set_history:

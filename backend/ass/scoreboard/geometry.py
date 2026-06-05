@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..common import (
-    C_DEUCE, C_GOLD_BRIGHT, C_GP_RED, C_GREY, C_MP_RED, C_WHITE,
+    C_DEUCE, C_GP_RED, C_GREY, C_MP_RED, C_WHITE,
     _ass_skeleton,
 )
 
@@ -48,9 +48,6 @@ class _Geometry:
     fs_name: int
     fs_sets: int
     fs_pts: int
-    fs_recap_lbl: int
-    fs_recap_score: int
-    fs_transition: int
     fs_gp: int
     total_h: int
     x1: int
@@ -125,9 +122,6 @@ def _compute_geometry(video_w: int, video_h: int,
     fs_name        = max(16, int(22 * scale))
     fs_sets        = max(20, int(26 * scale))
     fs_pts         = max(20, int(26 * scale))
-    fs_recap_lbl   = max(28, int(40 * scale))
-    fs_recap_score = max(80, int(140 * scale))
-    fs_transition  = max(110, int(200 * scale))
     fs_gp          = max(28, int(40 * scale))
 
     total_h = header_h + row_h * 2 + gap_rows
@@ -154,8 +148,7 @@ def _compute_geometry(video_w: int, video_h: int,
         accent_w=accent_w, gold_line=gold_line,
         sep_col=sep_col, sep_mid=sep_mid, gap_rows=gap_rows,
         fs_header=fs_header, fs_name=fs_name, fs_sets=fs_sets, fs_pts=fs_pts,
-        fs_recap_lbl=fs_recap_lbl, fs_recap_score=fs_recap_score,
-        fs_transition=fs_transition, fs_gp=fs_gp,
+        fs_gp=fs_gp,
         total_h=total_h, x1=x1, y1=y1, x2=x2,
         hdr_y2=hdr_y2, mid_y=mid_y,
         col_team_x=col_team_x, col_name_x=col_name_x,
@@ -167,15 +160,11 @@ def _compute_geometry(video_w: int, video_h: int,
 
 def _scoreboard_header(video_w: int, video_h: int, fs_header: int,
                        fs_name: int, fs_sets: int, fs_pts: int,
-                       fs_recap_lbl: int, fs_recap_score: int,
-                       fs_transition: int, fs_gp: int) -> str:
+                       fs_gp: int) -> str:
     styles = (
         f"Style: Header, Arial, {fs_header}, {C_WHITE}, &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 1, 0, 1, 0,   0, 5, 0, 0, 0, 1\n"
         f"Style: Name,   Arial, {fs_name},   {C_WHITE}, &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 0, 0, 1, 1,   0, 4, 0, 0, 0, 1\n"
         f"Style: SetNum, Arial, {fs_sets},   {C_GREY},  &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 0, 0, 1, 1,   0, 5, 0, 0, 0, 1\n"
-        f"Style: SetLabel,      Arial, {fs_recap_lbl},   {C_GOLD_BRIGHT}, &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 4, 0, 1, 2, 1, 5, 0, 0, 0, 1\n"
-        f"Style: SetRecap,      Arial, {fs_recap_score}, {C_WHITE},       &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 6, 0, 1, 4, 2, 5, 0, 0, 0, 1\n"
-        f"Style: SetTransition, Arial, {fs_transition},  {C_GOLD_BRIGHT}, &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 8, 0, 1, 5, 3, 5, 0, 0, 0, 1\n"
         f"Style: GamePoint,     Arial, {fs_gp},          {C_GP_RED},      &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 3, 0, 1, 3, 1, 6, 0, 0, 0, 1\n"
         f"Style: MatchPoint,    Arial, {int(fs_gp * 1.15)}, {C_MP_RED},   &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 4, 0, 1, 4, 2, 6, 0, 0, 0, 1\n"
         f"Style: Deuce,         Arial, {fs_gp},          {C_DEUCE},       &H000000FF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 3, 0, 1, 3, 1, 6, 0, 0, 0, 1\n"

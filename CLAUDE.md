@@ -202,9 +202,17 @@ backend/
                        `_set_final_score`, `resolve_row_names`.
                        Pure logic, tier-agnostic.
       emit_live.py     Static live panel + per-event sets/pts numbers.
-      emit_cards.py    SET recap + transition cards + GP/MP/DEUCE
+      emit_cards.py    Inter-set recap (expand the scoreboard panel
+                       with one column per set played so far, ~4 s
+                       after each non-match-ending set) + GP/MP/DEUCE
                        pulsing flag.
-      emit_final.py    End-of-match summary card with per-set columns.
+      emit_final.py    `_emit_scoreboard_panel` (shared bottom-right
+                       layout — header + 2 rows + totals col + one
+                       col per set in `set_history_so_far`). Used by
+                       both the inter-set recap (history sliced to
+                       the just-ended set) and the end-of-match
+                       summary (full history); `_emit_final_scoreboard`
+                       is a thin wrapper around it.
       builder.py       `build_scoreboard_ass_text` orchestrator +
                        `build_scoreboard_ass` file-write wrapper.
     intro.py         Text-only fallback intro + libass companion for

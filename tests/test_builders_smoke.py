@@ -103,6 +103,77 @@ def test_scoreboard_handles_vietnamese_names(out: Path):
     assert "Giải Bóng Bàn" in text
 
 
+def test_scoreboard_inter_set_recap_grows_per_set(out: Path):
+    """After each non-match-ending set, the bottom-right scoreboard
+    panel expands with one column per set played so far. The match-
+    ending set falls through to the dedicated final scoreboard.
+
+    Best-of-3 with sets won by P1, P2, P1 → 2-1 P1. Sets 1 + 2 are
+    non-match-ending (each spawns a 4 s recap window); set 3 is the
+    match-end and emits the final scoreboard instead. Verified by
+    counting PtsNum dialogues per time window — k-th panel emits
+    2 × (sets so far) PtsNum lines (one per row per set column).
+    """
+    events = [
+        ScoreFrame(0.0,    0,  0, 0, 0),
+        ScoreFrame(60.0,  10,  7, 0, 0),   # set 1 pre-winning
+        ScoreFrame(65.0,   0,  0, 1, 0),   # set 1 → P1 (11–7)
+        ScoreFrame(130.0,  9, 10, 1, 0),   # set 2 pre-winning
+        ScoreFrame(135.0,  0,  0, 1, 1),   # set 2 → P2 (9–11)
+        ScoreFrame(200.0, 10,  8, 1, 1),   # set 3 pre-winning
+        ScoreFrame(205.0,  0,  0, 2, 1),   # set 3 → P1 (11–8), match ends
+    ]
+    build_scoreboard_ass(
+        output_path=out, video_w=1920, video_h=1080,
+        total_duration=300.0, tournament="Cup",
+        p1_name="Alice", p2_name="Bob",
+        score_events=events, best_of=3,
+    )
+    text = out.read_text(encoding="utf-8")
+
+    # Recap windows: [65, 69] and [135, 139]. Final: [205, 301].
+    recap1 = "0:01:05.00,0:01:09.00"
+    recap2 = "0:02:15.00,0:02:19.00"
+    final_w = "0:03:25.00,0:05:01.00"
+    assert recap1 in text
+    assert recap2 in text
+    assert final_w in text
+
+    def _pts(window: str) -> int:
+        return sum(
+            1 for line in text.splitlines()
+            if window in line and ",PtsNum," in line
+        )
+    # 2 PtsNum dialogues per set column (one per row), so k cols → 2k.
+    assert _pts(recap1) == 2
+    assert _pts(recap2) == 4
+    assert _pts(final_w) == 6
+
+
+def test_scoreboard_skips_recap_when_only_one_set_and_it_ends_match(out: Path):
+    """Best-of-1 (sets_to_win=1): the very first set is the match-
+    ending one, so no recap window opens — the final scoreboard takes
+    that timeslot directly."""
+    events = [
+        ScoreFrame(0.0,   0, 0, 0, 0),
+        ScoreFrame(50.0, 10, 7, 0, 0),
+        ScoreFrame(55.0,  0, 0, 1, 0),   # match ends here
+    ]
+    build_scoreboard_ass(
+        output_path=out, video_w=1920, video_h=1080,
+        total_duration=120.0, tournament="Cup",
+        p1_name="Alice", p2_name="Bob",
+        score_events=events, best_of=1,
+    )
+    text = out.read_text(encoding="utf-8")
+    # Final window opens at match-end (t=55), runs to total_duration+1.
+    assert "0:00:55.00,0:02:01.00" in text
+    # No recap window starting at t=55 with a 4 s tail — there's just
+    # the final panel here, not a recap-then-final overlap.
+    recap_window = "0:00:55.00,0:00:59.00"
+    assert recap_window not in text
+
+
 # ---------- intro variants --------------------------------------------------
 
 

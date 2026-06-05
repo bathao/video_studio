@@ -1,7 +1,7 @@
 """
-Live scoreboard + end-of-match recap, recap/transition cards between
-sets, and the GAME POINT / MATCH POINT / DEUCE flag — all generated as
-a single ASS file that ffmpeg burns over the main match render.
+Live scoreboard + inter-set recap panels (same layout, sliced history)
++ end-of-match summary + GAME POINT / MATCH POINT / DEUCE flag — all
+generated as a single ASS file that ffmpeg burns over the main render.
 
 Visual style is a port of the broadcast-look scoreboard, redrawn using
 ASS primitives so the overlay can be burned in by libass at NVENC speed
@@ -41,7 +41,8 @@ Module layout under backend/ass/scoreboard/:
                    `_set_final_score`, `resolve_row_names` (doubles rule)
   emit_live.py   — `_emit_live_panel`, `_emit_dynamic_numbers`
   emit_cards.py  — `_emit_recap_cards`, `_emit_flag_overlays`
-  emit_final.py  — `_emit_final_scoreboard`
+  emit_final.py  — `_emit_scoreboard_panel` (shared layout) +
+                   `_emit_final_scoreboard` (end-of-match wrapper)
   builder.py     — `build_scoreboard_ass_text` + `build_scoreboard_ass`
 """
 
