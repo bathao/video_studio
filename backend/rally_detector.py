@@ -115,28 +115,34 @@ def _build_decode_cmd(
     *,
     use_hwaccel: bool,
 ) -> list[str]:
-    """NVDEC pipeline per PHASE0_REPORT (240-263 fps decode = ~8x realtime
-    on RTX 5060 Ti). The hwdownload + format chain pulls the decoded frame
-    off the GPU as nv12, then converts to rgb24 on the CPU. The trailing
-    fps filter resamples to a fixed output rate so motion signal indices
-    map deterministically to seconds regardless of source fps (59.94 →
-    30, 30 → 30, etc.). The CPU portion is cheap because frames are
-    already 480x270.
+    """Decode → fixed-size rgb24 raw frames on stdout.
 
-    `use_hwaccel=False` falls back to a CPU decode path for environments
+    `use_hwaccel=True` offloads only the (expensive) HEVC/H.264 decode to
+    NVDEC via `-hwaccel cuda`; the decoded frame is auto-downloaded to
+    system memory and scaled by the SAME CPU swscale filter as the
+    fallback path. HEVC reconstruction is bit-exact per spec, so the
+    rgb24 bytes are byte-identical to the CPU path (verified by sha1 over
+    the first 1200+ frames of all 3 spike sources) — only the decode is
+    faster (~80 → ~220 fps = 2.6× → 7.5× realtime on RTX 5060 Ti).
+
+    NOTE: an earlier version did GPU-side scaling
+    (`-hwaccel_output_format cuda` + `scale_cuda`). That both FAILED on
+    this ffmpeg build ("Could not open encoder" — scale_cuda unavailable,
+    so every detect silently fell back to pure CPU decode) AND would have
+    changed pixels (GPU resampler ≠ swscale). Keeping swscale is what lets
+    the GPU-decode path stay a byte-identical drop-in.
+
+    The trailing fps filter resamples to a fixed output rate so motion
+    signal indices map deterministically to seconds regardless of source
+    fps (59.94 → 30, 30 → 30, etc.).
+
+    `use_hwaccel=False` is the CPU decode fallback for environments
     without CUDA (CI, headless servers). Slower but byte-equivalent."""
     w, h, fps = params.decode_width, params.decode_height, params.decode_fps
-    if use_hwaccel:
-        return [
-            config.ffmpeg, "-hide_banner", "-loglevel", "error",
-            "-hwaccel", "cuda", "-hwaccel_output_format", "cuda",
-            "-i", str(video_path),
-            "-vf", f"scale_cuda={w}:{h},hwdownload,format=nv12,format=rgb24,fps={fps}",
-            "-f", "rawvideo", "-pix_fmt", "rgb24",
-            "-",
-        ]
+    hwaccel = ["-hwaccel", "cuda"] if use_hwaccel else []
     return [
         config.ffmpeg, "-hide_banner", "-loglevel", "error",
+        *hwaccel,
         "-i", str(video_path),
         "-vf", f"scale={w}:{h},fps={fps}",
         "-f", "rawvideo", "-pix_fmt", "rgb24",

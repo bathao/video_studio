@@ -1,6 +1,6 @@
 # Progress Status
 
-Last update: 2026-06-05 (Scoreboard inter-set recap render-tested + committed `14c5db7`; 9 new avatars committed `22b5f08` — see [TODO.md](TODO.md))
+Last update: 2026-06-05 (Auto Trim detect speed 2.1× → 6.2× realtime via byte-identical `-hwaccel cuda` decode fix; scoreboard inter-set recap committed `14c5db7`; 9 new avatars `22b5f08` — see [TODO.md](TODO.md))
 
 ## Module map
 
@@ -262,7 +262,9 @@ render started splicing a full 50% replay after every highlight.)
       (`J_fg_p70_rmin5`) — same params validated in PHASE0_REPORT.
       Verify on 3 spike entries: recall 0.957-0.993 (≥ PHASE0_REPORT
       Balanced 0.922-0.976), extras 303.7-352.7s within tolerance.
-      Detect speed ~2.2× realtime.
+      Detect speed ~6.2× realtime since 2026-06-05 (`-hwaccel cuda`
+      GPU-decode fix; was ~2.1× — the old `scale_cuda` NVDEC command
+      silently failed and fell back to CPU decode). See TODO.md.
 - ✅ Backend SSE orchestration (`backend/server/routes_auto_trim.py` +
       `state.py`). New endpoints:
       `POST /api/auto_trim/start` → spawns worker thread, returns job_id;

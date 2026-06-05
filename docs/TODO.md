@@ -52,11 +52,74 @@ at a basic level. Bundled commit covers:
 
 - (A) Test on a fresh match outside the 3 PHASE0_REPORT spike entries
   to measure real-world recall on truly-unseen audio + venue.
-- (B) Optimise detect speed 2.2× → 6-8× realtime (plumbing only —
-  greyscale decode from NV12 luma instead of per-frame cvtColor;
-  numpy mask sum hot loop). Algorithm-preserving fixes per memory
-  `feedback_dont_touch_roi_algorithm_when_results_good.md` apply
-  equally to the rally detector.
+- (B) ✅ **SHIPPED 2026-06-05 — detect speed 2.1× → 6.2× realtime.**
+  See the dedicated section below. The original hypotheses (greyscale
+  decode / numpy mask-sum hot loop) were WRONG: profiling showed 99%
+  of per-frame time is ffmpeg HEVC decode, <1% is cvtColor+mask-sum.
+  Real fix was a one-line decode-command change.
+
+---
+
+## ✅ Auto Trim detect speed: 2.1× → 6.2× realtime (SHIPPED 2026-06-05)
+
+Plumbing-only, byte-identical. One-line change in
+[backend/rally_detector.py](../backend/rally_detector.py)
+`_build_decode_cmd`.
+
+### Root cause (profiled, not guessed)
+
+`temp/profile_rally.py` (throwaway) broke per-frame cost into pipe-read
+vs cvtColor vs diff+mask-sum on a real spike source:
+
+```
+5000 frames: 79 fps (2.6× realtime)
+  pipe read : 99%   ← ffmpeg HEVC decode
+  cvtColor  :  0%
+  diff+sum  :  1%
+```
+
+So the TODO's two hypotheses (greyscale-from-NV12-luma, numpy hot loop)
+targeted the <1%. The real cost is HEVC decode. AND the existing NVDEC
+command silently failed on this ffmpeg build — `scale_cuda` is
+unavailable (`Could not open encoder before EOF`), so every detect fell
+back to **pure CPU decode** (the "NVDEC not engaging" hypothesis was the
+true one).
+
+### Fix
+
+Old hwaccel path: `-hwaccel cuda -hwaccel_output_format cuda … -vf
+scale_cuda=…,hwdownload,…` (GPU-side scaling — fails on this build, and
+would alter pixels via a different resampler).
+
+New hwaccel path: `-hwaccel cuda -i src -vf scale=…,fps=…` — GPU decode
+only, frames auto-download to system RAM, scaled by the SAME CPU swscale
+filter as the fallback. HEVC reconstruction is bit-exact per spec, so:
+
+### Byte-identity proof (`temp/cmp_decode.py`, throwaway)
+
+sha1 over the first 1200–1500 decoded rgb24 frames, CPU vs GPU-decode,
+on all 3 spike sources — **identical** every time:
+
+| Entry | CPU sha1[:16] | GPU sha1[:16] | CPU fps | GPU fps | speedup |
+|---|---|---|---:|---:|---:|
+| E1 | 637c04992562e5e6 | 637c04992562e5e6 | 75 | 214 | 2.86× |
+| E2 | 796150c47dfacc9f | 796150c47dfacc9f | 78 | 220 | 2.81× |
+| E3 | 6fa600601635e2d8 | 6fa600601635e2d8 | 80 | 226 | 2.83× |
+
+Byte-identical decode → identical motion signal → identical threshold →
+identical trims (the rest of the pipeline is deterministic numpy). The
+CPU fallback path is unchanged, so CUDA-less boxes still work.
+
+E3 end-to-end verify post-fix: **6.2× realtime** (was 2.1×); hwaccel
+engages, no fallback. 170 pytest still pass.
+
+NOTE on recall: the verify script's `EXPECTED` targets predate the
+`post_match_keep_s=30` feature (operator feedback 2026-05-28). E3 now
+reports recall 0.815 vs the old 0.957 table below — that drop is from
+keeping 30 s of post-match handshake (memory
+`feedback_auto_trim_keep_handshake`), NOT from this decode change and
+NOT a regression. Targets in `verify_rally_detector.py` should be
+refreshed if that script is used as a gate again.
 
 ---
 
