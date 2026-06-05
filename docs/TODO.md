@@ -1,15 +1,13 @@
 # TODO
 
-## RESUME POINTER 2026-05-29 afternoon — Scoreboard inter-set recap ON DISK, render test pending
+## ✅ Scoreboard inter-set recap VERIFIED + COMMITTED 2026-06-05
 
-Operator will render-test a 2-3 set match tonight. Commit happens
-after they confirm the panel renders correctly at the bottom-right
-corner with no flicker or overlay artefacts.
+Operator render-tested a multi-set match and confirmed the recap panel
+renders correctly at the bottom-right corner with no flicker. Committed
+as `14c5db7` on `v3-dev`.
 
-### Status
+### What shipped
 
-- Code on disk, **not committed**. 170 pytest pass (was 168 → +2
-  smoke tests for recap behavior).
 - Refactor: extracted `_emit_scoreboard_panel` shared between the
   final scoreboard and the inter-set recap. Final output byte-
   identical to pre-refactor (wrapper passes fade defaults 500/300).
@@ -20,33 +18,10 @@ corner with no flicker or overlay artefacts.
 - Dead-code cleanup: 3 font fields (`fs_recap_lbl / recap_score /
   transition`) + 3 ASS styles (`SetLabel / SetRecap / SetTransition`)
   removed.
+- +2 smoke tests for recap behaviour. 170 pytest pass.
 
-### Files changed (one commit when operator approves)
-
-- `backend/ass/scoreboard/emit_final.py` — extract `_emit_scoreboard_panel`
-- `backend/ass/scoreboard/emit_cards.py` — rewrite `_emit_recap_cards`
-- `backend/ass/scoreboard/geometry.py` — drop dead font + style entries
-- `backend/ass/scoreboard/builder.py` — update signatures + docstring
-- `backend/ass/scoreboard/__init__.py` + `CLAUDE.md` — module docs
-- `tests/test_builders_smoke.py` — +2 smoke tests
-- `docs/PROGRESS.md` + `docs/TODO.md` — current section updated
-
-### Render-test checklist (operator)
-
-1. `run.bat` → open a project with ≥ 2 completed sets + 1 in progress.
-2. JASSUB scoreboard preview on `<video>` — scrub to the set 1 ending
-   event; the bottom-right panel should expand by one set column.
-3. Scrub to the set 2 ending event; the panel should have two set
-   columns.
-4. Render the project → verify the final mp4 shows the expanding
-   recaps and the final scoreboard with all set columns is unchanged.
-5. Verify no flicker between live panel and recap panel (recap should
-   fully cover the live panel beneath).
-
-### When resuming
-
-If all checks pass, bundle a single commit (message in English).
-If a check fails, fix → re-test → only then commit.
+Follow-up commit `22b5f08`: 9 new player avatars + updated Nguyễn Minh
+Quân photo.
 
 ---
 

@@ -1,6 +1,6 @@
 # Progress Status
 
-Last update: 2026-05-29 (Phase 1b verified + NVDEC fix committed; scoreboard inter-set recap redesigned, awaiting render test — see [TODO.md](TODO.md))
+Last update: 2026-06-05 (Scoreboard inter-set recap render-tested + committed `14c5db7`; 9 new avatars committed `22b5f08` — see [TODO.md](TODO.md))
 
 ## Module map
 
