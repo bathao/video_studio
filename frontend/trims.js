@@ -33,19 +33,19 @@ export function markTrimEnd() {
 }
 
 function addManualTrim() {
-  const startStr = prompt('Trim start (m:ss.xx)', fmt(0));
-  if (startStr === null) return;
-  const endStr = prompt('Trim end (m:ss.xx)', fmt(60));
-  if (endStr === null) return;
-  const start = parseTimecode(startStr);
-  const end = parseTimecode(endStr);
-  if (!isFinite(start) || !isFinite(end) || end <= start) {
-    toast('Invalid range');
+  // Adds an editable row at the playhead (default 10 s long) instead
+  // of the old blocking prompt() pair — the start/end cells in the
+  // list are already inline-editable.
+  if (!player.duration) {
+    toast('Load a video first');
     return;
   }
+  const end = Math.min(player.currentTime + 10, player.duration);
+  const start = Math.min(player.currentTime, Math.max(0, end - 1));
   snapshot();
   project.trim_segments.push({ start, end });
   syncTrims();
+  toast('Trim added — adjust start/end inline');
 }
 
 function removeTrim(idx) {

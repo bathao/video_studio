@@ -4,7 +4,7 @@
 // browse picker, external-token registration for files outside videos/).
 import { $ } from './dom.js';
 import { fmt } from './timecode.js';
-import { mut, project } from './state.js';
+import { mut, project, snapshot } from './state.js';
 import { syncLiveFromTime, syncScore } from './score.js';
 import { toast } from './toast.js';
 
@@ -130,6 +130,7 @@ export async function browseForVideo() {
     toast('Cancelled');
     return;
   }
+  snapshot();  // user-driven source change — same rationale as the dropdown
   if (data.kind === 'local') {
     // File lives inside videos/ — treat exactly like picking from the
     // dropdown. Refresh the list if the file was added since last load.
@@ -329,6 +330,10 @@ $('in-rate').addEventListener('change', (e) => {
 });
 
 $('in-video').addEventListener('change', (e) => {
+  // Snapshot at the user-driven entry point, NOT inside setVideoSource
+  // — that function is also called from syncAllUI during undo/load
+  // restore, where a snapshot would corrupt the undo stack.
+  snapshot();
   setVideoSource(e.target.value);
 });
 $('btn-refresh-videos').addEventListener('click', loadVideoList);

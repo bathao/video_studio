@@ -1,6 +1,6 @@
 # Progress Status
 
-Last update: 2026-07-07 (improvement-plan Phase 0 housekeeping committed `a20d7dc` + `ffd7d54` and `v3-dev` pushed to origin; Phase 1 backend robustness pass — job.trims race fix, job-registry eviction, 404 on missing video, swallowed-failure surfacing — see [TODO.md](TODO.md))
+Last update: 2026-07-07 (improvement-plan Phases 0–2: housekeeping committed `a20d7dc` + `ffd7d54`, `v3-dev` pushed to origin; Phase 1 backend robustness `715d0c1`; Phase 2 frontend correctness/UX pass — undo/info data-loss fix, match-over per best_of, boot + fetch resilience, preview stale fix — see [TODO.md](TODO.md))
 
 ## Module map
 
@@ -86,11 +86,21 @@ render started splicing a full 50% replay after every highlight.)
 - ✅ Auto set win at 11 + 2-point lead
 - ✅ Auto reset of point counter on set win
 - ✅ Score event timestamped to source video time
-- ✅ Undo restores prior state including pending highlight start
+- ✅ Match-over detection per `best_of`: first to ceil(best_of/2) sets
+      ends the match — the closing set gets a "🏆 Match won" toast and
+      further scoring at that playback position is blocked (seek back
+      before the final set to re-enable). (2026-07-07)
+- ✅ Undo restores prior state including pending highlight start,
+      pending trim start + both HUD badges. Info edits (names /
+      tournament / best-of), match-type toggles and video-source
+      changes are undoable too — snapshots are taken per 1.5 s typing
+      burst, so Ctrl+Z can no longer clobber names typed after the
+      last scoring action. (2026-07-07)
 
 ### Highlight & trim lists
 - ✅ Add highlight by `H` key (start / end)
-- ✅ Add highlight manually (start / end via prompt)
+- ✅ Add highlight manually — inserts an inline-editable row at the
+      playhead (blocking `prompt()` pair removed 2026-07-07; trims same)
 - ✅ Edit start/end inline; jump-to-start; delete
 - ✅ Per-highlight clip export — ⤓ button on each row cuts the raw
       source segment for that highlight to
@@ -234,6 +244,18 @@ render started splicing a full 50% replay after every highlight.)
 - ✅ List of past outputs at `/api/outputs`
 
 ### Polish & robustness
+- ✅ Frontend robustness pass (2026-07-07, improvement-plan Phase 2):
+  - Boot survives a down/starting backend — a failed `/api/videos`
+    list no longer aborts init, so `syncAllUI` always runs and the
+    operator sees an initialized UI + a toast instead of a dead page.
+  - Network-failure try/catch + toast on every user-triggered fetch:
+    save / list / load project, render start, reveal output, open
+    output folder. Save button disabled while the PUT is in flight.
+  - Scoreboard preview refresh marks its state signature clean only
+    AFTER a successful `.ass` fetch (was: before the fetch, so a
+    failed refresh looked up-to-date and the overlay stayed stale
+    until the next unrelated edit). 3 s backoff between retries so a
+    down backend isn't hammered every debounce tick.
 - ✅ Backend robustness pass (2026-07-07, improvement-plan Phase 1):
   - Auto-trim cache-hit replay publishes `job.trims` atomically
     (local list + single assignment) instead of appending while the

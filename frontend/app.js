@@ -123,6 +123,18 @@ function syncAllUI() {
   refreshAvatarThumb('p4');
 }
 
+// Info edits (name / tournament / best-of typing) get undo coverage
+// too — otherwise a later Ctrl+Z restores a pre-edit `project.info`
+// snapshot and silently wipes whatever the operator typed since. One
+// snapshot per editing burst, not per keystroke: only take a fresh one
+// when the previous info snapshot is older than 1.5 s.
+let lastInfoSnapshotAt = 0;
+function snapshotInfoBurst() {
+  const now = Date.now();
+  if (now - lastInfoSnapshotAt > 1500) snapshot();
+  lastInfoSnapshotAt = now;
+}
+
 function undo() {
   if (!undoStack.length) {
     toast('Nothing to undo');
@@ -132,6 +144,12 @@ function undo() {
   Object.assign(project, snap.project);
   Object.assign(live, snap.live);
   mut.pendingHighlightStart = snap.pendingHighlightStart;
+  mut.pendingTrimStart = snap.pendingTrimStart ?? null;
+  // The HUD badges mirror the pending markers — keep them in sync or
+  // an undone T/H press leaves a stale "TRIM…" / "HL…" chip on screen.
+  $('hud-hl').classList.toggle('hidden', mut.pendingHighlightStart === null);
+  $('hud-trim').classList.toggle('hidden', mut.pendingTrimStart === null);
+  lastInfoSnapshotAt = 0;  // typing right after undo must snapshot again
   // After restoring the events array, refresh live state from the
   // current playback position so the panel matches what's on screen.
   syncLiveFromTime(player.currentTime);
@@ -151,8 +169,14 @@ $('in-p4').addEventListener('input', () => refreshAvatarThumb('p4'));
 [
   'in-tournament', 'in-p1', 'in-p2', 'in-p3', 'in-p4',
   'in-p1-team', 'in-p2-team',
-].forEach((id) => $(id).addEventListener('input', syncInfoFromInputs));
-$('in-best-of').addEventListener('change', syncInfoFromInputs);
+].forEach((id) => $(id).addEventListener('input', () => {
+  snapshotInfoBurst();
+  syncInfoFromInputs();
+}));
+$('in-best-of').addEventListener('change', () => {
+  snapshotInfoBurst();
+  syncInfoFromInputs();
+});
 
 // Match-type tabs. Clicking either tab updates state, re-renders the
 // setup UI (which hides / shows the partner inputs), and re-fetches
@@ -162,6 +186,7 @@ for (const id of ['tab-single', 'tab-double']) {
   $(id).addEventListener('click', () => {
     const mt = $(id).dataset.matchType;
     if (project.info.match_type === mt) return;
+    snapshot();
     project.info.match_type = mt;
     applyMatchTypeUI();
     syncInfoFromInputs();
@@ -217,6 +242,13 @@ window.addEventListener('keydown', (e) => {
   } catch {
     $('health-line').textContent = 'Backend offline';
   }
-  await loadVideoList();
+  // A failed list load must not abort boot — without this, a backend
+  // that's still starting (or down) left the whole UI uninitialized
+  // because syncAllUI() never ran.
+  try {
+    await loadVideoList();
+  } catch {
+    toast('Cannot load video list — is the backend running?');
+  }
   syncAllUI();
 })();

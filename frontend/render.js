@@ -22,11 +22,17 @@ async function startRender() {
     intro_style: cinematic ? 'cinematic' : 'text',
     output_name: $('in-output').value || null,
   };
-  const r = await fetch('/api/render', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  let r;
+  try {
+    r = await fetch('/api/render', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    toast('Render failed: cannot reach backend');
+    return;
+  }
   if (!r.ok) {
     const err = await r.text();
     toast(`Render failed: ${err}`);
@@ -91,7 +97,11 @@ function pollRender(jobId) {
           $('rs-output-path').textContent = out;
           $('rs-output-link').href = `/api/output/${encodeURIComponent(fname)}`;
           $('rs-output-reveal').onclick = async () => {
-            await fetch(`/api/output/${encodeURIComponent(fname)}/reveal`, { method: 'POST' });
+            try {
+              await fetch(`/api/output/${encodeURIComponent(fname)}/reveal`, { method: 'POST' });
+            } catch {
+              toast('Reveal failed: cannot reach backend');
+            }
           };
         }
         toast('Render done');
@@ -118,5 +128,9 @@ $('opt-intro-text').addEventListener('change', (e) => {
   if (e.target.checked) $('opt-intro-cinematic').checked = false;
 });
 $('btn-open-output').addEventListener('click', async () => {
-  await fetch('/api/output-folder/open', { method: 'POST' });
+  try {
+    await fetch('/api/output-folder/open', { method: 'POST' });
+  } catch {
+    toast('Cannot open output folder: backend unreachable');
+  }
 });

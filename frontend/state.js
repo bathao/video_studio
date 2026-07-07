@@ -71,6 +71,7 @@ export function snapshot() {
     project: JSON.parse(JSON.stringify(project)),
     live: { ...live },
     pendingHighlightStart: mut.pendingHighlightStart,
+    pendingTrimStart: mut.pendingTrimStart,
   });
   if (undoStack.length > 100) undoStack.shift();
 }

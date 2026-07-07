@@ -14,6 +14,11 @@ import { toast } from './toast.js';
 const POINTS_TO_WIN = 11;
 const MIN_LEAD = 2;
 
+// First to ceil(best_of / 2) sets takes the match (BO5 → 3 sets).
+function setsToWin() {
+  return Math.ceil((project.info.best_of || 5) / 2);
+}
+
 // Sort events by timestamp and replay all actions to fill in the
 // derived score / set fields. Mutates the input array.
 export function recomputeAllEvents() {
@@ -100,6 +105,15 @@ export function scorePoint(who) {
     toast('Video ended — seek back to score');
     return;
   }
+  // Block scoring once the match is already decided at the current
+  // playback position — in a BO5, a point after 3 won sets is an
+  // operator misclick. `live` tracks the playhead via timeupdate, so
+  // seeking back before the final set re-enables scoring naturally.
+  const need = setsToWin();
+  if (live.p1_set >= need || live.p2_set >= need) {
+    toast(`Match already decided ${live.p1_set}-${live.p2_set} (best of ${project.info.best_of || 5})`);
+    return;
+  }
   snapshot();
   // Insert action at current playback time.
   project.score_events.push({
@@ -115,11 +129,16 @@ export function scorePoint(who) {
   syncEvents();
   syncScore();
 
-  // Toast on set win — detect by checking if the latest event reset to 0,0.
+  // Toast on set win — detect by checking if the latest event reset to
+  // 0,0. A set that closes out the match gets the bigger announcement.
   const latest = project.score_events[project.score_events.length - 1];
   if (latest && latest.p1_score === 0 && latest.p2_score === 0
       && (latest.p1_set + latest.p2_set) > 0) {
-    toast(`Set won! ${latest.p1_set}-${latest.p2_set}`);
+    if (latest.p1_set >= need || latest.p2_set >= need) {
+      toast(`🏆 Match won ${latest.p1_set}-${latest.p2_set}!`);
+    } else {
+      toast(`Set won! ${latest.p1_set}-${latest.p2_set}`);
+    }
   }
 }
 

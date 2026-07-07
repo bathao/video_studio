@@ -1,6 +1,6 @@
 # TODO
 
-## RESUME POINTER 2026-07-07 — improvement plan in progress (Phase 0–1 done)
+## RESUME POINTER 2026-07-07 — improvement plan in progress (Phase 0–2 done)
 
 `v3-dev` is pushed to `origin/v3-dev` (tracking set up 2026-07-07 as
 part of improvement-plan Phase 0). Working state after the 2026-06-05
@@ -30,13 +30,18 @@ Status per phase:
   see PROGRESS.md "Polish & robustness" for the 4 fixes (job.trims
   race, registry eviction, 404 on missing video, swallowed-failure
   surfacing). 175 tests pass (+5 new for registry eviction).
-- ⬜ **Phase 2 — frontend correctness/UX**: undo clobbers player-name
-  edits (`app.js` Object.assign restores stale `project.info`);
-  `pendingTrimStart` missing from snapshot; boot dies when backend is
-  down (`loadVideoList` outside boot try/catch); scoreboard preview
-  sticks stale after a failed fetch (`lastSignature` advanced before
-  fetch); `best_of` collected but match-over never detected; replace
-  `prompt()` dialogs; loading states for save/load.
+- ✅ **Phase 2 — frontend correctness/UX** (2026-07-07): info edits
+  (names / tournament / best-of) snapshot per 1.5 s burst so a later
+  Ctrl+Z no longer clobbers typed names; match-type + video-source
+  changes are undoable; undo restores `pendingTrimStart` + both HUD
+  badges; boot survives a down backend (`loadVideoList` failure no
+  longer aborts `syncAllUI`); try/catch + toasts on save / load /
+  render-start / reveal / open-folder fetches; scoreboard preview
+  marks its signature clean only after a successful fetch (+3 s
+  failure backoff); `scorePoint` blocks once the match is decided per
+  `best_of` and announces match win; manual highlight/trim add is an
+  inline row at the playhead (`prompt()` removed). Verified
+  end-to-end in headless Edge via Playwright — 18/18 checks.
 - ⬜ **Phase 3 — expose backend features in UI**: output library
   (`GET /api/outputs`), render-job re-attach after page reload
   (`GET /api/render`), delete-project button

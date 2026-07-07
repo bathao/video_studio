@@ -24,21 +24,35 @@ async function saveProject() {
   _syncInfoFromInputs();
   const name = ($('in-project').value || '').trim();
   if (!name) return toast('Set a project name');
-  const r = await fetch(`/api/projects/${encodeURIComponent(name)}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(project),
-  });
-  if (!r.ok) {
-    toast(`Save failed: ${r.status}`);
-    return;
+  const btn = $('btn-save');
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/projects/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(project),
+    });
+    if (!r.ok) {
+      toast(`Save failed: ${r.status}`);
+      return;
+    }
+    toast('Saved');
+  } catch {
+    toast('Save failed: cannot reach backend');
+  } finally {
+    btn.disabled = false;
   }
-  toast('Saved');
 }
 
 async function openLoadModal() {
-  const r = await fetch('/api/projects');
-  const data = await r.json();
+  let data;
+  try {
+    const r = await fetch('/api/projects');
+    if (!r.ok) return toast(`Cannot list projects: ${r.status}`);
+    data = await r.json();
+  } catch {
+    return toast('Cannot list projects: backend unreachable');
+  }
   const ul = $('proj-list');
   ul.innerHTML = '';
   if (!data.projects.length) {
@@ -58,9 +72,14 @@ async function openLoadModal() {
 }
 
 async function loadProject(name) {
-  const r = await fetch(`/api/projects/${encodeURIComponent(name)}`);
-  if (!r.ok) return toast('Load failed');
-  const data = await r.json();
+  let data;
+  try {
+    const r = await fetch(`/api/projects/${encodeURIComponent(name)}`);
+    if (!r.ok) return toast('Load failed');
+    data = await r.json();
+  } catch {
+    return toast('Load failed: backend unreachable');
+  }
   Object.assign(project.info, data.info || {});
   project.trim_segments = data.trim_segments || [];
   project.highlights = data.highlights || [];

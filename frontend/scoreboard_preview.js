@@ -25,6 +25,7 @@ let pendingTimer = null;
 let JASSUB_CLASS = null;
 let initInFlight = false;
 let lastSignature = null;
+let lastFailureAt = 0;
 
 function stateSignature() {
   // What actually changes the .ass output: project info, score events,
@@ -102,16 +103,27 @@ async function initJassub() {
 
 export function syncScoreboardPreview() {
   if (!jassub) return;
-  const sig = stateSignature();
-  if (sig === lastSignature) return;
-  lastSignature = sig;
+  if (stateSignature() === lastSignature) return;
+  // Brief backoff after a failed refresh — the dirty signature retries
+  // on every score/info change (and timeupdate tick), so without this
+  // a down backend gets hammered every DEBOUNCE_MS.
+  if (Date.now() - lastFailureAt < 3000) return;
   if (pendingTimer) clearTimeout(pendingTimer);
   pendingTimer = setTimeout(async () => {
     pendingTimer = null;
+    // Re-read at fetch time — state may have changed during the
+    // debounce window; this signature matches what fetchAss() sends.
+    const sig = stateSignature();
     try {
       const ass = await fetchAss();
       if (jassub) jassub.setTrack(ass);
+      // Mark clean only AFTER success. Advancing the signature before
+      // the fetch meant a failed refresh looked up-to-date and the
+      // overlay stayed stale until the next unrelated state change.
+      lastSignature = sig;
+      lastFailureAt = 0;
     } catch (e) {
+      lastFailureAt = Date.now();
       console.warn('[scoreboard-preview] refresh failed', e);
     }
   }, DEBOUNCE_MS);
