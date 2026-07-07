@@ -128,6 +128,7 @@ export function scorePoint(who) {
   syncLiveFromTime(player.currentTime);
   syncEvents();
   syncScore();
+  syncScoreboardPreview();
 
   // Toast on set win — detect by checking if the latest event reset to
   // 0,0. A set that closes out the match gets the bigger announcement.
@@ -170,51 +171,62 @@ export function deleteScoreEvent(idx) {
   syncLiveFromTime(player.currentTime);
   syncEvents();
   syncScore();
+  syncScoreboardPreview();
   toast('Event deleted');
 }
 
+// NOTE: no syncScoreboardPreview() here — syncScore runs on every
+// `timeupdate` tick (~4 Hz) purely to track the playhead, and the .ass
+// only depends on info + score events, never on playback position.
+// Mutation sites (scorePoint / deleteScoreEvent / syncInfoFromInputs)
+// call the preview refresh explicitly.
 export function syncScore() {
   $('score-p1').textContent = live.p1;
   $('score-p2').textContent = live.p2;
   $('set-p1').textContent = live.p1_set;
   $('set-p2').textContent = live.p2_set;
-  syncScoreboardPreview();
 }
 
 export function syncEvents() {
   $('ev-count').textContent = `(${project.score_events.length})`;
-  const ul = $('ev-list');
-  ul.innerHTML = '';
-  // Display newest at top, but track each event's index in the sorted
-  // (chronological) array so delete acts on the right one.
+  // Display newest at top; each row carries its index in the sorted
+  // (chronological) array so delete acts on the right one. The list is
+  // built as one HTML string + a single innerHTML write, with click
+  // handling delegated to the <ul> below — a long match used to rebuild
+  // hundreds of elements AND rebind 2 listeners per row on every point.
   const total = project.score_events.length;
-  const player = $('player');
-  project.score_events.slice().reverse().forEach((e, revIdx) => {
+  const rows = project.score_events.slice().reverse().map((e, revIdx) => {
     const idx = total - 1 - revIdx;
     const whoMark = e.who === 1 ? 'P1' : e.who === 2 ? 'P2' : '··';
     const whoColor = e.who === 1 ? 'text-orange-400'
                    : e.who === 2 ? 'text-accent-400'
                    : 'text-slate-500';
-    const li = document.createElement('li');
-    li.className = 'list-row';
-    li.innerHTML = `
+    return `
+    <li class="list-row" data-idx="${idx}">
       <span class="font-mono text-[11px] w-14">${fmt(e.timestamp)}</span>
       <span class="text-[11px] font-bold ${whoColor}">${whoMark}</span>
       <span class="text-[11px]">[${e.p1_set}] ${e.p1_score}-${e.p2_score} [${e.p2_set}]</span>
       <button class="text-slate-400 hover:text-accent-400 ml-auto px-1" title="Jump" data-jump>↦</button>
       <button class="text-slate-400 hover:text-danger-500 px-1" title="Delete" data-del>✕</button>
-    `;
-    li.querySelector('[data-jump]').addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      player.currentTime = e.timestamp;
-    });
-    li.querySelector('[data-del]').addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      deleteScoreEvent(idx);
-    });
-    ul.appendChild(li);
+    </li>`;
   });
+  $('ev-list').innerHTML = rows.join('');
 }
+
+// Delegated once at module load — rows are re-rendered wholesale by
+// syncEvents(), so per-row listeners would be rebound on every change.
+$('ev-list').addEventListener('click', (ev) => {
+  const li = ev.target.closest('li[data-idx]');
+  if (!li) return;
+  const idx = parseInt(li.dataset.idx, 10);
+  const e = project.score_events[idx];
+  if (!e) return;
+  if (ev.target.closest('[data-jump]')) {
+    $('player').currentTime = e.timestamp;
+  } else if (ev.target.closest('[data-del]')) {
+    deleteScoreEvent(idx);
+  }
+});
 
 // Wire score-panel buttons.
 $('btn-p1').addEventListener('click', () => scorePoint(1));

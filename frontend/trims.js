@@ -4,7 +4,7 @@
 import { $ } from './dom.js';
 import { fmt, parseTimecode } from './timecode.js';
 import { mut, project, snapshot } from './state.js';
-import { player } from './player.js';
+import { invalidateKeptSegments, player } from './player.js';
 import { syncTimeline } from './timeline.js';
 import { toast } from './toast.js';
 import { openAutoTrimModal } from './auto_trim/index.js';
@@ -56,18 +56,18 @@ function removeTrim(idx) {
 
 export function syncTrims() {
   // Always render in chronological order, regardless of when each
-  // trim was added.
+  // trim was added. One HTML string + single innerHTML write with
+  // delegated interaction (see listeners below); also invalidates the
+  // player's kept-segment cache so Preview Cut sees the new trim set.
   project.trim_segments.sort((a, b) => a.start - b.start);
+  invalidateKeptSegments();
   $('tr-count').textContent = `(${project.trim_segments.length})`;
-  const ul = $('tr-list');
-  ul.innerHTML = '';
-  project.trim_segments.forEach((t, i) => {
-    const li = document.createElement('li');
-    li.className = 'list-row';
+  $('tr-list').innerHTML = project.trim_segments.map((t, i) => {
     const badge = t.source === 'auto'
       ? '<span class="font-mono text-[9px] px-1 py-0.5 rounded bg-accent-900/40 text-accent-300 border border-accent-700/50" title="Auto-detected by rally detector">AUTO</span>'
       : '';
-    li.innerHTML = `
+    return `
+    <li class="list-row" data-idx="${i}">
       <span class="font-mono text-warn-400 text-[11px]">#${i + 1}</span>
       ${badge}
       <input type="text" value="${fmt(t.start)}" class="ipt w-20 text-[11px] py-0.5 font-mono" data-field="start" title="m:ss.xx" />
@@ -75,27 +75,39 @@ export function syncTrims() {
       <input type="text" value="${fmt(t.end)}" class="ipt w-20 text-[11px] py-0.5 font-mono" data-field="end" title="m:ss.xx" />
       <button class="text-slate-400 hover:text-accent-400 ml-auto" title="Jump to start" data-jump>↦</button>
       <button class="text-slate-400 hover:text-danger-500" title="Delete" data-del>✕</button>
-    `;
-    li.querySelectorAll('input').forEach((el) => {
-      el.addEventListener('change', () => {
-        const v = parseTimecode(el.value);
-        if (!isFinite(v) || v < 0) {
-          syncTrims();  // bad input — revert displayed value
-          return;
-        }
-        snapshot();
-        project.trim_segments[i][el.dataset.field] = v;
-        syncTrims();
-      });
-    });
-    li.querySelector('[data-jump]').addEventListener('click', () => {
-      player.currentTime = t.start;
-    });
-    li.querySelector('[data-del]').addEventListener('click', () => removeTrim(i));
-    ul.appendChild(li);
-  });
+    </li>`;
+  }).join('');
   syncTimeline();
 }
+
+// Delegated once at module load — see syncTrims().
+$('tr-list').addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-idx]');
+  if (!li) return;
+  const i = parseInt(li.dataset.idx, 10);
+  const t = project.trim_segments[i];
+  if (!t) return;
+  if (e.target.closest('[data-jump]')) {
+    player.currentTime = t.start;
+  } else if (e.target.closest('[data-del]')) {
+    removeTrim(i);
+  }
+});
+$('tr-list').addEventListener('change', (e) => {
+  const input = e.target.closest('input[data-field]');
+  if (!input) return;
+  const li = input.closest('li[data-idx]');
+  if (!li) return;
+  const i = parseInt(li.dataset.idx, 10);
+  const v = parseTimecode(input.value);
+  if (!isFinite(v) || v < 0 || !project.trim_segments[i]) {
+    syncTrims();  // bad input — revert displayed value
+    return;
+  }
+  snapshot();
+  project.trim_segments[i][input.dataset.field] = v;
+  syncTrims();
+});
 
 $('btn-trim-start').addEventListener('click', markTrimStart);
 $('btn-trim-end').addEventListener('click', markTrimEnd);

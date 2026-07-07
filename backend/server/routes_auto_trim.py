@@ -109,6 +109,22 @@ def _probe_duration(video_path: Path) -> float:
     return dur
 
 
+def _refframe_cmd(video_path: Path, t: float, out: Path, max_w: int) -> list[str]:
+    """Single-frame JPEG extract command, shared by the single- and
+    multi-refframe paths (they had drifted into two copies). Scale
+    filter downscales to max_w preserving aspect ratio; `-ss` before
+    `-i` is a fast keyframe seek — plenty accurate for refframes."""
+    return [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-ss", f"{t:.3f}",
+        "-i", str(video_path),
+        "-frames:v", "1",
+        "-vf", f"scale='min({max_w},iw)':-2",
+        "-q:v", "3",
+        str(out),
+    ]
+
+
 def _extract_refframe(video_path: Path, *, max_w: int = 960) -> Path:
     """Extract a single frame at the midpoint of the video as JPEG.
     Cached by video identity so subsequent calls are instant.
@@ -125,19 +141,10 @@ def _extract_refframe(video_path: Path, *, max_w: int = 960) -> Path:
     dur = _probe_duration(video_path)
     midpoint = max(1.0, dur / 2.0)
 
-    # Use scale filter to downscale to max_w while preserving aspect ratio.
-    # `-ss` before `-i` does fast seek to nearest keyframe — plenty accurate
-    # for a refframe at the video midpoint.
-    cmd = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-        "-ss", f"{midpoint:.3f}",
-        "-i", str(video_path),
-        "-frames:v", "1",
-        "-vf", f"scale='min({max_w},iw)':-2",
-        "-q:v", "3",
-        str(out),
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(
+        _refframe_cmd(video_path, midpoint, out, max_w),
+        capture_output=True, text=True,
+    )
     if proc.returncode != 0 or not out.exists():
         raise HTTPException(
             status_code=500,
@@ -217,16 +224,10 @@ def _extract_multi_refframes(video_path: Path, *, max_w: int = 960,
         A failed frame is tolerated (detect_roi_multiframe accepts fewer
         than n inputs) but no longer invisible — failures are logged and
         an all-frames-failed run raises instead of detecting on nothing."""
-        cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-            "-ss", f"{t:.3f}",
-            "-i", str(video_path),
-            "-frames:v", "1",
-            "-vf", f"scale='min({max_w},iw)':-2",
-            "-q:v", "3",
-            str(out),
-        ]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        proc = subprocess.run(
+            _refframe_cmd(video_path, t, out, max_w),
+            capture_output=True, text=True,
+        )
         if proc.returncode != 0 or not out.exists():
             return (
                 f"t={t:.1f}s: "
@@ -514,15 +515,19 @@ def _run_auto_trim_job_worker(
                 job.event_queue.put((
                     "log", {"msg": f"cache hit ({job.cache_key[:8]}...) replaying"},
                 ))
+                # Replay everything EXCEPT per-frame progress events — a
+                # 22 min video caches thousands of them, and pushing each
+                # through the queue made the "instant" cache hit take
+                # visible seconds. The frontend doesn't need them: its
+                # `close` handler jumps the bar to 100% on done.
                 for ev in cached.get("events", []):
                     et = ev.get("type")
                     data = ev.get("data", {})
-                    job.event_queue.put((et, data))
                     if et == "progress":
-                        total = max(1, int(data.get("frame_total", 1)))
-                        job.progress = min(1.0, int(data.get("frame_n", 0)) / total)
-                    elif et == "stage":
+                        continue
+                    if et == "stage":
                         job.stage = str(data.get("name", job.stage))
+                    job.event_queue.put((et, data))
                 # Build locally, publish atomically — the /job/{id} status
                 # endpoint iterates job.trims from another thread, and
                 # appending in place raced with that iteration.

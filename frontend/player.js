@@ -179,7 +179,14 @@ function updateHud() {
 // score events live inside kept segments, not the skipped dead-time.
 
 // Kept segments = complement of trim_segments within [0, duration].
+// Cached — this used to be recomputed (sort + complement) on every
+// timeupdate tick while preview mode was on. syncTrims() invalidates
+// on every trim mutation; durationchange covers source switches.
+let keptCache = null;
+export function invalidateKeptSegments() { keptCache = null; }
+
 function keptSegments() {
+  if (keptCache) return keptCache;
   const dur = player.duration || 0;
   const trims = [...(project.trim_segments || [])]
     .map((t) => [Math.max(0, Math.min(dur, t.start)), Math.max(0, Math.min(dur, t.end))])
@@ -192,6 +199,7 @@ function keptSegments() {
     cursor = Math.max(cursor, e);
   }
   if (cursor < dur) kept.push([cursor, dur]);
+  keptCache = kept;
   return kept;
 }
 
@@ -304,6 +312,7 @@ player.addEventListener('timeupdate', () => {
 });
 player.addEventListener('seeked', () => { jumpPastTrims(); updatePreviewTime(); });
 player.addEventListener('durationchange', updateHud);
+player.addEventListener('durationchange', invalidateKeptSegments);
 player.addEventListener('play', () => { updateHud(); updatePvPlay(); });
 player.addEventListener('pause', () => { updateHud(); updatePvPlay(); });
 

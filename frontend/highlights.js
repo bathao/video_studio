@@ -109,14 +109,12 @@ export function syncHighlights() {
   // Always render in chronological order, regardless of when each
   // highlight was added. Sorting in place means subsequent edits +
   // the index used by click handlers stay consistent with display.
+  // One HTML string + single innerHTML write; interaction is delegated
+  // to the <ul> below instead of 5 listeners per row per re-render.
   project.highlights.sort((a, b) => a.start - b.start);
   $('hl-count').textContent = `(${project.highlights.length})`;
-  const ul = $('hl-list');
-  ul.innerHTML = '';
-  project.highlights.forEach((h, i) => {
-    const li = document.createElement('li');
-    li.className = 'list-row';
-    li.innerHTML = `
+  $('hl-list').innerHTML = project.highlights.map((h, i) => `
+    <li class="list-row" data-idx="${i}">
       <span class="font-mono text-accent-400 text-[11px]">#${i + 1}</span>
       <input type="text" value="${fmt(h.start)}" class="ipt w-20 text-[11px] py-0.5 font-mono" data-field="start" title="m:ss.xx" />
       <span class="text-slate-500">→</span>
@@ -126,27 +124,39 @@ export function syncHighlights() {
         <button class="text-slate-400 hover:text-accent-400 px-1" title="Jump to start" data-jump>↦</button>
         <button class="text-slate-400 hover:text-danger-500 px-1" title="Delete" data-del>✕</button>
       </span>
-    `;
-    li.querySelectorAll('input').forEach((el) => {
-      el.addEventListener('change', () => {
-        const v = parseTimecode(el.value);
-        if (isFinite(v) && v >= 0) {
-          setHighlightField(i, el.dataset.field, v);
-        } else {
-          syncHighlights();  // bad input — revert displayed value
-        }
-      });
-    });
-    li.querySelector('[data-export]').addEventListener('click', (e) => exportHighlight(i, e.currentTarget));
-    li.querySelector('[data-jump]').addEventListener('click', () => {
-      player.currentTime = h.start;
-      player.play().catch(() => {});
-    });
-    li.querySelector('[data-del]').addEventListener('click', () => removeHighlight(i));
-    ul.appendChild(li);
-  });
+    </li>`).join('');
   syncTimeline();
 }
+
+// Delegated once at module load — see syncHighlights().
+$('hl-list').addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-idx]');
+  if (!li) return;
+  const i = parseInt(li.dataset.idx, 10);
+  const h = project.highlights[i];
+  if (!h) return;
+  const exportBtn = e.target.closest('[data-export]');
+  if (exportBtn) {
+    exportHighlight(i, exportBtn);
+  } else if (e.target.closest('[data-jump]')) {
+    player.currentTime = h.start;
+    player.play().catch(() => {});
+  } else if (e.target.closest('[data-del]')) {
+    removeHighlight(i);
+  }
+});
+$('hl-list').addEventListener('change', (e) => {
+  const input = e.target.closest('input[data-field]');
+  if (!input) return;
+  const li = input.closest('li[data-idx]');
+  if (!li) return;
+  const v = parseTimecode(input.value);
+  if (isFinite(v) && v >= 0) {
+    setHighlightField(parseInt(li.dataset.idx, 10), input.dataset.field, v);
+  } else {
+    syncHighlights();  // bad input — revert displayed value
+  }
+});
 
 $('btn-mark-hl').addEventListener('click', toggleHighlightMark);
 $('btn-add-hl-manual').addEventListener('click', addManualHighlight);
