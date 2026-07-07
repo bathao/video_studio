@@ -28,6 +28,7 @@ runs/
 # Detector-development scratch dirs (overlay images, cached intermediates).
 scripts/_*/
 scripts/spike_out/
+scripts/auto_score_spike/out/
 
 # operator photo-staging dumps (raw downloads waiting to be renamed
 # into assets/avatars/; not read by the app)

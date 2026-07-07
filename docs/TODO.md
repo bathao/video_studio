@@ -29,13 +29,30 @@ passes. Phase 0 step status:
   the plan text). Verified: all 622 video paths resolve; set_index
   0-4 cross-checks against every filename final score; winner
   balance P1=260/P2=291 + a=42/b=29.
-- ⬜ Step 2 — unanchored rally segmentation eval (vs the 34-point
-  start truth in dataset/attempt1 + 551 rally-end labels).
+- 🔴 **Step 2 — unanchored segmentation eval** (2026-07-08,
+  MEASURED): 1-D ROI-motion signal saturates at 59-90% association
+  recall on full matches with ~50% junk proposals; ladder rungs
+  v0-v5 (hysteresis / Otsu / near-far alternation / duration priors
+  / periodicity / semi-Markov) ALL measured, none breaks the
+  ceiling. 2_sets clean-clip start-F1 78.8% @2s. Full verdict +
+  escalation options (frame-classifier junk filter vs YOLO-pose) in
+  plan §6 step 2. Scripts: `motion_cache.py`, `eval_segmentation.py`
+  under scripts/auto_score_spike/; signal caches + trace plots in
+  scripts/auto_score_spike/out/ (gitignored).
 - ⬜ Step 3 — VLM bake-off (shortlist in plan §4.2; needs Ollama
   approval, plan §9).
-- ⬜ Step 4 — trained-classifier spike (parallel with step 3).
-- ⬜ Step 5 — serve-side detector spike.
-- ⬜ Step 6 — solver simulation at both anchor rungs (§4.1).
+- ⬜ Step 4 — trained-classifier spike (parallel with step 3; now
+  ALSO the leading segmentation escalation — see step 2 verdict).
+- ⬜ Step 5 — serve-side detector spike (reframed by step 6: it is a
+  set-boundary/deuce locator, not a winner signal).
+- ✅ **Step 6 — solver simulation** (2026-07-08):
+  `solver_sim.py`. Grammar multiplier for winner-only observations
+  is ~1.0 (NOT the rescuer the plan assumed — §4 revised); per-set
+  anchors cut flags 78→27/match at raw 90%; calibrated per-point
+  confidence is the real lever (raw 87.7% → post 89.1%, 20
+  flags/match, but ~2 UNFLAGGED errors/match remain → vision must
+  reach >=90-95% raw). Bonus: all 7 real corpora sequences replay
+  legally under the grammar; set structure matches every filename.
 
 **Operator-driven open item:** (A) run Auto Trim on a fresh match
 outside the 3 PHASE0_REPORT spike entries to measure real recall on

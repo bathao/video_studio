@@ -213,8 +213,18 @@ operator has a choice.
    result often known from the filename. Given rally-end timestamps +
    NOISY winner observations, a Viterbi/HMM pass over score states can
    correct isolated errors and flag inconsistencies with confidence.
-   This multiplies whatever raw per-point accuracy the vision models
-   give — it is the reason imperfect vision can still work.
+   ~~This multiplies whatever raw per-point accuracy the vision models
+   give~~ **MEASURED 2026-07-08 (Phase 0 step 6, simulation on the 7
+   real match sequences): the multiplier for winner-only observations
+   is ~1.0 — grammar constraints pin set TOTALS, not which points are
+   wrong.** What the solver actually delivers: (a) calibrated flags
+   (posterior < 0.9 catches most errors; ~20-26 flags/match at raw
+   85-88% leaves ~2 unflagged errors), (b) +1.5-2.5 pts accuracy when
+   observations carry calibrated CONFIDENCE (the solver flips
+   low-confidence points preferentially), (c) set-boundary + side-
+   mapping bookkeeping. Consequence: the vision models must reach
+   ~90%+ raw on their own; the solver is a review-router, not a
+   rescuer.
 2. **Local VLM judgment on rally-end clips.** Feed K frames (~2 fps
    covering last ~4 s of rally + 2 s after) cropped around the table
    ROI to a local vision LLM (shortlist refreshed 2026-07-07 — see
@@ -232,11 +242,14 @@ operator has a choice.
 4. **Serve-side detection as a solver observation.** WHO SERVES each
    rally is visually much easier than who won (server stands still at
    the table edge, ball toss posture, ~1-2 s hold at rally start).
-   Serve order is deterministic given the score (switch every 2 pts,
-   every point at deuce) — so a detected serve-side sequence
-   constrains score evolution strongly at deuce and validates it
-   elsewhere. Cheap to detect (pose/position in first frames of each
-   rally), high solver value.
+   **ROLE REVISED 2026-07-08 (step 6 finding): serve rotation depends
+   on TOTAL points played, not on who won them — so serve
+   observations do NOT correct individual winner calls.** What they
+   DO give: serve phase resets at set boundaries and flips to
+   every-point at deuce → a detected serve sequence is an AUTOMATIC
+   set-boundary + deuce locator = the "per-set taps" anchor rung
+   (§4.1) without any operator taps. Still cheap, still worth
+   building — as a boundary detector, not a winner signal.
 5. **Cheap heuristics as solver features** (not standalone): which
    side's motion continues after rally end (ball fetch), pause length
    (longer after set point), player position swap (set boundary).
@@ -510,14 +523,41 @@ Scripts only, under `scripts/auto_score_spike/`:
    1 doubles, 173 records); index-only v1 — frames extracted on
    demand downstream instead of pre-cutting ~600 clips. Idempotent;
    `--check` verifies all video paths.
-2. **Unanchored rally segmentation eval**: run the motion signal
-   without anchors on all 9 matches; measure rally-end
-   precision/recall + timestamp error vs labeled events. (Anchored
-   recall was 95-99%; unanchored WILL be worse — quantify it. See
-   §4.1: the anchors currently supply rally count, rally ends, AND
-   bounded search windows — none of those exist here.) Primary
-   start-timestamp metric: the 34-point truth in
-   `dataset/attempt1/reviewed_matches/match_2_sets_debug_001/`.
+2. 🔴 **Unanchored rally segmentation eval** (MEASURED 2026-07-08 —
+   verdict: 1-D motion signal is NOT enough on full matches).
+   Scripts: `motion_cache.py` (ROI detect + full/near/far signals in
+   one decode, cached as .npz) + `eval_segmentation.py` (segmenter
+   ladder v0-v5 + sweep + trace plots). Results:
+   - **2_sets.mp4** (clean 6-min debug clip, 34-start truth): count
+     nearly exact (32-34 proposals), best start-F1 **78.8%** @ ±2 s
+     (v4); strict ±0.75 s ~38%. Residual errors: pre-serve ritual
+     motion (~4 s early) + merged blobs.
+   - **Full matches** (association metric: event claims a proposal
+     ending in [t-12, t+2]): recall saturates at **59-90% depending
+     on match** (match_001 ~65-71%, aTrung ~88-90%) with ~50% junk
+     proposals. EVERY cheap ladder rung measured and none breaks the
+     ceiling: v1 hysteresis (best), v2 Otsu (=), v3/v4 near-far
+     alternation (perspective-corrected; no gain — fetch bursts
+     alternate too), duration priors (hurt recall), periodicity
+     autocorrelation (claimed vs junk distributions IDENTICAL),
+     v5 explicit-duration semi-Markov with heavy-tail break
+     emissions (58-78%, no better than v1).
+   - Also learned: operator press-lag vs motion-end has median
+     ~3.5 s with a heavy tail (p75 up to 11 s) — corpus event
+     timestamps are a NOISY ruler for end-timing; the precise ruler
+     remains the 2_sets start truth.
+   - **Consequence for the pipeline**: segmentation precision moves
+     to the VISION layer (a 2-s frame glimpse trivially separates
+     ball-fetch from rally; the 1-D signal cannot). The segmenter's
+     job is candidate RECALL, and 59-90% is below the ~95% the
+     product needs. Escalation options, in cost order:
+     (a) **frame-classifier junk-filter + gap-scanner** — train a
+     tiny rally-in-progress frame classifier on AUTO-LABELS already
+     in the corpus (frames near score events = rally; frames inside
+     operator trims = break), run at ~5 fps over the match, fuse
+     with the motion signal; (b) **YOLOv8-pose features** (rung 6,
+     the planned escalation) — player stance/position at 4-5 fps.
+     Both reuse the ultralytics stack already in the venv.
 3. **VLM bake-off**: Ollama + Qwen2.5-VL-7B on N=200 sampled clips
    (ROI-cropped frames at 2K, downscaled as needed); measure winner
    accuracy, latency/clip, failure taxonomy. Try 2-3 prompt variants
@@ -529,15 +569,20 @@ Scripts only, under `scripts/auto_score_spike/`:
 5. **Serve-side detector spike**: position/stillness heuristic on the
    first ~2 s of each rally; measure serve-side accuracy vs labels
    (derivable: serve order is deterministic from the score sequence).
-6. **Solver simulation**: given real rally timestamps + noisy winner
-   observations at the accuracies measured in 3-5 (+ serve-side
-   votes), how often does the grammar solver reconstruct a perfect
-   match / how many points need human review? Simulate at the
-   attempt-#1 prior (~67% raw) as the pessimistic case — tells us
-   the raw accuracy the models must hit and whether the solver can
-   bridge the gap. Report at both anchor rungs from §4.1
-   (filename-only vs per-set boundary taps) so Phase 1 can choose
-   the cheapest rung that clears the bar.
+6. ✅ **Solver simulation** (DONE 2026-07-08):
+   `scripts/auto_score_spike/solver_sim.py` — exact forward-backward
+   over the scoring grammar, driven by the 7 REAL match sequences
+   (551 points) with synthetic observation noise; all 3 anchor rungs
+   + a confidence-aware observation model. Findings (now reflected
+   in §4 items 1 and 4): grammar multiplier for winner-only obs is
+   ~1.0 (uniform noise: 67%→67%, 80%→81%, 90%→88-89%); per-set
+   anchors shrink flags (78→27/match at raw 90%) but barely change
+   accuracy; calibrated per-point CONFIDENCE is the real lever
+   (easy95/hard60 @20% hard: raw 87.7% → post 89.1%, 20 flags/match,
+   ~2.2 UNFLAGGED errors remain — so delivery-grade output needs
+   raw ≥90-95% vision or a higher flag threshold). Bonus validation:
+   all 7 real sequences replay legally under the grammar, and
+   derived set structure matches every filename final score.
 
 ### 6.1 Per-step feasibility + debug protocol (added 2026-07-07)
 
