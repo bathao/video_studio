@@ -36,6 +36,9 @@ SPIKE_ENTRIES = [
 
 
 # PHASE0_REPORT Balanced (J_fg_p70_rmin5) target numbers for sanity check.
+# STALE: these targets predate the `post_match_keep_s=30` handshake-keep
+# feature in rally_detector.py and now report false MISSes. Refresh the
+# numbers before using this script as a gate again — see docs/TODO.md.
 EXPECTED = {
     "match_001_20260516_215553": {"recall_min": 0.95, "extras_max": 380},
     "match_001_20260516_223928": {"recall_min": 0.88, "extras_max": 340},

@@ -70,6 +70,15 @@ browser.
    names or score points and the overlay updates instantly so you can
    sanity-check the burned-in look before rendering.
 
+   To cut dead time automatically, click **⚡ Auto Trim** on the Trim
+   panel: confirm the table ROI, run rally detection, and `Apply` the
+   detected trims (tagged `[AUTO]`). Then toggle **▶ Preview cut** on the
+   player to watch only what the render will keep — playback skips every
+   trim and a dedicated transport bar (play/pause, ⏪/⏩, speed) seeks on
+   the trimmed timeline, so you can verify the cut before committing to a
+   render. Each highlight row also has a **⤓** button that exports just
+   that highlight's source segment to `output/`.
+
 4. Save the project (right side `Save Project` button). It writes
    `projects/<name>.json` so you can resume later.
 5. Hit `Render`. The progress bar shows each stage (intro → main →

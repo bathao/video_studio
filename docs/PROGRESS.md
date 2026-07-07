@@ -1,6 +1,6 @@
 # Progress Status
 
-Last update: 2026-06-05 (Auto Trim detect speed 2.1× → 6.2× realtime via byte-identical `-hwaccel cuda` decode fix; scoreboard inter-set recap committed `14c5db7`; 9 new avatars `22b5f08` — see [TODO.md](TODO.md))
+Last update: 2026-06-05 (Highlight per-row clip export + Preview Cut transport `9b1624e`; Auto Trim detect speed 2.1× → 6.2× realtime `4ec9012`; scoreboard inter-set recap `14c5db7`; 9 new avatars `22b5f08` — see [TODO.md](TODO.md))
 
 ## Module map
 
@@ -57,6 +57,16 @@ refactor pass shipped in commits fb4d2aa / 6993a37 / 3c4f167 /
 - ✅ Play / pause, skip ±5/10/20 s, scrubber
 - ✅ Speed presets 0.25× / 0.5× / 1× / 1.5× / 2×
 - ✅ HUD time + duration
+- ✅ **Preview Cut** — "▶ Preview cut" toggle plays only the kept
+      segments, auto-jumping past every trim (manual + auto) on playback
+      and manual seeks (the same set the render keeps; scoreboard overlay
+      stays correct because score events live in kept segments). A
+      dedicated transport bar appears under the main controls only while
+      preview is on (accent border + pulsing label, clear of the
+      bottom-right scoreboard): play/pause, ⏪/⏩ and the position readout
+      all operate on KEPT time via source↔kept mapping; speed pills
+      (0.5/1/1.5/2×) sync with the main speed selector. Frontend-only;
+      no intro / replay / stinger / outro (those need a real render).
 
 ### Keyboard shortcuts
 | Key | Action | Status |
@@ -82,6 +92,14 @@ render started splicing a full 50% replay after every highlight.)
 - ✅ Add highlight by `H` key (start / end)
 - ✅ Add highlight manually (start / end via prompt)
 - ✅ Edit start/end inline; jump-to-start; delete
+- ✅ Per-highlight clip export — ⤓ button on each row cuts the raw
+      source segment for that highlight to
+      `output/<project>_hl<NN>_<start>-<end>.mp4` via
+      `POST /api/highlights/export` (NVENC re-encode for a frame-accurate
+      cut, audio mapped iff present, camera timecode track dropped).
+      Source resolved the renderer's way (token → else `video_file` as
+      absolute path or `videos/` basename), so it works on reloaded
+      projects after a server restart.
 - ✅ Trim segments (T/Y or manual)
 
 ### Render pipeline
@@ -112,7 +130,7 @@ render started splicing a full 50% replay after every highlight.)
       intermission/transition bridge, no FULL MATCH badge — highlights
       now contribute only their inline slow-mo replays.
 - ✅ Auto-stinger transition: asymmetric branded bracket around every
-      slow-mo replay in main. IN clip (default 2 s) carries the full
+      slow-mo replay in main. IN clip (config default 1.5 s) carries the full
       reveal — blurred source-frame bg, brand-colour wipe (alpha 0.5),
       diagonal light streak, circular-masked logo, channel name +
       "▶ REPLAY" label, vignette. OUT clip (default 0.6 s) is a
@@ -228,7 +246,7 @@ render started splicing a full 50% replay after every highlight.)
       playlist + stinger bracket + event remap + intro photo gate +
       stinger cache + dataset archive + groundtruth sidecar + rally
       detector gaps-to-trims + auto-trim cache key + TrimSegment.source).
-      **166 tests**, runs in <0.8 s. Configured in `pyproject.toml`,
+      **170 tests**, runs in <0.8 s. Configured in `pyproject.toml`,
       basetemp pinned to `temp/pytest/` to dodge sandbox-denied
       access on the user-temp dir.
 

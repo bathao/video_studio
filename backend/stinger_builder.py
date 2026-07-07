@@ -33,7 +33,7 @@ heavy enough to be effectively content-agnostic.
 
 ## Visual storyboard
 
-IN clip (duration = 2.0 s reference):
+IN clip (storyboard times absolute; config default duration = 1.5 s):
 
   0.00 – 0.20 s : brand-colour bar wipes in from the left (alpha 0.5,
                   so the blurred bg is still readable through it).

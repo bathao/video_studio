@@ -60,7 +60,11 @@ backend/
     routes_render.py   `/api/render/*` (start/status/cancel/list),
                        `/api/output*`, `/api/output-folder/open`,
                        `/api/outputs`, `/api/preview/scoreboard.ass`
-                       (+ ScoreboardPreviewRequest model).
+                       (+ ScoreboardPreviewRequest model),
+                       `/api/highlights/export` (cut one highlight's raw
+                       source segment to output/ via NVENC re-encode;
+                       `_resolve_export_source` mirrors the renderer's
+                       token-or-path source resolution).
     routes_auto_trim.py `/api/auto_trim/*` (refframe / detect_roi /
                        confirm_roi / groundtruth_count) + sidecar
                        helpers (`_resolve_video_for_auto_trim`,
@@ -248,10 +252,16 @@ frontend/
   avatars.js         `refreshAvatarThumb(slot)` debounced lookup.
   player.js          <video> element + HUD + seek/scrub + speed +
                      source switching (loadVideoList / setVideoSource /
-                     browseForVideo / external token registration).
+                     browseForVideo / external token registration). Also
+                     hosts Preview Cut: playback + manual seeks jump past
+                     every trim_segment (jumpPastTrims) and the dedicated
+                     "preview-bar" transport seeks on KEPT time via
+                     source↔kept mapping (keptSegments / sourceToKept /
+                     keptToSource).
   score.js           Score logic (recompute, sync from time, score,
                      delete) + score-panel UI + events list.
-  highlights.js      All highlight ops + list UI.
+  highlights.js      All highlight ops + list UI, incl. the per-row ⤓
+                     clip-export button (POST /api/highlights/export).
   trims.js           All trim ops + list UI. Hosts the "⚡ Auto Trim"
                      button that opens `auto_trim/index.js`.
   auto_trim/         Auto Trim modal package: fetches refframe + calls

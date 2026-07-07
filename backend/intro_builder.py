@@ -1,7 +1,8 @@
 """
 Cinematic intro renderer.
 
-Builds a 6-second broadcast-style title card by composing in ffmpeg:
+Builds a broadcast-style title card (duration from config
+`intro_duration_seconds`, default 4 s) by composing in ffmpeg:
 
   - Background : one frame from the middle of the source video, gaussian-
                  blurred and dimmed, looped for the duration.
@@ -123,9 +124,9 @@ def render_cinematic_intro(
     avatar_y = "(H-h)/2+80+sin(t*3.5)*7"
 
     # zoompan's z expression only supports `on` (output frame index),
-    # not `t`. Pre-compute zoom-per-output-frame so the bg lands at
-    # ~1.08x by the end of the intro regardless of fps.
-    zoom_per_frame = 0.012 / fps  # → ~1.0 + 0.084 over a 7 s @ 60 fps run
+    # not `t`. Pre-compute zoom-per-output-frame so the bg zooms at
+    # 0.012x/s regardless of fps (~1.05x over the 4 s default intro).
+    zoom_per_frame = 0.012 / fps
     bg_chain = (
         f"[0:v]scale={width}:{height},gblur=sigma={blur_sigma},"
         f"eq=brightness=-0.20,"
