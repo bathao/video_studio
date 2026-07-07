@@ -17,6 +17,10 @@ import { project, snapshot } from '../state.js';
 import { fmt } from '../timecode.js';
 import { toast } from '../toast.js';
 import { syncTrims } from '../trims.js';
+// Cyclic with api.js (which imports syncDetectionUI from here) — safe:
+// both modules only export function declarations, and the calls happen
+// at event time, long after both have evaluated.
+import { videoIdentBody } from './api.js';
 import { log } from './log.js';
 import { els, state } from './state.js';
 
@@ -80,7 +84,10 @@ export function syncDetectionUI() {
 }
 
 
-function _resetDetection() {
+// Exported so openAutoTrimModal (index.js) resets Phase B state through
+// the same function instead of a hand-copied field list — the two had
+// already drifted (the copy missed `_lastLoggedPct`).
+export function resetDetection() {
   state.detection.status = 'idle';
   state.detection.jobId = null;
   state.detection.eventSource = null;
@@ -112,11 +119,127 @@ export function abortDetection() {
 }
 
 
-function videoIdentBody() {
-  const out = {};
-  if (state.videoName) out.name = state.videoName;
-  if (state.videoToken) out.token = state.videoToken;
-  return out;
+// ---- SSE event handlers -----------------------------------------------
+// One named function per event type; attachSse() wires them onto a new
+// EventSource. Previously all seven were inlined in onRunDetectionClick
+// (~160 lines) which made the state machine hard to follow.
+
+function onSseHello(ev) {
+  try {
+    const d = JSON.parse(ev.data);
+    log(`hello — job ${d.job_id}`);
+  } catch (_e) { /* ignore */ }
+}
+
+function onSseStage(ev) {
+  try {
+    const d = JSON.parse(ev.data);
+    state.detection.stage = d.name || state.detection.stage;
+    log(`stage: ${JSON.stringify(d)}`);
+    syncDetectionUI();
+  } catch (_e) { /* ignore */ }
+}
+
+function onSseProgress(ev) {
+  try {
+    const d = JSON.parse(ev.data);
+    const total = Math.max(1, d.frame_total || 1);
+    state.detection.progress = Math.min(1, (d.frame_n || 0) / total);
+    // Only log every 10% so the log doesn't drown in progress lines.
+    const pct = Math.floor((state.detection.progress * 100) / 10) * 10;
+    if (pct !== state.detection._lastLoggedPct) {
+      log(`${d.stage || 'decode'} ${pct}%  (${d.frame_n}/${d.frame_total})`);
+      state.detection._lastLoggedPct = pct;
+    }
+    syncDetectionUI();
+  } catch (_e) { /* ignore */ }
+}
+
+function onSseTrim(ev) {
+  try {
+    const t = JSON.parse(ev.data);
+    state.detection.trims.push({
+      start: t.start,
+      end: t.end,
+      source: 'auto',
+    });
+  } catch (_e) { /* ignore */ }
+}
+
+function onSseLog(ev) {
+  try {
+    const d = JSON.parse(ev.data);
+    log(`server: ${d.msg}`);
+  } catch (_e) { /* ignore */ }
+}
+
+function onSseDone(ev) {
+  try {
+    const d = JSON.parse(ev.data);
+    state.detection.done = d;
+    log(`done: ${d.trims} trims, ${d.total_trimmed_s}s dead time`);
+  } catch (_e) { /* ignore */ }
+}
+
+function onSseError(ev, src) {
+  // Two cases: explicit `error` SSE event, OR EventSource transport
+  // failure (network drop). The latter has no .data.
+  if (ev.data) {
+    try {
+      const d = JSON.parse(ev.data);
+      state.detection.status = 'error';
+      state.detection.error = d.msg || 'unknown error';
+      log(`ERROR: ${state.detection.error}`);
+      toast(`Detection failed: ${state.detection.error}`);
+    } catch (_e) {
+      state.detection.status = 'error';
+      state.detection.error = 'malformed error event';
+    }
+  } else if (state.detection.status === 'running') {
+    // Transport hiccup — let it auto-reconnect for a bit.
+    log('(EventSource transport blip — browser will reconnect)');
+    return;
+  }
+  try { src.close(); } catch (_e) { /* ignore */ }
+  state.detection.eventSource = null;
+  syncDetectionUI();
+}
+
+function onSseClose(ev, src, willCacheHit) {
+  try {
+    const d = JSON.parse(ev.data);
+    // Server-side terminal status — promote to UI state.
+    if (d.status === 'done') {
+      state.detection.status = 'done';
+      state.detection.progress = 1;
+      // Echo cache_hit info from the start response (server doesn't
+      // re-send it here).
+      state.detection.cacheHit = !!willCacheHit;
+    } else if (d.status === 'cancelled') {
+      state.detection.status = 'cancelled';
+      log('detection cancelled');
+      toast('Detection cancelled');
+    } else if (d.status === 'error') {
+      state.detection.status = 'error';
+      state.detection.error = d.error || state.detection.error || 'unknown';
+    }
+  } catch (_e) { /* ignore */ }
+  try { src.close(); } catch (_e) { /* ignore */ }
+  state.detection.eventSource = null;
+  syncDetectionUI();
+}
+
+function attachSse(jobId, willCacheHit) {
+  const src = new EventSource(`/api/auto_trim/events/${jobId}`);
+  state.detection.eventSource = src;
+  src.addEventListener('hello', onSseHello);
+  src.addEventListener('stage', onSseStage);
+  src.addEventListener('progress', onSseProgress);
+  src.addEventListener('trim', onSseTrim);
+  src.addEventListener('log', onSseLog);
+  src.addEventListener('done', onSseDone);
+  src.addEventListener('error', (ev) => onSseError(ev, src));
+  src.addEventListener('close', (ev) => onSseClose(ev, src, willCacheHit));
 }
 
 
@@ -136,7 +259,7 @@ export async function onRunDetectionClick() {
     return;
   }
 
-  _resetDetection();
+  resetDetection();
   state.detection.status = 'running';
   state.detection.stage = 'starting';
   syncDetectionUI();
@@ -171,115 +294,7 @@ export async function onRunDetectionClick() {
     + `cache=${startResp.will_cache_hit ? 'HIT' : 'miss'}`,
   );
 
-  // Open SSE stream.
-  const url = `/api/auto_trim/events/${startResp.job_id}`;
-  const src = new EventSource(url);
-  state.detection.eventSource = src;
-
-  src.addEventListener('hello', (ev) => {
-    try {
-      const d = JSON.parse(ev.data);
-      log(`hello — job ${d.job_id}`);
-    } catch (_e) { /* ignore */ }
-  });
-
-  src.addEventListener('stage', (ev) => {
-    try {
-      const d = JSON.parse(ev.data);
-      state.detection.stage = d.name || state.detection.stage;
-      log(`stage: ${JSON.stringify(d)}`);
-      syncDetectionUI();
-    } catch (_e) { /* ignore */ }
-  });
-
-  src.addEventListener('progress', (ev) => {
-    try {
-      const d = JSON.parse(ev.data);
-      const total = Math.max(1, d.frame_total || 1);
-      state.detection.progress = Math.min(1, (d.frame_n || 0) / total);
-      // Only log every 10% so the log doesn't drown in progress lines.
-      const pct = Math.floor((state.detection.progress * 100) / 10) * 10;
-      if (pct !== state.detection._lastLoggedPct) {
-        log(`${d.stage || 'decode'} ${pct}%  (${d.frame_n}/${d.frame_total})`);
-        state.detection._lastLoggedPct = pct;
-      }
-      syncDetectionUI();
-    } catch (_e) { /* ignore */ }
-  });
-
-  src.addEventListener('trim', (ev) => {
-    try {
-      const t = JSON.parse(ev.data);
-      state.detection.trims.push({
-        start: t.start,
-        end: t.end,
-        source: 'auto',
-      });
-    } catch (_e) { /* ignore */ }
-  });
-
-  src.addEventListener('log', (ev) => {
-    try {
-      const d = JSON.parse(ev.data);
-      log(`server: ${d.msg}`);
-    } catch (_e) { /* ignore */ }
-  });
-
-  src.addEventListener('done', (ev) => {
-    try {
-      const d = JSON.parse(ev.data);
-      state.detection.done = d;
-      log(`done: ${d.trims} trims, ${d.total_trimmed_s}s dead time`);
-    } catch (_e) { /* ignore */ }
-  });
-
-  src.addEventListener('error', (ev) => {
-    // Two cases: explicit `error` SSE event, OR EventSource transport
-    // failure (network drop). The latter has no .data.
-    if (ev.data) {
-      try {
-        const d = JSON.parse(ev.data);
-        state.detection.status = 'error';
-        state.detection.error = d.msg || 'unknown error';
-        log(`ERROR: ${state.detection.error}`);
-        toast(`Detection failed: ${state.detection.error}`);
-      } catch (_e) {
-        state.detection.status = 'error';
-        state.detection.error = 'malformed error event';
-      }
-    } else if (state.detection.status === 'running') {
-      // Transport hiccup — let it auto-reconnect for a bit.
-      log('(EventSource transport blip — browser will reconnect)');
-      return;
-    }
-    try { src.close(); } catch (_e) { /* ignore */ }
-    state.detection.eventSource = null;
-    syncDetectionUI();
-  });
-
-  src.addEventListener('close', (ev) => {
-    try {
-      const d = JSON.parse(ev.data);
-      // Server-side terminal status — promote to UI state.
-      if (d.status === 'done') {
-        state.detection.status = 'done';
-        state.detection.progress = 1;
-        // Echo cache_hit info from start response (server doesn't
-        // re-send it here).
-        state.detection.cacheHit = !!startResp.will_cache_hit;
-      } else if (d.status === 'cancelled') {
-        state.detection.status = 'cancelled';
-        log('detection cancelled');
-        toast('Detection cancelled');
-      } else if (d.status === 'error') {
-        state.detection.status = 'error';
-        state.detection.error = d.error || state.detection.error || 'unknown';
-      }
-    } catch (_e) { /* ignore */ }
-    try { src.close(); } catch (_e) { /* ignore */ }
-    state.detection.eventSource = null;
-    syncDetectionUI();
-  });
+  attachSse(startResp.job_id, startResp.will_cache_hit);
 }
 
 
@@ -317,7 +332,7 @@ export function onApplyClick() {
   // Stay in modal so operator can re-run with different params or
   // close manually. Reset detection state so the button reads "Run
   // detection" again instead of "Apply".
-  _resetDetection();
+  resetDetection();
   syncDetectionUI();
 }
 
@@ -325,6 +340,6 @@ export function onApplyClick() {
 export function onDiscardClick() {
   log(`discarded ${state.detection.trims.length} auto trims`);
   toast('Auto trims discarded');
-  _resetDetection();
+  resetDetection();
   syncDetectionUI();
 }

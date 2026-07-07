@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .config import config
+from .groundtruth import _append_msg
 
 if TYPE_CHECKING:
     from .renderer import RenderContext
@@ -499,7 +500,3 @@ def _rmtree_quietly(p: Path) -> None:
     except OSError:
         pass
 
-
-def _append_msg(ctx: "RenderContext", msg: str) -> None:
-    prev = ctx.state.message
-    ctx.state.message = f"{prev} | {msg}" if prev else msg

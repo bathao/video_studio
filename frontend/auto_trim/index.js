@@ -35,6 +35,7 @@ import {
   onCancelDetectionClick,
   onDiscardClick,
   onRunDetectionClick,
+  resetDetection,
   syncDetectionUI,
 } from './detection.js';
 import { clearLog, log } from './log.js';
@@ -65,17 +66,9 @@ export async function openAutoTrimModal() {
   state.confirmed = false;
   // Reset Phase B detection state too — a stale jobId from a prior
   // open would otherwise let the Cancel button POST against a job
-  // belonging to the previous video.
-  state.detection.status = 'idle';
-  state.detection.jobId = null;
-  state.detection.eventSource = null;
-  state.detection.stage = '';
-  state.detection.progress = 0;
-  state.detection.trims = [];
-  state.detection.done = null;
-  state.detection.error = null;
-  state.detection.cacheHit = false;
-  state.detection.cacheKey = null;
+  // belonging to the previous video. Shared with detection.js so the
+  // field list can't drift again.
+  resetDetection();
   els.modal.classList.remove('hidden');
   els.modal.classList.add('flex');
   els.canvasEmpty.classList.add('hidden');
