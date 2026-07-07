@@ -94,6 +94,10 @@ Status per phase:
   - CI: `.github/workflows/ci.yml` (windows-latest, Python 3.13) —
     ruff critical rules (E9,F63,F7,F82; verified passing locally) +
     the 209-test pytest suite. Dev deps in `requirements-dev.txt`.
+    Run #1 failed — fresh checkouts lack `temp/`, and pytest doesn't
+    create its pinned basetemp's parent; fixed in `38bbc5b` with
+    `tests/conftest.py` (verified on a fresh clone: 60 errors → 209
+    pass). Run #2 on `38bbc5b`: **green**.
   - Python version pinned: `requires-python = ">=3.13"` in
     `pyproject.toml` (matches the operator venv).
 

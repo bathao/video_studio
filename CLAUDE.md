@@ -24,6 +24,10 @@ isn't needed. The backend reloads only when you restart `run.bat`
 
 `requirements.txt` is just FastAPI + uvicorn + python-multipart +
 pydantic. ffmpeg + ffprobe live on PATH. tkinter ships with Python.
+Dev/CI-only extras (pytest, numpy, opencv-python-headless, ruff) live
+in `requirements-dev.txt`; `.github/workflows/ci.yml` runs ruff
+critical rules + the pytest suite on windows-latest per push/PR.
+Python is pinned `>=3.13` in `pyproject.toml`.
 
 ## Repo layout
 
@@ -434,6 +438,13 @@ scripts/             Operator-triggered tooling, organized by purpose.
   debug_roi_overlay.py     Render 3-panel diagnostic (overlay + blue
                            mask + red mask) for one entry. CLI takes a
                            video_id prefix.
+  dry_run_render.py        Print a render plan without encoding: source
+                           metadata, trim/kept breakdown, replay
+                           inserts, playlist composition + NVDEC
+                           pre-concat trigger, estimated final
+                           duration. Takes a project name or JSON path;
+                           one read-only ffprobe is the only external
+                           call.
   spike/                   Historical Phase-0 (rally detection) spike
                            scripts. Not part of any current code path.
                            Kept for reference when Phase 1b (trim
@@ -692,8 +703,10 @@ trim detection backend).
 ## Don't
 
 - Don't add tests next to the modules; if you add tests put them in a
-  `tests/` directory. ~109 tests live there; pure-logic only (segment
-  math, builder smoke, playlist + remap), no ffmpeg execution.
+  `tests/` directory. ~209 tests live there; pure-logic only (segment
+  math, builder smoke, playlist + remap, quad geometry, job-registry
+  eviction, helper formatters), no ffmpeg execution. `tests/conftest.py`
+  creates `temp/` so the pinned basetemp works on fresh checkouts (CI).
 
 - Don't commit videos, project JSONs, output mp4s, or temp/. They're
   in `.gitignore` already; if a `git status` shows them as new files

@@ -303,7 +303,11 @@ render started splicing a full 50% replay after every highlight.)
       detector gaps-to-trims + auto-trim cache key + TrimSegment.source).
       **209 tests**, runs in <0.8 s. Configured in `pyproject.toml`,
       basetemp pinned to `temp/pytest/` to dodge sandbox-denied
-      access on the user-temp dir.
+      access on the user-temp dir; `tests/conftest.py` creates the
+      `temp/` parent so fresh checkouts (CI) work too.
+- ✅ GitHub Actions CI (2026-07-07): windows-latest + Python 3.13,
+      ruff critical rules + full pytest suite on every push/PR to
+      main / v3-dev. Dev-only deps in `requirements-dev.txt`.
 
 ### Auto Trim (Phase 1a + ROI gate)
 - ✅ Auto Trim modal opens via "⚡ Auto Trim" button on the Trim panel.
