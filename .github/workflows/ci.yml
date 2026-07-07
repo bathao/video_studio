@@ -1,0 +1,29 @@
+# Lint + pure-logic test suite on every push/PR. Runs on Windows to
+# match the only production environment (single operator, Windows 11 +
+# RTX 5060 Ti). No ffmpeg / GPU / model downloads needed — the test
+# suite is pure-logic by policy (see CLAUDE.md "Don't" section).
+name: CI
+
+on:
+  push:
+    branches: [main, v3-dev]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      # Critical rules only (syntax errors, undefined names, malformed
+      # comparisons). The default rule set flags ~26 style findings —
+      # mostly intentional __init__.py re-exports — not worth gating on.
+      - name: Lint (ruff critical rules)
+        run: ruff check backend tests scripts --select E9,F63,F7,F82
+      - name: Tests
+        run: pytest

@@ -1,3 +1,11 @@
+# Not a distributable package — this table exists to pin the Python
+# version the app is developed/tested against (backlog item). venv/ on
+# the operator machine runs 3.13; match it when recreating the venv.
+[project]
+name = "video-studio"
+version = "3.0"
+requires-python = ">=3.13"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

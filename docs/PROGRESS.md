@@ -1,6 +1,6 @@
 # Progress Status
 
-Last update: 2026-07-07 (improvement-plan Phases 0–2: housekeeping committed `a20d7dc` + `ffd7d54`, `v3-dev` pushed to origin; Phase 1 backend robustness `715d0c1`; Phase 2 frontend correctness/UX pass — undo/info data-loss fix, match-over per best_of, boot + fetch resilience, preview stale fix — see [TODO.md](TODO.md))
+Last update: 2026-07-07 (improvement plan COMPLETE: Phase 0 housekeeping `a20d7dc`+`ffd7d54`, Phase 1 backend robustness `715d0c1`, Phase 2 frontend correctness/UX `7508d91`, Phase 3 skipped, Phase 4 perf plumbing, Phase 5 tests + debt (209 tests), Phase 6 backlog picks — dry-run script, GitHub Actions CI, Python pin, audio-ducking item found stale — see [TODO.md](TODO.md))
 
 ## Module map
 
@@ -244,6 +244,20 @@ render started splicing a full 50% replay after every highlight.)
 - ✅ List of past outputs at `/api/outputs`
 
 ### Polish & robustness
+- ✅ Performance plumbing pass (2026-07-07, improvement-plan Phase 4):
+  - Scoreboard preview refresh no longer runs on every `timeupdate`
+    tick (was a full-project `JSON.stringify` 4×/s); the .ass depends
+    only on info + score events, so the mutation sites (`scorePoint`,
+    `deleteScoreEvent`, `syncInfoFromInputs`) refresh it explicitly.
+  - Preview Cut's kept-segments are cached; `syncTrims` +
+    `durationchange` invalidate.
+  - Events / highlights / trims panels render as one HTML string with
+    click/change listeners delegated to each `<ul>` — a long match no
+    longer rebuilds + rebinds hundreds of per-row listeners per point.
+  - Auto-trim cache-hit replays only stage/log/trim/done events; the
+    thousands of cached per-frame progress events are skipped (the
+    frontend jumps the bar to 100% on `close`), making cache hits
+    actually instant.
 - ✅ Frontend robustness pass (2026-07-07, improvement-plan Phase 2):
   - Boot survives a down/starting backend — a failed `/api/videos`
     list no longer aborts init, so `syncAllUI` always runs and the
@@ -287,7 +301,7 @@ render started splicing a full 50% replay after every highlight.)
       playlist + stinger bracket + event remap + intro photo gate +
       stinger cache + dataset archive + groundtruth sidecar + rally
       detector gaps-to-trims + auto-trim cache key + TrimSegment.source).
-      **175 tests**, runs in <0.8 s. Configured in `pyproject.toml`,
+      **209 tests**, runs in <0.8 s. Configured in `pyproject.toml`,
       basetemp pinned to `temp/pytest/` to dodge sandbox-denied
       access on the user-temp dir.
 

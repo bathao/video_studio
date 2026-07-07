@@ -1,6 +1,6 @@
 # TODO
 
-## RESUME POINTER 2026-07-07 — improvement plan in progress (Phase 0–2 done)
+## RESUME POINTER 2026-07-07 — improvement plan COMPLETE (Phase 0–2, 4–6 done; 3 skipped)
 
 `v3-dev` is pushed to `origin/v3-dev` (tracking set up 2026-07-07 as
 part of improvement-plan Phase 0). Working state after the 2026-06-05
@@ -42,24 +42,60 @@ Status per phase:
   `best_of` and announces match win; manual highlight/trim add is an
   inline row at the playhead (`prompt()` removed). Verified
   end-to-end in headless Edge via Playwright — 18/18 checks.
-- ⬜ **Phase 3 — expose backend features in UI**: output library
-  (`GET /api/outputs`), render-job re-attach after page reload
-  (`GET /api/render`), delete-project button
-  (`DELETE /api/projects/{name}`), probe metadata display.
-- ⬜ **Phase 4 — performance plumbing**: frontend `stateSignature()`
-  JSON.stringify on every timeupdate → dirty flag; keptSegments cache;
-  list-render event delegation; auto-trim cache-hit skip per-progress
-  queue replay; `concat_parts` re-probe removal. (rally_detector
-  `cv2.mean` swap ONLY if byte-identical on existing dataset.)
-- ⬜ **Phase 5 — tests + debt**: pure-logic tests for `_quad_iou` /
-  `_order_clockwise_from_tl` / `_polygon_to_quad` / `_PRIORITY_GATES`,
-  `escape_ffmpeg_filter_path`, .ass apostrophe escape; dedup
-  `videoIdentBody` ×2, `_append_msg` ×2, refframe-extract cmd ×2,
-  `_resetDetection` drift; then split the 3 giant functions
-  (`detect_roi_multiframe`, `render_main_with_scoreboard`,
-  `onRunDetectionClick`) — tests first.
-- ⬜ **Phase 6 — operator backlog picks**: slow-mo audio ducking (🔴),
-  renderer `--dry-run`, GitHub Actions lint, pin Python version.
+- ⏭️ **Phase 3 — expose backend features in UI**: SKIPPED by operator
+  decision 2026-07-07 — all four items (output library, render-job
+  re-attach after reload, delete-project button, probe metadata) have
+  Explorer/folder workarounds and none prevents real work. Revisit
+  render-job re-attach only if a mid-render page reload actually bites.
+- ✅ **Phase 4 — performance plumbing** (2026-07-07): scoreboard
+  preview refresh moved OFF the timeupdate path (the .ass depends only
+  on info + events — mutation sites call it explicitly; was a full
+  project JSON.stringify 4×/s); Preview Cut kept-segments cached,
+  invalidated via syncTrims + durationchange; all 3 list panels
+  (events / highlights / trims) render as one HTML string with
+  delegated listeners instead of per-row createElement + rebind;
+  auto-trim cache-hit no longer replays thousands of per-frame
+  progress events through the SSE queue (trims/stage/log/done only —
+  frontend jumps the bar to 100% on close). Verified in headless Edge:
+  0 preview fetches during playback, all delegated interactions work,
+  Preview Cut skips a freshly-edited trim. Dropped as not-worth-it:
+  `concat_parts` re-probe (3 ffprobe spawns once per render) and the
+  rally_detector `cv2.mean` swap (touches detection code — barred by
+  the don't-touch-ROI rule).
+- ✅ **Phase 5 — tests + debt** (2026-07-07). Tests: 34 new pure-logic
+  tests (`tests/test_pure_helpers.py`) covering `_quad_iou`,
+  `_order_clockwise_from_tl` (incl. a drift-pin against roi_yolo's
+  deliberate local copy), `_default_roi`, `_polygon_to_quad`,
+  `_fmt_mmss`, `escape_ffmpeg_filter_path`, `_ass_escape` (apostrophe
+  backlog item ✔), `_ffmpeg_color`, config fallbacks — suite now
+  **209 pass**. Dedup: `videoIdentBody` (detection.js now imports from
+  api.js), `_append_msg` (dataset.py imports from groundtruth.py),
+  refframe ffmpeg cmd (`_refframe_cmd` shared), detection-state reset
+  (`resetDetection` exported; index.js's drifted copy removed).
+  Refactor: `onRunDetectionClick` split — 7 SSE handlers extracted as
+  named functions + `attachSse`; modal verified live in headless Edge
+  (refframe + multi-frame detect ran clean).
+  **Deferred to their own sessions** (need reference-output
+  verification): splitting `detect_roi_multiframe` (~340 lines — also
+  where `_PRIORITY_GATES` tests become possible after extraction;
+  barred-by-default under the don't-touch-ROI rule) and
+  `render_main_with_scoreboard` (~290 lines — needs byte-identical
+  render capture/verify per CLAUDE.md).
+- ✅ **Phase 6 — operator backlog picks** (2026-07-07):
+  - Slow-mo audio ducking: **already resolved by design, backlog item
+    was stale** — `REPLAY_VOLUME = 0.0` mutes the original audio in
+    every replay and the `slow_motion.mp3` music bed plays instead
+    (since v1.4). The "atempo robot voice" can never reach the output.
+  - Renderer dry-run: `scripts/dry_run_render.py <project>` prints
+    source metadata, trim/kept breakdown, replay inserts, playlist
+    composition + NVDEC pre-concat trigger, and the estimated final
+    duration — one read-only ffprobe, zero encoding. Tested against a
+    real 69-auto-trim project.
+  - CI: `.github/workflows/ci.yml` (windows-latest, Python 3.13) —
+    ruff critical rules (E9,F63,F7,F82; verified passing locally) +
+    the 209-test pytest suite. Dev deps in `requirements-dev.txt`.
+  - Python version pinned: `requires-python = ">=3.13"` in
+    `pyproject.toml` (matches the operator venv).
 
 ---
 
@@ -71,15 +107,15 @@ this file actionable. The lessons / "what NOT to do" notes live there.
 
 ---
 
-## Backlog cũ chưa làm
+## Remaining backlog (cosmetic / needs operator input)
 
-- 🟡 Country/club flags cạnh tên player trong scoreboard
-- 🟡 Tournament logo trên intro card
-- 🟡 Theme presets scoreboard per-tournament
-- 🔴 Audio leveling/ducking trong slow-mo (atempo=0.5 hơi robot)
-- 🟢 Pin Python version trong pyproject.toml
-- 🟡 `--dry-run` mode cho renderer
-- 🟡 GitHub Actions lint
-- 🟢 Bundle font trong assets/ cho intro drawtext fallback
-- 🟢 Unit test apostrophe trong .ass escape
-- 🟡 NVDEC session limit investigation
+Pruned 2026-07-07 — resolved items moved into the improvement-plan
+notes above (audio ducking: stale, resolved by design since v1.4;
+Python pin, dry-run, CI lint: Phase 6; apostrophe .ass test: Phase 5;
+NVDEC session limit: investigated + fixed by `pre_concat_slices`,
+shipped 1f2b577).
+
+- 🟡 Country/club flags next to player names in the scoreboard
+- 🟡 Tournament logo on the intro card
+- 🟡 Per-tournament scoreboard theme presets
+- 🟢 Bundle a font under assets/ for the text-intro drawtext fallback

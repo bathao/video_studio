@@ -1,0 +1,7 @@
+# Dev/CI-only dependencies — NOT needed to run the app (see
+# requirements.txt for the runtime set). Used by .github/workflows/ci.yml
+# and for running the test suite locally.
+pytest
+numpy
+opencv-python-headless
+ruff
