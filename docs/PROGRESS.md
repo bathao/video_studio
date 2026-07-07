@@ -327,6 +327,11 @@ render started splicing a full 50% replay after every highlight.)
       cache invalidated by dir mtime, batched YOLO inference, parallel
       multi-frame worker pool, parallel ffmpeg refframe extracts.
       First-click ~3× faster; steady-state click ~2.7s for 5 frames.
+      Startup warmup is now opt-out via `roi_warmup_enabled` in
+      config.json (2026-07-07): operator preferred a light server
+      start (64 MB vs 1.6 GB resident, no all-core CPU burst / fan
+      noise at run.bat) over the faster first click — set to `false`
+      in the shipped config; code default stays `true`.
 - ✅ **ROI gate unblocked 2026-05-20.** Operator confirmed accuracy
       acceptable for production.
 

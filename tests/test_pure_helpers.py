@@ -221,6 +221,11 @@ def test_outro_text_double_fallback():
     assert _config_with({"outro_text": " GG "}).outro_text == "GG"
 
 
+def test_roi_warmup_flag():
+    assert _config_with({}).roi_warmup_enabled is True  # default stays warm
+    assert _config_with({"roi_warmup_enabled": False}).roi_warmup_enabled is False
+
+
 def test_optional_asset_missing_file_is_none(tmp_path):
     c = _config_with({"intro_sound_path": str(tmp_path / "nope.mp3")})
     assert c.intro_sound_path is None

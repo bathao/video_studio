@@ -79,6 +79,15 @@ class Config:
         return bool(self._data.get("use_hwaccel", True))
 
     @property
+    def roi_warmup_enabled(self) -> bool:
+        """Pre-load YOLO + the ORB/HSV groundtruth cache at server start.
+        True → first ⚡ Auto Trim click is ~3× faster, at the cost of a
+        several-second all-core CPU burst + ~1.6 GB resident RAM (torch
+        + CUDA + model) from the moment run.bat launches. False → server
+        starts light; the first Auto Trim click pays the load (~5-10 s)."""
+        return bool(self._data.get("roi_warmup_enabled", True))
+
+    @property
     def intro_duration_seconds(self) -> float:
         return float(self._data.get("intro_duration_seconds", 4.0))
 

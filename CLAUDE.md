@@ -728,6 +728,7 @@ trim detection backend).
 | You want to change…                  | File |
 |---|---|
 | Encoder, preset, quality             | [config.json](config.json) |
+| ROI warmup at server start (CPU/RAM vs first-click speed) | [config.json](config.json) `roi_warmup_enabled` (operator keeps it `false`) |
 | Intro duration / avatar size / blur / sound | [config.json](config.json) (`intro_*` keys) |
 | Outro on/off, text, duration, bg, sound | [config.json](config.json) (`outro_*` keys) |
 | Music bed shared helper (loop + fade + volume) | `music_input_args` / `music_filter_chain` in [backend/ffmpeg_runner.py](backend/ffmpeg_runner.py) |

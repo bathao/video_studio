@@ -28,11 +28,13 @@ async def _lifespan(app: FastAPI):
     """Install asyncio exception handler at server start to swallow benign
     Windows-only ConnectionResetError noise from cancelled HTTP streams.
 
-    Also kicks off ROI detector warmup in a background daemon thread:
-    YOLO weights load + CUDA JIT (~2-3s) and groundtruth example cache
-    build (53 imreads + ORB feature extraction) move from the operator's
-    first ⚡ Auto Trim click to server startup. Threaded so it doesn't
-    block uvicorn from accepting connections."""
+    Also kicks off ROI detector warmup in a background daemon thread
+    (unless `roi_warmup_enabled` is false in config.json): YOLO weights
+    load + CUDA JIT (~2-3s) and groundtruth example cache build (~54
+    imreads + ORB feature extraction) move from the operator's first
+    ⚡ Auto Trim click to server startup. Threaded so it doesn't block
+    uvicorn from accepting connections. Disabled → server starts light
+    (no torch in RAM); the first Auto Trim click pays the load instead."""
     import asyncio
     import threading
     if sys.platform == "win32":
@@ -71,7 +73,13 @@ async def _lifespan(app: FastAPI):
             "ok" if ok_yolo else "skipped", t1 - t0, n_examples, t2 - t1,
         )
 
-    threading.Thread(target=_warmup_worker, daemon=True, name="roi_warmup").start()
+    if config.roi_warmup_enabled:
+        threading.Thread(target=_warmup_worker, daemon=True, name="roi_warmup").start()
+    else:
+        import logging
+        logging.getLogger("roi.warmup").info(
+            "ROI warmup disabled by config — first Auto Trim click pays the load",
+        )
     yield
 
 
