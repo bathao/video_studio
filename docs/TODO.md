@@ -6,7 +6,38 @@
 part of improvement-plan Phase 0). Working state after the 2026-06-05
 feature freeze is described in [HISTORY.md](HISTORY.md).
 
-**Only operator-driven open item:** (A) run Auto Trim on a fresh match
+**Next big feature (IN PROGRESS since 2026-07-07):** Live Score
+automation — full plan in [AUTO_SCORE_PLAN.md](AUTO_SCORE_PLAN.md).
+GUI splits the Live Score panel into Manual | Auto tabs (manual path
+untouched); vision-only winner detection (local VLM + trained
+classifier + score-grammar solver; audio ruled out by operator).
+Offline Phase 0 feasibility spike first — no GUI work until Gate G0
+passes. Phase 0 step status:
+
+- ✅ **Step 1 — corpus builder** (2026-07-07, uncommitted):
+  `scripts/auto_score_spike/build_corpus.py` →
+  `dataset/auto_score_corpus/corpus.jsonl` (gitignored, regenerable).
+  622 records = 551 unique manual score events (GOLD winner labels)
+  + 71 attempt-1 reviewed rallies (near/far winner + taxonomy).
+  Dedup by source video found the 9 manifest slugs are only **7
+  unique matches** (0331_Trung archived 3x — 5-event partial + one
+  93-event duplicate dropped); the "649 labeled points" figure in
+  the plan is 551 unique. Held-out PINNED: 0510_HoangHuuHa_1-3
+  (singles) + 0402_ThoiThao_vs_LoiPhuong_3-2 (doubles) = 173
+  eval-only records; 449 train. v1 is index-only (no clip cutting —
+  frames extracted on demand downstream; deliberate deviation from
+  the plan text). Verified: all 622 video paths resolve; set_index
+  0-4 cross-checks against every filename final score; winner
+  balance P1=260/P2=291 + a=42/b=29.
+- ⬜ Step 2 — unanchored rally segmentation eval (vs the 34-point
+  start truth in dataset/attempt1 + 551 rally-end labels).
+- ⬜ Step 3 — VLM bake-off (shortlist in plan §4.2; needs Ollama
+  approval, plan §9).
+- ⬜ Step 4 — trained-classifier spike (parallel with step 3).
+- ⬜ Step 5 — serve-side detector spike.
+- ⬜ Step 6 — solver simulation at both anchor rungs (§4.1).
+
+**Operator-driven open item:** (A) run Auto Trim on a fresh match
 outside the 3 PHASE0_REPORT spike entries to measure real recall on
 truly-unseen venue + audio. Needs a new recording; the assistant can
 only analyse the result, not produce the input.

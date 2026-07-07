@@ -1,6 +1,7 @@
 # Progress Status
 
-Last update: 2026-07-07 (improvement plan COMPLETE: Phase 0 housekeeping `a20d7dc`+`ffd7d54`, Phase 1 backend robustness `715d0c1`, Phase 2 frontend correctness/UX `7508d91`, Phase 3 skipped, Phase 4 perf plumbing, Phase 5 tests + debt (209 tests), Phase 6 backlog picks — dry-run script, GitHub Actions CI, Python pin, audio-ducking item found stale — see [TODO.md](TODO.md))
+Last update: 2026-07-07 (improvement plan COMPLETE: Phase 0 housekeeping `a20d7dc`+`ffd7d54`, Phase 1 backend robustness `715d0c1`, Phase 2 frontend correctness/UX `7508d91`, Phase 3 skipped, Phase 4 perf plumbing, Phase 5 tests + debt (209 tests), Phase 6 backlog picks — dry-run script, GitHub Actions CI, Python pin, audio-ducking item found stale — see [TODO.md](TODO.md)).
+**Live Score automation STARTED** same day: plan in [AUTO_SCORE_PLAN.md](AUTO_SCORE_PLAN.md); Phase 0 step 1 (corpus builder) done — `scripts/auto_score_spike/build_corpus.py` → 622-record labeled corpus (551 unique manual score events across 7 unique matches + 71 attempt-1 rallies; 2 matches pinned held-out). Step status lives in [TODO.md](TODO.md).
 
 ## Module map
 
