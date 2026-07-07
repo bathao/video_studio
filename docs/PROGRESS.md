@@ -1,6 +1,6 @@
 # Progress Status
 
-Last update: 2026-06-05 (Highlight per-row clip export + Preview Cut transport `9b1624e`; Auto Trim detect speed 2.1× → 6.2× realtime `4ec9012`; scoreboard inter-set recap `14c5db7`; 9 new avatars `22b5f08` — see [TODO.md](TODO.md))
+Last update: 2026-07-07 (improvement-plan Phase 0 housekeeping committed `a20d7dc` + `ffd7d54` and `v3-dev` pushed to origin; Phase 1 backend robustness pass — job.trims race fix, job-registry eviction, 404 on missing video, swallowed-failure surfacing — see [TODO.md](TODO.md))
 
 ## Module map
 
@@ -234,6 +234,25 @@ render started splicing a full 50% replay after every highlight.)
 - ✅ List of past outputs at `/api/outputs`
 
 ### Polish & robustness
+- ✅ Backend robustness pass (2026-07-07, improvement-plan Phase 1):
+  - Auto-trim cache-hit replay publishes `job.trims` atomically
+    (local list + single assignment) instead of appending while the
+    `/api/auto_trim/job/{id}` status endpoint iterates — closes a
+    "list changed size during iteration" race.
+  - Job registries (`_jobs` render + `_auto_trim_jobs`) evict the
+    oldest finished entries beyond 20 via `prune_finished_jobs` at
+    insert time — previously both grew unbounded for the life of the
+    uvicorn process (auto-trim entries own an event queue each).
+  - Missing `videos/` basename now returns a clean 404 from
+    `_resolve_video_for_auto_trim` instead of an unhandled
+    `FileNotFoundError` 500 from `_video_identity`'s `stat()`.
+  - Swallowed failures surfaced: refframe ffmpeg extracts log
+    per-frame failures and raise if ALL frames fail; probe failure
+    raises 500 instead of silently assuming a 60 s duration (which
+    sampled all 5 detect frames from the first minute of long
+    videos); malformed score events dropped at `/api/auto_trim/start`
+    are counted, logged, and reported as `dropped_events` in the
+    response.
 - ✅ Path-traversal protection (`_resolve_inside`)
 - ✅ Safe project name regex
 - ✅ FFmpeg error captured and surfaced to UI (last 2KB of stderr)
@@ -246,7 +265,7 @@ render started splicing a full 50% replay after every highlight.)
       playlist + stinger bracket + event remap + intro photo gate +
       stinger cache + dataset archive + groundtruth sidecar + rally
       detector gaps-to-trims + auto-trim cache key + TrimSegment.source).
-      **170 tests**, runs in <0.8 s. Configured in `pyproject.toml`,
+      **175 tests**, runs in <0.8 s. Configured in `pyproject.toml`,
       basetemp pinned to `temp/pytest/` to dodge sandbox-denied
       access on the user-temp dir.
 

@@ -58,7 +58,11 @@ class AutoTrimJobState:
     thread (writer) and the SSE handler (reader of `event_queue`). The
     primitive fields are written from the worker and read everywhere,
     but they're only ever read for status display — eventual consistency
-    is fine here, no per-field lock needed."""
+    is fine here, no per-field lock needed.
+
+    `trims` must be PUBLISHED, never mutated in place: the worker builds
+    a local list and assigns it in one step, so the status endpoint can
+    iterate whatever list object it sees without a lock."""
     job_id: str
     status: str = "queued"  # queued | running | done | error | cancelled
     progress: float = 0.0
@@ -78,3 +82,26 @@ class AutoTrimJobState:
 
 _auto_trim_jobs: dict[str, AutoTrimJobState] = {}
 _auto_trim_lock = threading.Lock()
+
+
+# Job-registry eviction. Neither registry was ever pruned, so a long
+# editing session accumulated every RenderState / AutoTrimJobState (the
+# latter owning an unbounded queue.Queue) for the life of the process.
+# Keep the most recent N finished jobs so status endpoints still answer
+# for recently-finished work; running/queued jobs are never evicted.
+_TERMINAL_STATUSES = ("done", "error", "cancelled")
+_MAX_FINISHED_JOBS = 20
+
+
+def prune_finished_jobs(registry: dict) -> None:
+    """Evict the oldest finished jobs beyond `_MAX_FINISHED_JOBS`.
+
+    Works for both `_jobs` (RenderState) and `_auto_trim_jobs`
+    (AutoTrimJobState) — both expose `.status`. Caller must hold the
+    registry's lock. Dict insertion order makes `finished[:excess]`
+    the oldest entries."""
+    finished = [k for k, v in registry.items() if v.status in _TERMINAL_STATUSES]
+    excess = len(finished) - _MAX_FINISHED_JOBS
+    if excess > 0:
+        for k in finished[:excess]:
+            registry.pop(k, None)

@@ -20,7 +20,7 @@ from ..ffmpeg_runner import (
 )
 from ..models import ProjectData, RenderRequest
 from ..renderer import RenderPlan, run_render
-from .state import _jobs, _jobs_lock
+from .state import _jobs, _jobs_lock, prune_finished_jobs
 from .utils import (
     _open_or_focus_explorer,
     _resolve_external_video,
@@ -213,6 +213,7 @@ def start_render(req: RenderRequest) -> dict:
         output_name=req.output_name,
     )
     with _jobs_lock:
+        prune_finished_jobs(_jobs)
         _jobs[plan.state.job_id] = plan.state
 
     def _runner():

@@ -25,6 +25,7 @@ import asyncio
 import dataclasses
 import hashlib
 import json
+import logging
 import shutil
 import subprocess
 import threading
@@ -47,6 +48,7 @@ from .state import (
     _auto_trim_jobs,
     _auto_trim_lock,
     AutoTrimJobState,
+    prune_finished_jobs,
 )
 from .utils import (
     _resolve_external_video,
@@ -57,6 +59,8 @@ from .utils import (
 
 router = APIRouter()
 
+_log = logging.getLogger(__name__)
+
 
 def _resolve_video_for_auto_trim(name: str | None, token: str | None) -> Path:
     """Auto-trim modal passes EITHER a videos/ basename OR an external token,
@@ -64,7 +68,13 @@ def _resolve_video_for_auto_trim(name: str | None, token: str | None) -> Path:
     if token:
         return _resolve_external_video(token)
     if name:
-        return _resolve_inside(config.videos_dir, name)
+        p = _resolve_inside(config.videos_dir, name)
+        # _resolve_inside only guards traversal; without this check a
+        # missing file surfaces later as an unhandled FileNotFoundError
+        # from p.stat() in _video_identity — a 500 instead of a 404.
+        if not p.is_file():
+            raise HTTPException(status_code=404, detail=f"Video not found: {name}")
+        return p
     raise HTTPException(status_code=400, detail="Provide either 'name' or 'token'")
 
 
@@ -75,6 +85,28 @@ def _video_identity(p: Path) -> str:
     st = p.stat()
     raw = f"{p.resolve()}|{st.st_size}|{int(st.st_mtime)}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _probe_duration(video_path: Path) -> float:
+    """Probe the source duration, failing loudly.
+
+    This used to fall back to 60.0 on any probe error, which silently
+    sampled every refframe from the first minute of a long video — the
+    detector then saw 5 near-identical early frames instead of the
+    10..90% spread. An unreadable video should error here, visibly."""
+    try:
+        info = probe_video(video_path)
+        dur = float(info.get("duration", 0.0))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"ffprobe failed on {video_path.name}: {e}",
+        )
+    if dur <= 0.0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"ffprobe returned no duration for {video_path.name}",
+        )
+    return dur
 
 
 def _extract_refframe(video_path: Path, *, max_w: int = 960) -> Path:
@@ -90,11 +122,7 @@ def _extract_refframe(video_path: Path, *, max_w: int = 960) -> Path:
         return out
     _REFFRAME_CACHE.mkdir(parents=True, exist_ok=True)
 
-    try:
-        info = probe_video(video_path)
-        dur = float(info.get("duration", 60.0))
-    except Exception:
-        dur = 60.0
+    dur = _probe_duration(video_path)
     midpoint = max(1.0, dur / 2.0)
 
     # Use scale filter to downscale to max_w while preserving aspect ratio.
@@ -148,11 +176,7 @@ def _extract_multi_refframes(video_path: Path, *, max_w: int = 960,
 
     _REFFRAME_CACHE.mkdir(parents=True, exist_ok=True)
 
-    try:
-        info = probe_video(video_path)
-        dur = float(info.get("duration", 60.0))
-    except Exception:
-        dur = 60.0
+    dur = _probe_duration(video_path)
 
     if n == 1:
         fractions = [0.5]
@@ -188,7 +212,11 @@ def _extract_multi_refframes(video_path: Path, *, max_w: int = 960,
     # max_workers caps at n so we never spin up more threads than jobs;
     # 5 concurrent ffmpegs are cheap on a modern SSD + the operator's
     # 16-core CPU. Each subprocess is independent — no shared state.
-    def _extract_one(out: Path, t: float) -> None:
+    def _extract_one(out: Path, t: float) -> str | None:
+        """Returns an error description on failure, None on success.
+        A failed frame is tolerated (detect_roi_multiframe accepts fewer
+        than n inputs) but no longer invisible — failures are logged and
+        an all-frames-failed run raises instead of detecting on nothing."""
         cmd = [
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
             "-ss", f"{t:.3f}",
@@ -198,14 +226,25 @@ def _extract_multi_refframes(video_path: Path, *, max_w: int = 960,
             "-q:v", "3",
             str(out),
         ]
-        subprocess.run(cmd, capture_output=True, text=True)
-        # On failure (corrupt GOP, etc.) we just leave the file absent;
-        # detect_roi_multiframe tolerates fewer than n inputs.
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0 or not out.exists():
+            return (
+                f"t={t:.1f}s: "
+                f"{proc.stderr[-200:].strip() or f'exit code {proc.returncode}'}"
+            )
+        return None
 
+    failures: list[str] = []
     if extract_jobs:
         with ThreadPoolExecutor(max_workers=min(n, len(extract_jobs))) as pool:
-            for out, t in extract_jobs:
-                pool.submit(_extract_one, out, t)
+            futures = [pool.submit(_extract_one, out, t) for out, t in extract_jobs]
+            failures = [err for err in (f.result() for f in futures) if err]
+        if failures:
+            _log.warning(
+                "refframe extract: %d/%d frames failed for %s — %s",
+                len(failures), len(extract_jobs), video_path.name,
+                "; ".join(failures),
+            )
 
     # Mirror the mid-index frame to the single-frame cache path so a
     # subsequent _extract_refframe call returns instantly.
@@ -215,7 +254,16 @@ def _extract_multi_refframes(video_path: Path, *, max_w: int = 960,
         except Exception:
             pass
 
-    return [p for p in cache_paths if p.exists()]
+    frames = [p for p in cache_paths if p.exists()]
+    if not frames:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"All refframe extracts failed for {video_path.name}: "
+                f"{failures[-1] if failures else 'unknown error'}"
+            ),
+        )
+    return frames
 
 
 @router.get("/api/auto_trim/refframe")
@@ -475,11 +523,16 @@ def _run_auto_trim_job_worker(
                         job.progress = min(1.0, int(data.get("frame_n", 0)) / total)
                     elif et == "stage":
                         job.stage = str(data.get("name", job.stage))
+                # Build locally, publish atomically — the /job/{id} status
+                # endpoint iterates job.trims from another thread, and
+                # appending in place raced with that iteration.
+                loaded: list[TrimSegment] = []
                 for t in cached.get("trims", []):
                     try:
-                        job.trims.append(TrimSegment(**t))
+                        loaded.append(TrimSegment(**t))
                     except Exception:
                         continue
+                job.trims = loaded
                 job.progress = 1.0
                 job.status = "done"
                 job.finished_at = time.time()
@@ -593,19 +646,27 @@ def auto_trim_start(payload: dict = Body(...)) -> dict:
     if not isinstance(raw_events, list):
         raise HTTPException(status_code=400, detail="score_events must be a list")
     score_events: list[ScoreEvent] = []
+    dropped_events = 0
     for e in raw_events:
         try:
             score_events.append(ScoreEvent.model_validate(e))
         except Exception:
             # Defensive: skip malformed events rather than fail the whole
             # job. Real frontend always sends valid shape (frontend
-            # mirrors backend ScoreEvent).
+            # mirrors backend ScoreEvent) — so any drop is a client bug
+            # worth surfacing, not hiding.
+            dropped_events += 1
             continue
+    if dropped_events:
+        _log.warning(
+            "auto_trim_start: dropped %d/%d malformed score events",
+            dropped_events, len(raw_events),
+        )
     if len(score_events) < 10:
         raise HTTPException(
             status_code=400,
             detail=f"Auto-trim needs ≥10 score events (got {len(score_events)}). "
-                   "Operator should bấm A/D throughout the match first.",
+                   "Operator should press A/D throughout the match first.",
         )
 
     # Merge param overrides into BALANCED defaults.
@@ -645,6 +706,7 @@ def auto_trim_start(payload: dict = Body(...)) -> dict:
         started_at=time.time(),
     )
     with _auto_trim_lock:
+        prune_finished_jobs(_auto_trim_jobs)
         _auto_trim_jobs[job_id] = job
 
     threading.Thread(
@@ -656,6 +718,7 @@ def auto_trim_start(payload: dict = Body(...)) -> dict:
 
     return {
         "job_id": job_id,
+        "dropped_events": dropped_events,
         "cache_key": cache_key,
         "will_cache_hit": will_hit,
         "video_duration": duration,
