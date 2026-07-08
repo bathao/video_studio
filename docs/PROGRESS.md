@@ -378,6 +378,41 @@ render started splicing a full 50% replay after every highlight.)
       different video / different roi / different params) + TrimSegment
       backwards compat. Total suite 166 pass.
 
+### Auto Score (Phase 1 — semi-auto rally proposals, built 2026-07-08, uncommitted)
+- ✅ Live Score panel split into **Manual | Auto** tabs. Manual tab =
+      original DOM moved verbatim (same ids — score.js untouched);
+      switching is pure show/hide.
+- ✅ `backend/auto_score/rally_segmenter.py` — production port of the
+      Phase 0 spike's **v7-tuned2** segmenter (hysteresis + recursive
+      valley split; measured coverage recall train 98.0% / held-out
+      94.9% / truly-unseen 97.8%). Params frozen in `TUNED2`; decode
+      reuses `rally_detector.compute_motion_signal` read-only.
+- ✅ `backend/server/routes_auto_score.py` — `/api/auto_score/start`
+      + SSE events + cancel + job snapshot. Deliberate sibling of the
+      auto-trim job pipeline (thread + queue + SSE + result cache at
+      `temp/auto_score_cache/<sha1>.json`, key = video_id + roi +
+      params; no score events in the key — segmentation is unanchored).
+- ✅ Auto tab flow: **mandatory ROI confirm gate** (button opens the
+      Auto Trim modal; Detect disabled until
+      `project.info.roi_quadrilateral` exists) → Detect rallies (SSE
+      progress) → keyboard-first review list (`1`/`2` = winner P1/P2,
+      `Space` = accept, `X` = delete, `↑/↓` = cursor, row click seeks
+      to t_end−3 s; hotkeys intercept app.js's global A/D/Space while
+      reviewing) → Apply writes `score_events` with `source:"auto"`
+      (replace-own-output rule) + full recompute.
+- ✅ Review draft persists in `project.auto_score_draft` (new optional
+      ProjectData field; `ScoreEvent` gained
+      `source: Literal["manual","auto"]`) — a half-reviewed list
+      survives save/load.
+- ✅ 7 new pure-logic tests (`tests/test_auto_score_segmenter.py`)
+      incl. a frozen-config drift guard. Total suite **216 pass**.
+- ✅ Verified E2E in headless Edge (Playwright) on a live 6-min clip:
+      real decode → 48 proposals, keyboard verdicts, hotkey
+      interception, Apply, save/load round-trip of draft + source
+      fields, cache-hit rerun in 131 ms.
+- Winner detection / solver / VLM = Gate G0b, deferred until the
+      manual-production flywheel grows the corpus (~15-20 matches).
+
 ### Code organisation
 - ✅ ASS overlay generators live in the `backend/ass/` package —
       `common` / `scoreboard` (sub-package) / `intro` / `outro` /

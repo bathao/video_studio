@@ -166,12 +166,38 @@ to:
 One missing bit per match: the **near/far ↔ P1/P2 initial mapping**
 (who starts on the camera side). Vision models see near/far; labels
 say P1/P2. Side-switch RULE gives every subsequent set from the
-first, so it is literally 1 bit per match. Plan: optional one-click
-field in the GUI ("P1 starts near") + a backfill script that shows
-one frame per archived match for the operator to answer in bulk
-(~9 clicks for the current corpus). Until backfilled, winner-model
-training can bootstrap from attempt #1's 71 clips (already near/far
-labeled).
+first, so it is literally 1 bit per match.
+**RESOLVED GOING FORWARD (operator convention adopted 2026-07-08):
+P1 is ALWAYS the player standing on the camera-near side in set 1.**
+Zero-cost habit at name entry; makes the mapping implicit in every
+future archive. For the EXISTING corpus a backfill script showing one
+frame per archived match (~7 operator clicks total) fills the bit;
+until then, winner-model training bootstraps from attempt #1's 71
+clips (already near/far labeled).
+
+**Side-switch rules (operator, 2026-07-08) — derive the per-set
+mapping from the set-1 bit:**
+
+- Players swap sides after EVERY set (standard, reliably followed).
+  So with P1 near in set 1: sets 1/3/5 → P1 near, sets 2/4 → P1 far.
+- In the deciding set 5, the standard mid-set swap when one side
+  reaches 5 points is **OPTIONAL in these friendly matches** —
+  sometimes done, sometimes skipped. Known per-match truth
+  (operator, 2026-07-08): 0611_Tim_2-3 did NOT swap mid-set-5;
+  0331_Trung_1_2-3 DID swap. With these two bits every 5-set match
+  in the current singles corpus is fully resolved. This is the only nondeterministic bit left:
+  treat set-5 points after either player reaches 5 as a binary
+  hypothesis. Cheap resolutions, pick per phase: (a) GUI asks one
+  yes/no per 5-set match ("swapped at 5 in the decider?"); (b) the
+  solver runs both hypotheses and takes the one consistent with the
+  filename final score; (c) later, detect the swap visually — both
+  players walking around the table mid-set is a distinctive
+  motion/pose signature.
+- Consequence for the VLM bake-off metric: majority-mapping fit per
+  (match, set) stays valid (it never assumed a schedule), but once
+  the set-1 bit is backfilled the DERIVED mapping replaces the
+  fitted one everywhere except optional-swap set-5 tails —
+  strictly less optimistic, use it when available.
 
 Held-out discipline (attempt #1 rule, inherited): fix ≥2 matches as
 never-train, never-tune eval-only from day 1; every new render lands
@@ -366,13 +392,29 @@ are never touched by the auto path.
 
 ### 5.2 Frontend — tabs, Auto Trim-style modal flow
 
+> **STATUS 2026-07-08: Phase 1 semi-auto BUILT** (G0a passed the same
+> day). Shipped: Manual|Auto tab split, mandatory ROI gate, detect →
+> SSE → keyboard-first review list, Apply with `source:"auto"`,
+> draft persistence (`project.auto_score_draft`). NOT built (G0b):
+> winner column/confidence colors (§5.2.1 mock), evidence popover,
+> correction re-solve (§5.5 layer 3), auto_score_groundtruth append.
+> See docs/PROGRESS.md "Auto Score (Phase 1)".
+
 - **Live Score panel splits into 2 tabs: `Manual` | `Auto`.** Manual
   tab = the existing panel DOM moved verbatim (same element ids, so
   score.js keeps working unchanged). Tab switching is pure CSS
   show/hide — zero logic change to the manual path.
 - **Auto tab** hosts the staged flow (initially mostly disabled):
-  1. ROI status (reuses `project.info.roi_quadrilateral`; button opens
-     the existing Auto Trim modal to confirm if absent).
+  1. **ROI confirmation is a MANDATORY GATE** (operator directive
+     2026-07-08): before ANY auto-score detection runs, the flow
+     stops at the Auto Trim-style ROI screen — auto-detected quad
+     shown, 4 corners draggable, operator confirms 100%-correct
+     placement. Rationale: the table ROI is the anchor of every
+     downstream mask (motion signal, playzone crop for the
+     classifier and VLM) — a slightly-off ROI silently corrupts
+     rally AND winner detection. Reuses the existing modal +
+     `confirm_roi` endpoint verbatim; a confirm here also feeds
+     `roi_groundtruth` like Auto Trim's does.
   2. "Detect rallies" → SSE progress (mirrors detection.js) → proposed
      rally-end markers on the timeline.
   3. "Detect winners" → per-rally winner + confidence list.
@@ -558,17 +600,127 @@ Scripts only, under `scripts/auto_score_spike/`:
      with the motion signal; (b) **YOLOv8-pose features** (rung 6,
      the planned escalation) — player stance/position at 4-5 fps.
      Both reuse the ultralytics stack already in the venv.
-3. **VLM bake-off**: Ollama + Qwen2.5-VL-7B on N=200 sampled clips
-   (ROI-cropped frames at 2K, downscaled as needed); measure winner
-   accuracy, latency/clip, failure taxonomy. Try 2-3 prompt variants
-   (incl. one focused on post-rally behaviour: who fetches the ball /
-   walks away); log everything.
+   - **Session-2 addendum (2026-07-08)**: escalation (a) measured
+     DEAD — four pixel-classifier variants (static frame, temporal
+     stack, aug-fixed stack, playzone-masked stack) all fail
+     held-out at 49.7-61.1%; small CNNs learn the VENUE, not the
+     play state, with only 4 training venues. The miss audit then
+     changed the game: 25/26 misses on the worst match sat ABOVE
+     the motion threshold inside merged blobs (rapid point series
+     ~6 s apart fuse into one interval), so the fix was algorithmic,
+     not ML: **v7 recursive valley split** lifts singles
+     assoc-recall **76.1% → 85.5%** (worst match 65.3→82.7%,
+     held-out 77.2%) at ~1.7x proposals. Tuned config frozen
+     (`split_over_s=8`, `valley_frac=0.9`, `edge_guard_s=1.5`);
+     metric + config persisted in `eval_unseen.py`.
+   - **First truly-unseen test (2026-07-08)**: the flywheel's first
+     new production match (0611_Tim_2-3, 90 events, 5 sets, new
+     venue; ROI auto-detected at `yolo_seg+orb_agree`) scores
+     **85.6%** with the frozen v7 config — exactly the train
+     average, i.e. no overfit.
+   - **G0a BAR REACHED (2026-07-08 pm, v7-tuned2 + coverage
+     metric)**: two audits on the remaining misses flipped the
+     picture. (1) Coverage metric: 8/13 unseen-match "misses" were
+     proposals that CONTAIN the event but whose end trails past
+     t+2 s (ball-fetch tail glued to the rally) — usable as-is in a
+     review GUI, so the honest GUI metric accepts covering
+     intervals. (2) Peak audit: EVERY remaining coverage miss peaks
+     >= p77 (median p88) — they are SHORT spikes killed by
+     `min_rally_s=1.5`, not quiet rallies. Rescue:
+     `min_rally_s=1.0, pct_lo=55` (**v7-tuned2**, persisted in
+     `eval_unseen.py`). Coverage recall: **train 98.0%, held-out
+     94.9%, truly-unseen 97.8% (total 463/475 = 97.5%)**; two
+     matches at 100%. Cost: proposals 811→931 (~2x the true event
+     count — precision ~50%, so the Phase 1 GUI must budget ~155-230
+     review cards per match; the pose junk-filter is now purely a
+     click-count optimization, not a recall gate). Caveat: pct_lo /
+     min_rally chosen where the TRAIN column saturates, but held-out
+     + unseen columns were visible during the pick — the next
+     flywheel match is the clean confirmation.
+   - **Pose junk-filter MEASURED DEAD (2026-07-09,
+     `junk_filter_spike.py`)**: under a keep-≥99%-of-real-rallies
+     constraint, presence/motion aggregates drop only 1.3-2.7% of
+     junk — junk proposals ARE people moving near the table (ball
+     fetches), indistinguishable from rallies at that feature level.
+     Consequence for the GUI: accept ~2x cards; skipping a junk card
+     is one X keypress (~1 s), so ~80-90 junk cards ≈ 1.5 min/match —
+     tolerable. A frame-glimpse VLM/classifier junk filter stays on
+     the G0b shelf if that minute ever matters.
+3. 🔴 **VLM bake-off** (MEASURED 2026-07-08/09 — verdict: zero-shot
+   VLM is at CHANCE for winner detection). 4 models × the same 60
+   train-singles clips (8 ROI-band frames @640px via Ollama,
+   temperature 0, num_ctx 16384; qwen2.5vl:7b dropped by operator —
+   its family sibling qwen3-vl already bounded it). Scripts:
+   `vlm_bakeoff.py` (+ `--ids-file` fixed-sample resume-safe reruns,
+   `--prompt`/`--tag` variants) + `rescore_vlm.py` + `side_truth.json`
+   (operator backfill of P1-side per match). TWO metrics tell very
+   different stories:
+
+   | model | fitted mapping-acc | TRUE acc (derived mapping) | valid | s/clip |
+   |---|---|---|---|---|
+   | MiniCPM-V 4.5 | 65.0% | **53.3%** | 60/60 | 3.8 |
+   | gemma4:12b | 67.3% | **50.9%** | 55/60 | 88 |
+   | Qwen3-VL-8B | 66.0% | **45.3%** | 53/60 | 58 |
+   | Qwen3.5-9B | 78.3% | **41.3%** | 46/60 | 134 |
+
+   - **The fitted (majority-mapping) metric is inflated** — it fits
+     the near/far↔P1/P2 bit on the model's own answers per set, so a
+     biased-but-wrong model scores well. With the operator's
+     side-truth backfill the mapping is DERIVED (swap rule + set-1
+     bit + set-5 swap bits) and every model lands at chance ±5%.
+   - **Qwen3.5-9B hides the only real signal**: true-acc 41.3% BELOW
+     chance + pairwise 58.8% ABOVE chance are flip-symmetric — the
+     model separates winner from loser at ~59% but systematically
+     inverts which player "near" refers to.
+   - **Prompt-B probe CONFIRMED the inversion (2026-07-09)**: variant
+     B defines the players by image geometry (BOTTOM/large vs
+     TOP/small) instead of camera distance. Qwen3.5+B → **60.4%**
+     true-acc (48/60 valid; +19.1 pts, the best zero-shot number in
+     the bake-off). Control: MiniCPM+B → 46.7% (no gain) — prompt B
+     only rescues a model whose pairwise is above chance; it does not
+     conjure signal, so gemma4/qwen3-vl variants were skipped.
+     **Qwen3.5-9B + geometry prompt = the G0b fine-tune base.**
+   - Confidence values are unusable across the board (flat 0.9-0.95).
+   - Gate G0b consequence: fine-tuning on flywheel data is the only
+     credible path to ≥90% — zero-shot tops out at ~60%.
 4. **Trained-classifier spike**: fine-tune a small video/frame
    classifier on 7 matches, test on 2 held-out — same corpus, same
    metric. Run IN PARALLEL with the VLM bake-off, not after.
 5. **Serve-side detector spike**: position/stillness heuristic on the
    first ~2 s of each rally; measure serve-side accuracy vs labels
    (derivable: serve order is deterministic from the score sequence).
+   **Extension (operator idea 2026-07-08): side-identity tracker /
+   swap detector.** Re-ID the two players by appearance (torso color
+   histogram on the YOLO-pose person crops `pose_features.py`
+   already produces) and compare WHO IS NEAR between the last rally
+   of set N and the first rally of set N+1 — a flip = side swap.
+   State comparison, NOT walk-around event detection (between-set
+   wandering is noise). Within set 5, consecutive-rally comparison
+   pinpoints the optional mid-set swap and the exact point index.
+   Yields: free set boundaries (the solver's measured flag-cutter,
+   78→27/match), auto-resolution of the set-5 swap bit, and
+   continuous verification of the near/far ↔ P1/P2 mapping. Failure
+   mode: identical outfits → degrade to a soft observation (swap
+   rule + grammar as prior) — but the operator notes this is RARE,
+   and the descriptor should be multi-part anyway (operator input
+   2026-07-08): shirts may change between sets, but **shorts, shoes,
+   and body build do not** → weight lower-body + build features
+   higher than torso color for cross-set identity. G0b-path work —
+   Phase 1 semi-auto needs none of this (operator enters P1/P2
+   directly).
+   **MEASURED 2026-07-09 (`side_identity.py`)**: v1 (near-vs-far
+   histogram compare) failed 2/19 — the far crop is ~20 px of mostly
+   floor, descriptors encode POSITION not person. v2 re-IDs the NEAR
+   player only, keypoint-tight lower-body crop (hips→ankles),
+   per-match threshold calibrated on within-set same-person nulls:
+   **boundary swaps 14/18 (78%), within-set controls 19/22 (86%
+   leave-one-out), mid-set-5 verdicts 2/2 with clean margins**
+   (aTrung d=0.73 vs thr 0.44; Tim 0.23 vs 0.31). Three matches are
+   100%; both weak matches are the same-venue 0510 pair (likely
+   similar shorts). Verdict: viable as a SOFT observation for the
+   solver (distance margin = confidence) + the set-5 bit resolver;
+   embedding re-ID is the upgrade path if hard decisions are ever
+   needed.
 6. ✅ **Solver simulation** (DONE 2026-07-08):
    `scripts/auto_score_spike/solver_sim.py` — exact forward-backward
    over the scoring grammar, driven by the 7 REAL match sequences

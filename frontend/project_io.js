@@ -84,6 +84,7 @@ async function loadProject(name) {
   project.trim_segments = data.trim_segments || [];
   project.highlights = data.highlights || [];
   project.score_events = data.score_events || [];
+  project.auto_score_draft = data.auto_score_draft || null;
   // Legacy projects may not have `who` on each event — derive it from
   // the score diff with the previous event, then sort and recompute so
   // the events list is internally consistent.

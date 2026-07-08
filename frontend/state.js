@@ -51,6 +51,11 @@ export const project = {
   trim_segments: [],
   highlights: [],
   score_events: [],
+  // Auto Score review session: {video_file, proposals: [{id, t_start,
+  // t_end, who, status}]} or null. Persisted with the project so a
+  // half-reviewed proposal list survives save/load. Owned by
+  // frontend/auto_score/.
+  auto_score_draft: null,
 };
 
 export const live = { p1: 0, p2: 0, p1_set: 0, p2_set: 0 };

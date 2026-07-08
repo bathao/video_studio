@@ -30,21 +30,112 @@ passes. Phase 0 step status:
   0-4 cross-checks against every filename final score; winner
   balance P1=260/P2=291 + a=42/b=29.
 - 🔴 **Step 2 — unanchored segmentation eval** (2026-07-08,
-  MEASURED): 1-D ROI-motion signal saturates at 59-90% association
-  recall on full matches with ~50% junk proposals; ladder rungs
-  v0-v5 (hysteresis / Otsu / near-far alternation / duration priors
-  / periodicity / semi-Markov) ALL measured, none breaks the
-  ceiling. 2_sets clean-clip start-F1 78.8% @2s. Full verdict +
-  escalation options (frame-classifier junk filter vs YOLO-pose) in
-  plan §6 step 2. Scripts: `motion_cache.py`, `eval_segmentation.py`
-  under scripts/auto_score_spike/; signal caches + trace plots in
-  scripts/auto_score_spike/out/ (gitignored).
-- ⬜ Step 3 — VLM bake-off (shortlist in plan §4.2; needs Ollama
-  approval, plan §9).
-- ⬜ Step 4 — trained-classifier spike (parallel with step 3; now
-  ALSO the leading segmentation escalation — see step 2 verdict).
-- ⬜ Step 5 — serve-side detector spike (reframed by step 6: it is a
-  set-boundary/deuce locator, not a winner signal).
+  MEASURED on all 7 matches): 1-D ROI-motion signal totals **78.8%
+  association recall (434/551), per-match range 65-94%**, ~45% junk
+  proposals; ladder rungs v0-v5 (hysteresis / Otsu / near-far
+  alternation / duration priors / periodicity / semi-Markov) ALL
+  measured, none breaks the ceiling. 2_sets clean-clip start-F1
+  78.8% @2s. Full verdict + escalation options in plan §6 step 2.
+  Scripts: `motion_cache.py`, `eval_segmentation.py` under
+  scripts/auto_score_spike/; caches + plots in out/ (gitignored).
+  **Escalation MEASURED (2026-07-08 session 2)**, singles-only per
+  operator directive (doubles excluded from train+eval everywhere;
+  data kept on disk):
+  - Frame classifier: 4 variants ALL failed held-out (static 49.7%,
+    temporal stack 60.0%, stack+aug-fix 61.1%, playzone-masked
+    51.7%) — pixel CNNs learn the venue, not the play state, with
+    only 4 training venues. Path closed; pose features
+    (`pose_features.py`, written, unmeasured) are the venue-invariant
+    successor if needed.
+  - **Miss audit changed the game**: 25/26 missed events on the worst
+    match sat ABOVE the motion threshold inside merged blobs — rapid
+    point series (~6 s apart) fuse into one interval. Fix is
+    algorithmic, not ML: **v7 recursive valley split** → singles
+    assoc-recall **76.1% → 85.5% total** (worst match 65.3→82.7%,
+    held-out 68.4→77.2%, ~1.7x proposals). Sweep tuned on train
+    singles only.
+  - Operator principle recorded: table ROI is the anchor of every
+    mask; GUI must gate on operator ROI confirm (plan §5.2); playzone
+    = ROI quad extended along its own edge vectors (perspective-true).
+  - VLM bake-off: MiniCPM-V 4.5 = 65% mapping-acc, ~chance pairwise,
+    FLAT confidence 0.9 (useless for the solver), boilerplate
+    reasons. Zero-shot VLM looks weak, consistent with the attempt-1
+    prior — strategy shifted: Phase 1 gates on segmentation only
+    (G0a); winner path (G0b) deferred until the flywheel grows the
+    corpus. RESUMED 2026-07-08 pm: partial dirs wiped; remaining 4
+    models (qwen3.5:9b / qwen3-vl:8b / gemma4:12b / qwen2.5vl:7b)
+    running on the EXACT 60 clips MiniCPM saw (`--ids-file` added to
+    `vlm_bakeoff.py` — corpus rebuilds no longer change the sample).
+  - **Flywheel turn 1 (2026-07-08 pm)**: first new production match
+    archived (match_001_20260708_143451, source 0611_Tim_2-3.MP4,
+    singles, 5 sets, 90 events, P1 = near per the new convention).
+    Corpus rebuilt: 622 → 712 records (641 dataset events, 9 unique
+    matches). **Truly-unseen v7 test on it: 85.6% (77/90)** with the
+    frozen tuned config — matches the 85.5% train average; no
+    overfit. ROI auto-detect hit `yolo_seg+orb_agree` on the new
+    venue. Assoc metric + tuned config persisted in
+    `eval_unseen.py` (was ad-hoc).
+  - 🟢 **G0a BAR REACHED (2026-07-08 pm)**: miss audits showed the
+    residual misses were (a) blobs that CONTAIN the event with a
+    late fetch-tail end (fine for a review GUI → coverage metric)
+    and (b) short spikes >= p77 killed by `min_rally_s=1.5` (not
+    quiet rallies). **v7-tuned2** (`min_rally_s=1.0, pct_lo=55`):
+    coverage recall **train 98.0% / held-out 94.9% / truly-unseen
+    97.8% / total 97.5%**, proposals ~2x true events (~50%
+    precision → GUI review burden ~155-230 cards/match; pose junk
+    filter demoted to click-count optimization). Details + caveat
+    in plan §6 step 2. Segmentation no longer blocks Phase 1
+    semi-auto GUI.
+  - 🟢 **Phase 1 semi-auto GUI BUILT (2026-07-08 pm, uncommitted)**:
+    Live Score panel split into Manual|Auto tabs (manual DOM moved
+    verbatim, score.js untouched). Auto tab flow: mandatory ROI
+    confirm gate (reuses the Auto Trim modal) → "Detect rallies"
+    (new `backend/auto_score/` package: v7-tuned2 port +
+    `/api/auto_score/*` SSE job pipeline mirroring auto-trim, cache
+    at temp/auto_score_cache/) → keyboard-first review list
+    (1/2=winner, Space=accept, X=delete, row click seeks) → Apply
+    writes score_events with `source:"auto"` + recompute. Review
+    draft persists in `project.auto_score_draft` (new ProjectData
+    field; ScoreEvent gained `source`). Frontend package
+    `frontend/auto_score/` (4 ES modules). Tests 209 → 216 (7 new
+    pure-logic segmenter tests incl. frozen-config guard). Verified
+    E2E in headless Edge (Playwright, 19/19 real checks: live
+    decode on a 6-min clip → 48 proposals, keyboard verdicts,
+    hotkey interception, apply, draft save/load round-trip, 131 ms
+    cache-hit rerun; the one flagged console 404 is the pre-existing
+    by-design avatar probe). Operator must restart run.bat to get
+    the new routes.
+- 🔴 **Step 3 — VLM bake-off** (2026-07-08/09, MEASURED): 4 models ×
+  same 60 clips; zero-shot = CHANCE on the honest derived-mapping
+  metric (MiniCPM 53.3%, gemma4 50.9%, Qwen3-VL 45.3%, Qwen3.5
+  41.3%); the fitted metric everyone showed 65-78% on is inflated.
+  Qwen3.5 alone hid a ~59% flip-inverted signal (pairwise 58.8%);
+  **prompt-B probe (geometry-defined near/far) recovered it: 60.4%**
+  — best zero-shot number; MiniCPM+B control stayed at chance
+  (46.7%), confirming prompt B can't conjure signal (gemma4 variant
+  skipped on that basis). Operator backfilled P1-side bits
+  (`side_truth.json`, artifact page) → `rescore_vlm.py` scores TRUE
+  accuracy with no mapping fit. Full table in plan §6 step 3. G0b:
+  **Qwen3.5-9B + geometry prompt is the fine-tune base**; zero-shot
+  tops out ~60%, so fine-tune-on-flywheel remains the only path to
+  >=90%.
+- 🔴 Step 4 — trained-classifier spike: the 4-variant pixel-CNN
+  failure in the step-2 escalation block IS this step's measurement
+  (learned venue, not play state, at 4 venues). Revisit only after
+  the flywheel adds venues; pose features are the venue-invariant
+  successor.
+- 🟠 Step 5 — side-identity tracker MEASURED 2026-07-09
+  (`side_identity.py` v2, near-player lower-body re-ID): boundary
+  swaps 14/18, controls 19/22, set-5 verdicts 2/2 with clean
+  margins — viable SOFT set-boundary/mapping evidence + set-5 bit
+  resolver (details plan §6 step 5). Serve-side detector MEASURED
+  (`serve_side_spike.py`, pose aggregates over serve/pre-serve
+  windows, derived labels incl. the free set-1-server bit →
+  baseline ~53%): best held-out **~61%** (near-far table-distance
+  contrast in the first 2 s) — real but too weak to locate set
+  boundaries alone; deprioritized in favor of the side-identity
+  tracker. Upgrade path if ever needed: higher-fps serve-window
+  sampling + wrist-height (ball-toss) cues.
 - ✅ **Step 6 — solver simulation** (2026-07-08):
   `solver_sim.py`. Grammar multiplier for winner-only observations
   is ~1.0 (NOT the rescuer the plan assumed — §4 revised); per-set

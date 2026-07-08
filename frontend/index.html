@@ -185,34 +185,80 @@
 
         <!-- centre column: Live Score + Timeline stacked -->
         <div class="col-span-4 flex flex-col gap-4">
-          <section class="panel">
+          <section class="panel" id="live-score-panel">
             <h2 class="panel-h">Live Score</h2>
-            <div class="grid grid-cols-2 gap-2 text-center">
-              <div class="bg-ink-800 rounded-md p-2 border border-ink-700">
-                <div class="text-[11px] uppercase tracking-wider text-slate-400" id="lbl-p1">P1</div>
-                <div class="flex justify-center items-baseline gap-1">
-                  <div class="text-5xl font-bold text-accent-400 leading-tight" id="score-p1">0</div>
-                  <div class="text-xs text-slate-400">pts</div>
-                </div>
-                <div class="text-warn-400 text-xs">Sets: <span id="set-p1">0</span></div>
-              </div>
-              <div class="bg-ink-800 rounded-md p-2 border border-ink-700">
-                <div class="text-[11px] uppercase tracking-wider text-slate-400" id="lbl-p2">P2</div>
-                <div class="flex justify-center items-baseline gap-1">
-                  <div class="text-5xl font-bold text-accent-400 leading-tight" id="score-p2">0</div>
-                  <div class="text-xs text-slate-400">pts</div>
-                </div>
-                <div class="text-warn-400 text-xs">Sets: <span id="set-p2">0</span></div>
-              </div>
+            <!-- Manual | Auto tabs. Manual = the original panel DOM moved
+                 verbatim (same ids, score.js untouched); Auto hosts the
+                 rally-proposal review flow (frontend/auto_score/).
+                 Switching is pure show/hide wired in auto_score/index.js. -->
+            <div class="flex bg-ink-800 border border-ink-700 rounded-md p-0.5 mb-2" role="tablist">
+              <button id="tab-score-manual" type="button" role="tab"
+                class="flex-1 px-2 py-1 text-xs rounded transition-colors bg-accent-500 text-white">Manual</button>
+              <button id="tab-score-auto" type="button" role="tab"
+                class="flex-1 px-2 py-1 text-xs rounded transition-colors text-slate-300 hover:text-white">Auto</button>
             </div>
-            <div class="grid grid-cols-2 gap-2 mt-2">
-              <button id="btn-p1" class="btn-score" title="A">+ P1</button>
-              <button id="btn-p2" class="btn-score" title="D">+ P2</button>
-              <button id="btn-p1-minus" class="btn-score-minus" title="Remove last P1 point">− P1</button>
-              <button id="btn-p2-minus" class="btn-score-minus" title="Remove last P2 point">− P2</button>
+            <div id="score-tab-manual">
+              <div class="grid grid-cols-2 gap-2 text-center">
+                <div class="bg-ink-800 rounded-md p-2 border border-ink-700">
+                  <div class="text-[11px] uppercase tracking-wider text-slate-400" id="lbl-p1">P1</div>
+                  <div class="flex justify-center items-baseline gap-1">
+                    <div class="text-5xl font-bold text-accent-400 leading-tight" id="score-p1">0</div>
+                    <div class="text-xs text-slate-400">pts</div>
+                  </div>
+                  <div class="text-warn-400 text-xs">Sets: <span id="set-p1">0</span></div>
+                </div>
+                <div class="bg-ink-800 rounded-md p-2 border border-ink-700">
+                  <div class="text-[11px] uppercase tracking-wider text-slate-400" id="lbl-p2">P2</div>
+                  <div class="flex justify-center items-baseline gap-1">
+                    <div class="text-5xl font-bold text-accent-400 leading-tight" id="score-p2">0</div>
+                    <div class="text-xs text-slate-400">pts</div>
+                  </div>
+                  <div class="text-warn-400 text-xs">Sets: <span id="set-p2">0</span></div>
+                </div>
+              </div>
+              <div class="grid grid-cols-2 gap-2 mt-2">
+                <button id="btn-p1" class="btn-score" title="A">+ P1</button>
+                <button id="btn-p2" class="btn-score" title="D">+ P2</button>
+                <button id="btn-p1-minus" class="btn-score-minus" title="Remove last P1 point">− P1</button>
+                <button id="btn-p2-minus" class="btn-score-minus" title="Remove last P2 point">− P2</button>
+              </div>
+              <button id="btn-undo" class="btn-secondary w-full mt-2" title="Ctrl+Z">Undo</button>
+              <p class="text-[11px] text-slate-500 mt-1.5 leading-snug">Auto rule: 11 pts, lead by 2. Set won → score resets to 0-0.</p>
             </div>
-            <button id="btn-undo" class="btn-secondary w-full mt-2" title="Ctrl+Z">Undo</button>
-            <p class="text-[11px] text-slate-500 mt-1.5 leading-snug">Auto rule: 11 pts, lead by 2. Set won → score resets to 0-0.</p>
+            <div id="score-tab-auto" class="hidden">
+              <!-- Step 1: mandatory ROI gate (operator directive: a
+                   slightly-off table ROI silently corrupts detection). -->
+              <div class="bg-ink-800 rounded-md p-2 border border-ink-700 text-xs flex items-center gap-2">
+                <span id="as-roi-status" class="flex-1 text-slate-400">ROI: not confirmed</span>
+                <button id="as-btn-roi" class="btn-secondary text-xs whitespace-nowrap">Confirm ROI…</button>
+              </div>
+              <!-- Step 2: detect rallies (SSE job). -->
+              <div class="flex gap-2 mt-2">
+                <button id="as-btn-detect" class="btn-primary flex-1 text-xs" disabled>Detect rallies</button>
+                <button id="as-btn-cancel" class="btn-secondary text-xs hidden">Cancel</button>
+              </div>
+              <div id="as-progress-wrap" class="hidden mt-2">
+                <div class="flex justify-between text-[11px] text-slate-400">
+                  <span id="as-stage">—</span><span id="as-status">running</span>
+                </div>
+                <div class="h-1.5 bg-ink-800 rounded overflow-hidden mt-1">
+                  <div id="as-progress" class="h-full bg-accent-500 transition-all" style="width:0%"></div>
+                </div>
+              </div>
+              <!-- Step 3: keyboard-first review list. -->
+              <div id="as-review-wrap" class="hidden mt-2">
+                <div class="flex justify-between items-center text-[11px] text-slate-400 mb-1">
+                  <span id="as-review-summary">0 proposals</span>
+                  <span class="text-slate-500">1/2=winner · Space=next · X=del</span>
+                </div>
+                <ul id="as-review-list" class="max-h-64 overflow-y-auto text-xs divide-y divide-ink-800 border border-ink-700 rounded-md"></ul>
+                <div class="flex gap-2 mt-2">
+                  <button id="as-btn-apply" class="btn-primary flex-1 text-xs" disabled>Apply 0 events</button>
+                  <button id="as-btn-discard" class="btn-secondary text-xs">Discard</button>
+                </div>
+              </div>
+              <p id="as-hint" class="text-[11px] text-slate-500 mt-1.5 leading-snug">Semi-auto: detector proposes rally ends, you enter winners. Row click seeks the video.</p>
+            </div>
           </section>
 
           <section class="panel">

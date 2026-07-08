@@ -455,6 +455,110 @@ def segment_v5(
     return [(a, b) for a, b in segs if b - a >= min_rally_s]
 
 
+def segment_v6(
+    info: dict,
+    *,
+    pct_hi: float = 60.0,
+    lo_frac: float = 0.83,
+    exit_sustain_s: float = 1.2,
+    start_dip_s: float = 0.4,
+    min_rally_s: float = 1.5,
+    prob_min: float = 0.5,
+    recover_prob: float = 0.6,
+    recover_sustain_s: float = 1.5,
+) -> list[tuple[float, float]]:
+    """Rung 6 (vision escalation): motion candidates x P(rally) timeline
+    from the trained frame classifier (info['prob'] @ info['prob_fps']).
+    (a) candidates from a recall-leaning hysteresis scan are KEPT only
+    if their mean P(rally) >= prob_min (junk filter); (b) gaps between
+    kept candidates are scanned for sustained high-P(rally) runs the
+    motion signal missed (recovery)."""
+    fps = float(info["fps"])
+    prob = info["prob"]
+    pfps = float(info["prob_fps"])
+    w = int(round(BALANCED.smooth_window_s * fps))
+    sm = smooth_motion(info["motion"], w)
+    thr_hi = adaptive_threshold(sm, pct_hi)
+    cands = _hysteresis_scan(
+        sm, fps, thr_hi, thr_hi * lo_frac,
+        enter_sustain_s=0.3, exit_sustain_s=exit_sustain_s,
+        start_dip_s=start_dip_s, min_rally_s=min_rally_s,
+    )
+
+    def mean_prob(a: float, b: float) -> float:
+        i0, i1 = int(a * pfps), max(int(a * pfps) + 1, int(b * pfps))
+        seg = prob[i0:min(i1, len(prob))]
+        return float(seg.mean()) if len(seg) else 0.0
+
+    kept = [(a, b) for a, b in cands if mean_prob(a, b) >= prob_min]
+
+    # recovery: sustained P(rally) runs inside the gaps
+    sus = max(1, int(round(recover_sustain_s * pfps)))
+    hot = prob >= recover_prob
+    edges = np.flatnonzero(np.diff(np.concatenate([[0], hot.view(np.int8), [0]])))
+    runs = [(s / pfps, e / pfps) for s, e in edges.reshape(-1, 2) if e - s >= sus]
+    recovered = []
+    for a, b in runs:
+        mid = (a + b) / 2
+        if not any(ka - 2 <= mid <= kb + 2 for ka, kb in kept):
+            recovered.append((a, b))
+    return sorted(kept + recovered)
+
+
+def segment_v7(
+    info: dict,
+    *,
+    pct_hi: float = 70.0,
+    pct_lo: float = 60.0,
+    exit_sustain_s: float = 1.2,
+    start_dip_s: float = 0.4,
+    min_rally_s: float = 1.5,
+    split_over_s: float = 14.0,
+    valley_frac: float = 0.75,
+    edge_guard_s: float = 2.5,
+) -> list[tuple[float, float]]:
+    """Rung 7 (from the 2026-07-08 miss audit): rapid point series
+    (serve winners ~6 s apart) merge into one long active blob — 25/26
+    missed events on the worst match sat ABOVE threshold inside merged
+    intervals. v7 = v1 hysteresis + recursive valley split: any
+    interval longer than `split_over_s` is cut at its deepest internal
+    valley (must be below `valley_frac` x the interval's median level,
+    at least `edge_guard_s` from both edges), recursively."""
+    fps = float(info["fps"])
+    w = int(round(BALANCED.smooth_window_s * fps))
+    sm = smooth_motion(info["motion"], w)
+    thr_hi = adaptive_threshold(sm, pct_hi)
+    thr_lo = adaptive_threshold(sm, pct_lo)
+    base = _hysteresis_scan(
+        sm, fps, thr_hi, thr_lo,
+        enter_sustain_s=0.3, exit_sustain_s=exit_sustain_s,
+        start_dip_s=start_dip_s, min_rally_s=min_rally_s,
+    )
+
+    guard = int(edge_guard_s * fps)
+
+    def split(a_i: int, b_i: int, out: list) -> None:
+        if (b_i - a_i) / fps <= split_over_s or b_i - a_i <= 2 * guard:
+            out.append((a_i, b_i))
+            return
+        seg = sm[a_i + guard:b_i - guard]
+        k = int(np.argmin(seg))
+        cut = a_i + guard + k
+        level = float(np.median(sm[a_i:b_i]))
+        if seg[k] >= valley_frac * level:
+            out.append((a_i, b_i))  # no meaningful valley — keep whole
+            return
+        split(a_i, cut, out)
+        split(cut, b_i, out)
+
+    result: list[tuple[int, int]] = []
+    for a, b in base:
+        split(int(a * fps), int(b * fps), result)
+    return [
+        (a / fps, b / fps) for a, b in result if (b - a) / fps >= min_rally_s
+    ]
+
+
 SEGMENTERS = {
     "v0": lambda info, **kw: segment_v0(info["motion"], float(info["fps"]), **kw),
     "v1": lambda info, **kw: segment_v1(info["motion"], float(info["fps"]), **kw),
@@ -462,6 +566,8 @@ SEGMENTERS = {
     "v3": segment_v3,
     "v4": segment_v4,
     "v5": segment_v5,
+    "v6": segment_v6,
+    "v7": segment_v7,
 }
 
 

@@ -84,6 +84,36 @@ _auto_trim_jobs: dict[str, AutoTrimJobState] = {}
 _auto_trim_lock = threading.Lock()
 
 
+# Auto-score (Live Score Auto tab) job registry — same shape as
+# auto-trim: one dict + one lock, each job owning an SSE event queue.
+_AUTOSCORE_CACHE_DIR = ROOT_DIR / "temp" / "auto_score_cache"
+
+
+@dataclass
+class AutoScoreJobState:
+    """Per-job state for one rally-segmentation run (Auto Score tab).
+
+    Same concurrency contract as AutoTrimJobState: primitive fields are
+    eventually-consistent status display; `proposals` must be PUBLISHED
+    (built locally, assigned once), never mutated in place."""
+    job_id: str
+    status: str = "queued"  # queued | running | done | error | cancelled
+    progress: float = 0.0
+    stage: str = ""
+    error: str = ""
+    cancel: bool = False
+    proposals: list = field(default_factory=list)
+    cache_key: str = ""
+    cache_hit: bool = False
+    started_at: float = 0.0
+    finished_at: float = 0.0
+    event_queue: "queue.Queue" = field(default_factory=queue.Queue)
+
+
+_auto_score_jobs: dict[str, AutoScoreJobState] = {}
+_auto_score_lock = threading.Lock()
+
+
 # Job-registry eviction. Neither registry was ever pruned, so a long
 # editing session accumulated every RenderState / AutoTrimJobState (the
 # latter owning an unbounded queue.Queue) for the life of the process.

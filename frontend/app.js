@@ -23,6 +23,7 @@ import { syncHighlights, toggleHighlightMark } from './highlights.js';
 import { syncTrims, markTrimStart, markTrimEnd } from './trims.js';
 import { setSyncAllUI, setSyncInfoFromInputs as setProjectIoSync } from './project_io.js';
 import { setSyncInfoFromInputs as setRenderSync } from './render.js';
+import { renderReviewList } from './auto_score/index.js';
 import { syncScoreboardPreview } from './scoreboard_preview.js';
 import { syncTimeline } from './timeline.js';
 import { toast } from './toast.js';
@@ -117,6 +118,9 @@ function syncAllUI() {
   syncEvents();
   syncInfoFromInputs();
   syncTimeline();
+  // Auto Score tab: ROI-gate status + restore a saved review draft
+  // after project load / undo.
+  renderReviewList();
   refreshAvatarThumb('p1');
   refreshAvatarThumb('p2');
   refreshAvatarThumb('p3');

@@ -1,0 +1,18 @@
+{
+  "_doc": [
+    "Operator-provided ground truth (2026-07-08) — NOT regenerable, keep committed.",
+    "p1_side_set1: which side of the camera P1 (score key A) stands on in set 1.",
+    "Sides swap after EVERY set, so set k (0-based) side = p1_side_set1 flipped k times.",
+    "set5_swap_at_5: whether players ALSO swapped mid-set-5 when one side reached 5",
+    "points (optional in these friendly matches); null = match had no 5th set.",
+    "Going forward the operator convention is P1 = near player in set 1 (plan section 3.2)."
+  ],
+  "matches": {
+    "0331_Trung_1_2-3.MP4": { "p1_side_set1": "near", "set5_swap_at_5": true },
+    "0406_DatDo_0-3.MP4": { "p1_side_set1": "far", "set5_swap_at_5": null },
+    "0510_HoangHuuHa_1-3.MP4": { "p1_side_set1": "near", "set5_swap_at_5": null },
+    "0510_NguyenKhanhTan_3-1.MP4": { "p1_side_set1": "near", "set5_swap_at_5": null },
+    "0529_Thao_Viet_1-3.MP4": { "p1_side_set1": "near", "set5_swap_at_5": null },
+    "0611_Tim_2-3.MP4": { "p1_side_set1": "near", "set5_swap_at_5": false }
+  }
+}

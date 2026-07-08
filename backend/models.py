@@ -65,6 +65,10 @@ class ScoreEvent(BaseModel):
     p2_score: int = 0
     p1_set: int = 0
     p2_set: int = 0
+    # "manual" (operator key press, default for legacy projects) or
+    # "auto" (Auto Score tab's Apply). Same replace-only-own-output
+    # rule as TrimSegment.source.
+    source: Literal["manual", "auto"] = "manual"
 
 
 class ProjectData(BaseModel):
@@ -72,6 +76,10 @@ class ProjectData(BaseModel):
     trim_segments: list[TrimSegment] = Field(default_factory=list)
     highlights: list[Highlight] = Field(default_factory=list)
     score_events: list[ScoreEvent] = Field(default_factory=list)
+    # Auto Score review-session draft (proposals + review state), shape
+    # owned by frontend/auto_score/. Persisted with the project so a
+    # half-finished review survives save/load. None = no session.
+    auto_score_draft: Optional[dict] = None
 
 
 class RenderRequest(BaseModel):

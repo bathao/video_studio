@@ -34,7 +34,8 @@ Python is pinned `>=3.13` in `pyproject.toml`.
 ```
 backend/
   server/            FastAPI endpoints (videos, projects, render jobs,
-                     avatars, auto-trim). 9 modules under the package:
+                     avatars, auto-trim, auto-score). 10 modules under
+                     the package:
     __init__.py        Re-exports `app` + `main` so historical entry
                        points keep working (`uvicorn backend.server:app`,
                        `python -m backend.server`).
@@ -75,6 +76,24 @@ backend/
                        `_video_identity`, `_extract_refframe`,
                        `_extract_multi_refframes`,
                        `_validate_roi_corners`).
+    routes_auto_score.py `/api/auto_score/*` (start / SSE events /
+                       cancel / job) — unanchored rally-segmentation
+                       jobs for the Live Score Auto tab. Deliberate
+                       sibling of the auto-trim job pipeline (thread +
+                       queue + SSE + result cache at
+                       temp/auto_score_cache/<sha1>.json, progress
+                       events skipped on cache-hit replay).
+  auto_score/        Auto Score package (Phase 1, semi-auto). 2 modules:
+    __init__.py        Re-exports the public API.
+    rally_segmenter.py `segment_rallies` (pure) + `run_rally_segmentation`
+                       (probe → compute_motion_signal → segment →
+                       proposal dicts). The v7-tuned2 recipe from the
+                       Phase 0 spike (hysteresis + recursive valley
+                       split; coverage recall 97.5% on corpus singles).
+                       `TUNED2` params are FROZEN — change only with a
+                       fresh scripts/auto_score_spike/eval_unseen.py
+                       run. Reuses rally_detector's decode machinery
+                       read-only.
   renderer/          Render orchestrator package. Owns the public
                      `run_render(plan)`. 6 modules:
     __init__.py        Re-exports public API (RenderPlan, RenderContext,
@@ -303,6 +322,32 @@ frontend/
                        `refreshGroundtruthCount`, `onConfirmClick`,
                        plus the small `buildQuery` / `videoIdentBody`
                        helpers.
+  auto_score/        Live Score Auto tab package (Phase 1 semi-auto:
+                     rally proposals + operator enters winners; winner
+                     detection is Gate G0b, not built). ROI confirm is
+                     a MANDATORY gate — the tab's "Confirm ROI…" opens
+                     the Auto Trim modal and Detect stays disabled
+                     until `project.info.roi_quadrilateral` exists.
+                     Review data persists in `project.auto_score_draft`
+                     (survives save/load); Apply writes score_events
+                     with `source:"auto"` (replace-own-output rule,
+                     manual events untouched). 4 ES modules:
+    index.js           Entry — tab switching (Manual|Auto), button
+                       wiring, keyboard listener arming. Importing
+                       arms the layer (repo convention).
+    state.js           `els` DOM refs + transient session state (SSE
+                       handle, cursor, progress). Proposal data does
+                       NOT live here — read project.auto_score_draft
+                       at use time.
+    api.js             startJob / attachSse (named handlers, sibling
+                       of auto_trim/detection.js) / cancel / reset.
+    review.js          Review list (ONE innerHTML string + delegated
+                       clicks), keyboard-first flow (1/2=winner,
+                       Space=accept, X=delete, ↑/↓=cursor+seek; row
+                       click seeks t_end−3s), Apply/Discard,
+                       `syncAutoScoreUI`. Keydown registers before
+                       app.js's global hotkeys and
+                       stopImmediatePropagation's while reviewing.
   project_io.js      Save / Load Project + load modal.
   render.js          startRender + pollRender + cancel + intro-style
                      mutual exclusion + Open output folder.
@@ -703,7 +748,7 @@ trim detection backend).
 ## Don't
 
 - Don't add tests next to the modules; if you add tests put them in a
-  `tests/` directory. ~209 tests live there; pure-logic only (segment
+  `tests/` directory. ~216 tests live there; pure-logic only (segment
   math, builder smoke, playlist + remap, quad geometry, job-registry
   eviction, helper formatters), no ffmpeg execution. `tests/conftest.py`
   creates `temp/` so the pinned basetemp works on fresh checkouts (CI).
@@ -752,5 +797,6 @@ trim detection backend).
 | ROI confirm → groundtruth append     | `/api/auto_trim/confirm_roi` in [backend/server/routes_auto_trim.py](backend/server/routes_auto_trim.py); files land in `dataset/roi_groundtruth/<video_id>.{json,jpg}` |
 | YOLO ROI training                    | `scripts/build_yolo_dataset.py` then `scripts/train_roi_seg.py` → `assets/models/roi_seg.pt` |
 | Auto Trim modal (frontend)           | [frontend/auto_trim/](frontend/auto_trim/) — public entry [frontend/auto_trim/index.js](frontend/auto_trim/index.js); button hosted in [frontend/trims.js](frontend/trims.js) |
+| Auto Score tab (rally proposals + review) | backend: `segment_rallies` in [backend/auto_score/rally_segmenter.py](backend/auto_score/rally_segmenter.py) + [backend/server/routes_auto_score.py](backend/server/routes_auto_score.py); frontend: [frontend/auto_score/](frontend/auto_score/) (tab DOM in [frontend/index.html](frontend/index.html) `#score-tab-auto`) |
 | Add a new HTTP endpoint              | pick the matching `backend/server/routes_*.py` (videos / projects / render / auto_trim), or [backend/server/app.py](backend/server/app.py) for cross-cutting endpoints |
 | Add new project field                | [backend/models.py](backend/models.py) `ProjectInfo`, then frontend `project.info` schema in [frontend/state.js](frontend/state.js), then UI input in [frontend/index.html](frontend/index.html) |

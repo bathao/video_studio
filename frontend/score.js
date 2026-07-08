@@ -123,6 +123,7 @@ export function scorePoint(who) {
     p2_score: 0,
     p1_set: 0,
     p2_set: 0,
+    source: 'manual',
   });
   recomputeAllEvents();
   syncLiveFromTime(player.currentTime);
