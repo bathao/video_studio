@@ -1,10 +1,12 @@
-# TODO
+﻿# TODO
 
 ## RESUME POINTER 2026-07-10 — Auto Score Phase 0 measured + Phase 1 semi-auto GUI shipped
 
 All Auto Score work below is committed on `v3-dev` (`b516687` step 1
-corpus, `8f4d02c` steps 2+6, `10708ba` G0a + Phase 1 GUI + steps 3+5).
-**These 3 commits are NOT pushed yet** — `origin/v3-dev` is 3 behind.
+corpus, `8f4d02c` steps 2+6, `10708ba` G0a + Phase 1 GUI + steps 3+5,
+`893b263` side-info + handicap labels + YOLO retrain flywheel +
+training dashboard + retro-labeling → corpus 7/15).
+**These 4 commits are NOT pushed yet** — `origin/v3-dev` is 4 behind.
 Working state after the 2026-06-05 feature freeze is described in
 [HISTORY.md](HISTORY.md); the 2026-07-07 improvement plan (complete)
 is in the next section.
@@ -149,7 +151,7 @@ passes. Phase 0 step status:
   reach >=90-95% raw). Bonus: all 7 real corpora sequences replay
   legally under the grammar; set structure matches every filename.
 
-- 🟢 **Side-info training labels in the GUI (2026-07-10, uncommitted)**:
+- 🟢 **Side-info training labels in the GUI (2026-07-10, committed 893b263)**:
   three new `ProjectInfo` fields captured at production time so the
   flywheel corpus carries side/swap truth without the post-hoc
   `side_truth.json` backfill — `p1_side_set1` ("near"/"far"/null,
@@ -184,7 +186,7 @@ passes. Phase 0 step status:
   headless Edge (19/19: visibility toggle, defaults, save/load
   round-trip, legacy reset, undo).
 
-- 🟢 **Handicap (điểm chấp) support (2026-07-10, uncommitted)**: new
+- 🟢 **Handicap (điểm chấp) support (2026-07-10, committed 893b263)**: new
   `ProjectInfo.handicap_receiver` (0|1|2) + `handicap_pattern` (digit
   string, one digit per set, CYCLING — "232" → set4 wraps to 2; digit
   n = receiver starts the set leading n–0, sets still play to 11
@@ -208,7 +210,7 @@ passes. Phase 0 step status:
   scoring on a live video: 11×A wins the set at 11–2, next set cycles
   to 0–2, retro-recompute 222→020 verified).
 
-- 🟢 **YOLO retrain flywheel closed (2026-07-10, uncommitted)**:
+- 🟢 **YOLO retrain flywheel closed (2026-07-10, committed 893b263)**:
   (1) `/api/auto_trim/groundtruth_count` reports
   `confirms_since_yolo_train` (confirm events newer than
   `assets/models/roi_seg.pt` mtime) + `yolo_model_exists`. (2) NEW
@@ -242,7 +244,7 @@ passes. Phase 0 step status:
   not detection failures.
   Tests 238 → 251; smoke E2E 4/4.
 
-- 🟢 **Training-status dashboard (2026-07-10, uncommitted)**: top-bar
+- 🟢 **Training-status dashboard (2026-07-10, committed 893b263)**: top-bar
   "📊 Training" button (next to Save/Load/Render) opens a popup that
   answers "is my manual production paying off, and is any training
   action due?" without leaving the web UI. (1) NEW
@@ -268,7 +270,7 @@ passes. Phase 0 step status:
   Tests 251 → 260; E2E in headless Edge 10/10 on real data
   (1/15 labeled, 56 ROI videos, retrain button disabled at staleness 0).
 
-- 🟢 **Retro-labeling of archived entries (2026-07-10, uncommitted)**:
+- 🟢 **Retro-labeling of archived entries (2026-07-10, committed 893b263)**:
   `dataset.apply_retro_labels(slug, labels)` fills side-info into an
   archived entry WITHOUT re-render — the expensive label (score
   events) already sits in `dataset/<slug>/project.json`; only the
@@ -279,8 +281,10 @@ passes. Phase 0 step status:
   auto-filled sections untouched), manifest `camera_angle` /
   `match_type` + `auto_score_train_eligible` synced. Applied the
   operator's answers to all 8 pre-GUI entries the same evening: 6
-  singles labeled (5 near + 1 far, all standard angle, swap yes,
-  set5 mid-swap yes where reached), and 2 entries turned out to be
+  singles labeled (5 near + 1 far, all standard angle, swap yes;
+  set-5 mid-swap where reached: Trung yes, Tim NO — a rare
+  no-mid-swap exception, valuable in the corpus), and 2 entries
+  turned out to be
   **doubles mis-recorded as singles** (pre-match_type archives) — now
   corrected + excluded. Corpus: **7/15 labeled, 0 unlabeled left**.
   No GUI (operator preference — answers gathered in chat, applied by

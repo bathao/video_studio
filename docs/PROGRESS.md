@@ -1,7 +1,7 @@
-# Progress Status
+﻿# Progress Status
 
-Last update: 2026-07-10 (side-info training labels incl. camera-angle tag + handicap support + one-click YOLO retrain flywheel with auto old-vs-new comparison + top-bar training-status dashboard with epoch-level retrain progress + retro-labeling of the 8 pre-GUI archive entries → corpus 7/15 labeled, all uncommitted — see Referee logic, Auto Score + Auto Trim sections). Tests: **265 pass**.
-**Live Score automation (Auto Score)** — Phase 0 spike MEASURED (steps 1,2,3,5,6; plan in [AUTO_SCORE_PLAN.md](AUTO_SCORE_PLAN.md)): segmentation **G0a reached** with v7-tuned2 (coverage recall 97.5% total, truly-unseen 97.8%); zero-shot VLM winner detection tops out ~60% (Qwen3.5-9B + geometry prompt = fine-tune base) so **G0b deferred** until the flywheel grows the corpus (~15-20 matches). **Phase 1 semi-auto GUI SHIPPED**: Live Score Manual|Auto tabs, ROI-gated rally detect (`backend/auto_score/` + `/api/auto_score/*` SSE), keyboard-first review, Apply → `source:"auto"` events; 216 tests; E2E-verified in headless Edge. Committed on `v3-dev` as `b516687` + `8f4d02c` + `10708ba` (**not pushed yet**). Step detail lives in [TODO.md](TODO.md).
+Last update: 2026-07-10 (side-info training labels incl. camera-angle tag + handicap support + one-click YOLO retrain flywheel with auto old-vs-new comparison + top-bar training-status dashboard with epoch-level retrain progress + retro-labeling of the 8 pre-GUI archive entries → corpus 7/15 labeled; all committed as 893b263 — see Referee logic, Auto Score + Auto Trim sections). Tests: **265 pass**.
+**Live Score automation (Auto Score)** — Phase 0 spike MEASURED (steps 1,2,3,5,6; plan in [AUTO_SCORE_PLAN.md](AUTO_SCORE_PLAN.md)): segmentation **G0a reached** with v7-tuned2 (coverage recall 97.5% total, truly-unseen 97.8%); zero-shot VLM winner detection tops out ~60% (Qwen3.5-9B + geometry prompt = fine-tune base) so **G0b deferred** until the flywheel grows the corpus (~15-20 matches). **Phase 1 semi-auto GUI SHIPPED**: Live Score Manual|Auto tabs, ROI-gated rally detect (`backend/auto_score/` + `/api/auto_score/*` SSE), keyboard-first review, Apply → `source:"auto"` events; 216 tests; E2E-verified in headless Edge. Committed on `v3-dev` as `b516687` + `8f4d02c` + `10708ba` + `893b263` (**4 commits not pushed yet**). Step detail lives in [TODO.md](TODO.md).
 Previous milestone 2026-07-07: improvement plan COMPLETE (Phase 0 housekeeping `a20d7dc`+`ffd7d54`, Phase 1 backend robustness `715d0c1`, Phase 2 frontend correctness/UX `7508d91`, Phase 3 skipped, Phase 4 perf plumbing, Phase 5 tests + debt, Phase 6 backlog picks — dry-run script, GitHub Actions CI, Python pin).
 
 ## Module map
@@ -372,7 +372,7 @@ render started splicing a full 50% replay after every highlight.)
       manual retrain on 56 videos / 126 images → mask mAP50-95 0.908 /
       mAP50 0.995; A/B verdict TAIL IMPROVED (within-2% 50→53/56,
       worst 2.81→2.28%).
-- ✅ Training-status dashboard (2026-07-10, uncommitted): top-bar
+- ✅ Training-status dashboard (2026-07-10, committed 893b263): top-bar
       "📊 Training" button → popup with (a) auto-score corpus readiness
       toward the G0b fine-tune target (15 labeled matches; unique
       source videos, newest render wins; labeled = singles + score
@@ -389,14 +389,14 @@ render started splicing a full 50% replay after every highlight.)
       milestone decision — the popup reports readiness, it does not
       pretend to start a nonexistent pipeline. Tests **260 pass**;
       E2E 10/10 in headless Edge on real data.
-- ✅ Retro-labeling of archived entries (2026-07-10, uncommitted):
+- ✅ Retro-labeling of archived entries (2026-07-10, committed 893b263):
       `dataset.apply_retro_labels` fills the missing side-info /
       match_type labels into old `dataset/<slug>/` snapshots without
       re-render (whitelisted fields, notes.md provenance section,
       manifest sync). All 8 pre-GUI entries labeled from operator
-      answers: 6 singles (5 near / 1 far), 2 mis-recorded doubles
-      corrected + excluded. Corpus 7/15 labeled, 0 unlabeled left.
-      Tests **265 pass**.
+      answers: 6 singles (5 near / 1 far; set-5 mid-swap Trung yes,
+      Tim no), 2 mis-recorded doubles corrected + excluded. Corpus
+      7/15 labeled, 0 unlabeled left. Tests **265 pass**.
 
 ### Auto Trim (Phase 1b — rally detection end-to-end, shipped 2026-05-26)
 - ✅ Score-event-anchored rally detector (`backend/rally_detector.py`).
@@ -474,7 +474,7 @@ render started splicing a full 50% replay after every highlight.)
       fields, cache-hit rerun in 131 ms.
 - Winner detection / solver / VLM = Gate G0b, deferred until the
       manual-production flywheel grows the corpus (~15-20 matches).
-- ✅ Side-info training labels (2026-07-10, uncommitted): Setup panel
+- ✅ Side-info training labels (2026-07-10, committed 893b263): Setup panel
       "Side info (auto-score training)" block, singles only (hidden in
       Double mode). Four `ProjectInfo` fields — `camera_angle`
       (standard/side/other; the P1-side select's axis follows it:
