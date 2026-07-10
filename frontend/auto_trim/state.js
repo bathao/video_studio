@@ -28,6 +28,8 @@ export const els = {
   infoNnList: $('at-info-nn-list'),
   log: $('at-log'),
   gtCount: $('at-gt-count'),
+  gtStale: $('at-gt-stale'),
+  retrain: $('at-retrain'),
   redetect: $('at-redetect'),
   resetDefault: $('at-reset-default'),
   clearLog: $('at-clear-log'),

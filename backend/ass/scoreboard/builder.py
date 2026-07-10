@@ -15,11 +15,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 
-from ..common import _ass_escape, _trim_name, _trim_team, _trim_title
+from ..common import C_GOLD_BRIGHT, _ass_escape, _bgr, _trim_name, _trim_team, _trim_title
 from .emit_cards import _emit_flag_overlays, _emit_recap_cards
 from .emit_final import _emit_final_scoreboard
 from .emit_live import _emit_dynamic_numbers, _emit_live_panel
-from .events import ScoreFrame, _walk_events, resolve_row_names
+from .events import ScoreFrame, _walk_events, handicap_set_start, resolve_row_names
 from .geometry import _AssetText, _compute_geometry, _scoreboard_header
 
 
@@ -38,6 +38,8 @@ def build_scoreboard_ass_text(
     match_type: str = "single",
     p3_name: str = "",
     p4_name: str = "",
+    handicap_receiver: int = 0,
+    handicap_pattern: str = "",
 ) -> str:
     """Build the scoreboard ASS content as a string. Five sections:
 
@@ -62,7 +64,11 @@ def build_scoreboard_ass_text(
     """
     events = sorted(score_events, key=lambda e: e.timestamp)
     if not events or events[0].timestamp > 0.0:
-        events = [ScoreFrame(0.0, 0, 0, 0, 0), *events]
+        # Pre-first-event panel shows set 1's starting score — under a
+        # handicap that's e.g. 2-0, not 0-0. Later resets are already
+        # baked into each event's cached scores by the frontend replay.
+        h1, h2 = handicap_set_start(handicap_receiver, handicap_pattern, 0)
+        events = [ScoreFrame(0.0, h1, h2, 0, 0), *events]
 
     has_team = bool((p1_team or "").strip() or (p2_team or "").strip())
     g = _compute_geometry(video_w, video_h, has_team, tournament)
@@ -76,9 +82,18 @@ def build_scoreboard_ass_text(
     # drawn — the wider singles layout has visible room for a longer
     # title. With a team column the word cap (14) is enough.
     title_trimmed = _trim_title(tournament, max_chars=None if has_team else 45)
+    # Handicap badge: gold non-bold "+<pattern>" after the receiving
+    # side's name (e.g. "Nguyễn Bá Thảo +222"). Appended AFTER escaping
+    # so the inline override tags survive; shows on the live panel, the
+    # recap cards and the final scoreboard alike (all read _AssetText).
+    digits = "".join(ch for ch in (handicap_pattern or "") if ch.isdigit())
+    hcp_badge = (
+        f" {{\\1c{_bgr(C_GOLD_BRIGHT)}\\b0}}+{digits}"
+        if handicap_receiver in (1, 2) and digits else ""
+    )
     text = _AssetText(
-        p1=_ass_escape(_trim_name(row_top)),
-        p2=_ass_escape(_trim_name(row_bot)),
+        p1=_ass_escape(_trim_name(row_top)) + (hcp_badge if handicap_receiver == 1 else ""),
+        p2=_ass_escape(_trim_name(row_bot)) + (hcp_badge if handicap_receiver == 2 else ""),
         p1_team=_ass_escape(_trim_team(p1_team)),
         p2_team=_ass_escape(_trim_team(p2_team)),
         tournament=title_trimmed,
@@ -125,6 +140,8 @@ def build_scoreboard_ass(
     match_type: str = "single",
     p3_name: str = "",
     p4_name: str = "",
+    handicap_receiver: int = 0,
+    handicap_pattern: str = "",
 ) -> Path:
     """Write the scoreboard ASS to disk. Thin wrapper around
     `build_scoreboard_ass_text` — kept for the render pipeline which
@@ -140,6 +157,8 @@ def build_scoreboard_ass(
             p1_team=p1_team, p2_team=p2_team,
             match_type=match_type,
             p3_name=p3_name, p4_name=p4_name,
+            handicap_receiver=handicap_receiver,
+            handicap_pattern=handicap_pattern,
         ),
         encoding="utf-8",
     )

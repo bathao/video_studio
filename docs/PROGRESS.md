@@ -1,7 +1,8 @@
 # Progress Status
 
-Last update: 2026-07-07 (improvement plan COMPLETE: Phase 0 housekeeping `a20d7dc`+`ffd7d54`, Phase 1 backend robustness `715d0c1`, Phase 2 frontend correctness/UX `7508d91`, Phase 3 skipped, Phase 4 perf plumbing, Phase 5 tests + debt (209 tests), Phase 6 backlog picks — dry-run script, GitHub Actions CI, Python pin, audio-ducking item found stale — see [TODO.md](TODO.md)).
-**Live Score automation STARTED** same day: plan in [AUTO_SCORE_PLAN.md](AUTO_SCORE_PLAN.md); Phase 0 step 1 (corpus builder) done — `scripts/auto_score_spike/build_corpus.py` → 622-record labeled corpus (551 unique manual score events across 7 unique matches + 71 attempt-1 rallies; 2 matches pinned held-out). Step status lives in [TODO.md](TODO.md).
+Last update: 2026-07-10 (side-info training labels incl. camera-angle tag + handicap support + one-click YOLO retrain flywheel with auto old-vs-new comparison + top-bar training-status dashboard with epoch-level retrain progress + retro-labeling of the 8 pre-GUI archive entries → corpus 7/15 labeled, all uncommitted — see Referee logic, Auto Score + Auto Trim sections). Tests: **265 pass**.
+**Live Score automation (Auto Score)** — Phase 0 spike MEASURED (steps 1,2,3,5,6; plan in [AUTO_SCORE_PLAN.md](AUTO_SCORE_PLAN.md)): segmentation **G0a reached** with v7-tuned2 (coverage recall 97.5% total, truly-unseen 97.8%); zero-shot VLM winner detection tops out ~60% (Qwen3.5-9B + geometry prompt = fine-tune base) so **G0b deferred** until the flywheel grows the corpus (~15-20 matches). **Phase 1 semi-auto GUI SHIPPED**: Live Score Manual|Auto tabs, ROI-gated rally detect (`backend/auto_score/` + `/api/auto_score/*` SSE), keyboard-first review, Apply → `source:"auto"` events; 216 tests; E2E-verified in headless Edge. Committed on `v3-dev` as `b516687` + `8f4d02c` + `10708ba` (**not pushed yet**). Step detail lives in [TODO.md](TODO.md).
+Previous milestone 2026-07-07: improvement plan COMPLETE (Phase 0 housekeeping `a20d7dc`+`ffd7d54`, Phase 1 backend robustness `715d0c1`, Phase 2 frontend correctness/UX `7508d91`, Phase 3 skipped, Phase 4 perf plumbing, Phase 5 tests + debt, Phase 6 backlog picks — dry-run script, GitHub Actions CI, Python pin).
 
 ## Module map
 
@@ -26,6 +27,9 @@ refactor pass shipped in commits fb4d2aa / 6993a37 / 3c4f167 /
 | Auto Trim ROI auto-detect | ✅ done (gate unblocked 2026-05-20) | [backend/roi/](../backend/roi/) + [backend/roi_yolo.py](../backend/roi_yolo.py) |
 | Auto Trim rally detector | ✅ done | [backend/rally_detector.py](../backend/rally_detector.py) |
 | Auto Trim SSE orchestration (job state + cache + endpoints) | ✅ done | [backend/server/routes_auto_trim.py](../backend/server/routes_auto_trim.py) + [state.py](../backend/server/state.py) |
+| Auto Score rally segmenter (v7-tuned2, frozen params) | ✅ done | [backend/auto_score/rally_segmenter.py](../backend/auto_score/rally_segmenter.py) |
+| Auto Score SSE orchestration (job + cache + endpoints) | ✅ done | [backend/server/routes_auto_score.py](../backend/server/routes_auto_score.py) |
+| Auto Score tab (proposals + keyboard review) | ✅ done | [frontend/auto_score/](../frontend/auto_score/) (4 modules) |
 | Frontend HTML + Tailwind | ✅ done | [frontend/index.html](../frontend/index.html) |
 | Frontend logic (player + state) | ✅ done | [frontend/app.js](../frontend/app.js) (boot) + 12 ES6 modules |
 | Auto Trim modal (Phase A ROI + Phase B detection) | ✅ done | [frontend/auto_trim/](../frontend/auto_trim/) (8 modules) |
@@ -86,6 +90,23 @@ render started splicing a full 50% replay after every highlight.)
 - ✅ Point-by-point scoring
 - ✅ Auto set win at 11 + 2-point lead
 - ✅ Auto reset of point counter on set win
+- ✅ Handicap (điểm chấp) support (2026-07-10): "Handicap" block in
+      Setup — receiver select (P1/P2/none) + ratio input with presets
+      (020 202 222 232 323 333 444; digit per set, cycling past the
+      pattern length). The receiver starts each set leading digit–0;
+      recompute replays every set from its handicap score and
+      retro-recomputes when the handicap is edited mid-project. The
+      scoreboard (burned-in AND JASSUB preview — same builder) shows a
+      gold "+<pattern>" badge after the receiver's name and the
+      correct pre-first-event start score. Works in singles and
+      doubles. Score events stay REAL rallies only — handicap points
+      are baked into set-start scores, never entered as fake key
+      presses — so handicap matches remain fully usable as
+      segmentation/winner training data; notes.md + manifest + corpus
+      records carry the handicap declaration for solver-side filtering.
+      Shared rule: `handicap_set_start` in
+      [backend/ass/scoreboard/events.py](../backend/ass/scoreboard/events.py)
+      mirrored by `handicapStart` in [frontend/score.js](../frontend/score.js).
 - ✅ Score event timestamped to source video time
 - ✅ Match-over detection per `best_of`: first to ceil(best_of/2) sets
       ends the match — the closing set gets a "🏆 Match won" toast and
@@ -335,6 +356,47 @@ render started splicing a full 50% replay after every highlight.)
       in the shipped config; code default stays `true`.
 - ✅ **ROI gate unblocked 2026-05-20.** Operator confirmed accuracy
       acceptable for production.
+- ✅ YOLO retrain flywheel closed (2026-07-10): the modal's Groundtruth
+      panel warns when confirms are newer than `assets/models/roi_seg.pt`
+      (classical tiers learn from confirms instantly; YOLO only via
+      retrain), offers a popup after Confirm at ≥5 pending, and hosts a
+      one-click "Retrain YOLO now" button. Backend job in
+      `backend/server/retrain.py` (worker thread + subprocess pair,
+      refuses while any GPU job runs, reloads the in-process model via
+      `roi_yolo.invalidate_model_cache()` — no restart); frontend UI in
+      `frontend/auto_trim/retrain.js` (5 s polling, toasts). Every
+      retrain finishes with an automatic old-vs-new A/B
+      (`scripts/compare_roi_models.py`: previous weights backed up to
+      `roi_seg.prev.pt`, both models replayed on all confirmed
+      refframes, SUMMARY verdict in the status message). Same day:
+      manual retrain on 56 videos / 126 images → mask mAP50-95 0.908 /
+      mAP50 0.995; A/B verdict TAIL IMPROVED (within-2% 50→53/56,
+      worst 2.81→2.28%).
+- ✅ Training-status dashboard (2026-07-10, uncommitted): top-bar
+      "📊 Training" button → popup with (a) auto-score corpus readiness
+      toward the G0b fine-tune target (15 labeled matches; unique
+      source videos, newest render wins; labeled = singles + score
+      events + side info in the archived snapshot) with a per-match
+      table, (b) ROI groundtruth count + YOLO staleness with a real
+      Start Retrain button, (c) live retrain progress. Retrain job now
+      streams ultralytics stdout and reports epoch-level progress
+      (0..1) — progress bar in the popup + percent chip on the top-bar
+      button while running in background, whichever UI started it.
+      NEW `backend/server/routes_training.py` (GET /api/training/status,
+      thin aggregator), `dataset.training_corpus_stats()`,
+      `retrain.groundtruth_summary()` (shared with the modal endpoint),
+      `frontend/training_status.js`. The G0b fine-tune stays a
+      milestone decision — the popup reports readiness, it does not
+      pretend to start a nonexistent pipeline. Tests **260 pass**;
+      E2E 10/10 in headless Edge on real data.
+- ✅ Retro-labeling of archived entries (2026-07-10, uncommitted):
+      `dataset.apply_retro_labels` fills the missing side-info /
+      match_type labels into old `dataset/<slug>/` snapshots without
+      re-render (whitelisted fields, notes.md provenance section,
+      manifest sync). All 8 pre-GUI entries labeled from operator
+      answers: 6 singles (5 near / 1 far), 2 mis-recorded doubles
+      corrected + excluded. Corpus 7/15 labeled, 0 unlabeled left.
+      Tests **265 pass**.
 
 ### Auto Trim (Phase 1b — rally detection end-to-end, shipped 2026-05-26)
 - ✅ Score-event-anchored rally detector (`backend/rally_detector.py`).
@@ -378,7 +440,7 @@ render started splicing a full 50% replay after every highlight.)
       different video / different roi / different params) + TrimSegment
       backwards compat. Total suite 166 pass.
 
-### Auto Score (Phase 1 — semi-auto rally proposals, built 2026-07-08, uncommitted)
+### Auto Score (Phase 1 — semi-auto rally proposals, built 2026-07-08, committed `10708ba`)
 - ✅ Live Score panel split into **Manual | Auto** tabs. Manual tab =
       original DOM moved verbatim (same ids — score.js untouched);
       switching is pure show/hide.
@@ -412,6 +474,27 @@ render started splicing a full 50% replay after every highlight.)
       fields, cache-hit rerun in 131 ms.
 - Winner detection / solver / VLM = Gate G0b, deferred until the
       manual-production flywheel grows the corpus (~15-20 matches).
+- ✅ Side-info training labels (2026-07-10, uncommitted): Setup panel
+      "Side info (auto-score training)" block, singles only (hidden in
+      Double mode). Four `ProjectInfo` fields — `camera_angle`
+      (standard/side/other; the P1-side select's axis follows it:
+      near/far for standard, left/right of frame for side-on, disabled
+      for other; non-standard marked EVAL-ONLY in
+      notes/manifest/corpus), `p1_side_set1` (near|far|left|right),
+      `swap_sides_each_set`, `set5_mid_swap` — flow
+      GUI → project JSON → groundtruth → dataset → corpus, replacing
+      the post-hoc `side_truth.json` backfill for new matches. Defaults = the
+      production conventions (P1 near in set 1, swap every set, set-5
+      mid-swap yes); operator flips only when a match deviates (incl.
+      the rare venue-quirk no-per-set-swap matches). Legacy loads
+      normalise missing keys to unknown — old data never gets
+      fabricated labels. Doubles exclusion
+      made explicit: manifest `auto_score_train_eligible=false`,
+      notes.md "AUTO-SCORE TRAINING: EXCLUDED" marker, corpus
+      `train_eligible=false` per record. Project load hardened
+      against legacy JSONs carrying over the previous project's ROI /
+      side values. Tests **222 pass**; E2E-verified in headless Edge
+      (19/19 checks).
 
 ### Code organisation
 - ✅ ASS overlay generators live in the `backend/ass/` package —

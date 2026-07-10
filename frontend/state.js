@@ -47,6 +47,20 @@ export const project = {
     // 4 normalized [x, y] corners (TL, TR, BR, BL). null until the
     // operator confirms ROI in the Auto-Trim modal at least once.
     roi_quadrilateral: null,
+    // Handicap (điểm chấp): receiver 0|1|2 (0 = none), pattern is a
+    // digit string cycling over sets — receiver starts each set
+    // leading digit-0. Mirror backend ProjectInfo.
+    handicap_receiver: 0,
+    handicap_pattern: '',
+    // Auto Score training labels (singles only — GUI hides the block
+    // in doubles mode). Mirror backend ProjectInfo. Defaults follow
+    // the operator's production conventions (P1 near in set 1, swap
+    // every set, set-5 mid-swap at 5) — flip only when a match
+    // deviates. null = unknown (legacy projects).
+    camera_angle: 'standard',    // 'standard' | 'side' (~90°) | 'other'
+    p1_side_set1: 'near',        // 'near' | 'far' | null (unknown)
+    swap_sides_each_set: true,   // standard rule; untick for special matches
+    set5_mid_swap: true,         // true | false | null (unknown)
   },
   trim_segments: [],
   highlights: [],

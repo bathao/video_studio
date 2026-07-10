@@ -19,11 +19,28 @@ function setsToWin() {
   return Math.ceil((project.info.best_of || 5) / 2);
 }
 
+// Start score [p1, p2] of 0-based set `setIndex` under the project's
+// handicap settings. The digit string cycles over sets ("232" → set 4
+// wraps back to digit 0); the digit goes to the receiving side. [0, 0]
+// when no handicap. Mirrors `handicap_set_start` in
+// backend/ass/scoreboard/events.py — keep the two in sync.
+export function handicapStart(setIndex) {
+  const recv = project.info.handicap_receiver || 0;
+  const pat = String(project.info.handicap_pattern || '').replace(/\D/g, '');
+  if ((recv !== 1 && recv !== 2) || !pat) return [0, 0];
+  const pts = parseInt(pat[setIndex % pat.length], 10) || 0;
+  return recv === 1 ? [pts, 0] : [0, pts];
+}
+
 // Sort events by timestamp and replay all actions to fill in the
-// derived score / set fields. Mutates the input array.
+// derived score / set fields. Mutates the input array. Each set starts
+// from its handicap score (0-0 without handicap); handicap points are
+// baked into the start, so every event stays one REAL rally — that's
+// what keeps handicap matches clean as training data.
 export function recomputeAllEvents() {
   project.score_events.sort((a, b) => a.timestamp - b.timestamp);
-  let p1 = 0, p2 = 0, p1Set = 0, p2Set = 0;
+  let p1Set = 0, p2Set = 0;
+  let [p1, p2] = handicapStart(0);
   for (const ev of project.score_events) {
     if (ev.who === 1) p1 += 1;
     else if (ev.who === 2) p2 += 1;
@@ -34,8 +51,7 @@ export function recomputeAllEvents() {
     if (max >= POINTS_TO_WIN && lead >= MIN_LEAD) {
       if (p1 > p2) p1Set += 1;
       else p2Set += 1;
-      p1 = 0;
-      p2 = 0;
+      [p1, p2] = handicapStart(p1Set + p2Set);
     }
     ev.p1_score = p1;
     ev.p2_score = p2;
@@ -60,7 +76,10 @@ export function syncLiveFromTime(t) {
     live.p1_set = latest.p1_set;
     live.p2_set = latest.p2_set;
   } else {
-    live.p1 = live.p2 = live.p1_set = live.p2_set = 0;
+    // Before the first event the score is set 1's starting score —
+    // under a handicap that's e.g. 2-0, not 0-0.
+    [live.p1, live.p2] = handicapStart(0);
+    live.p1_set = live.p2_set = 0;
   }
 }
 
@@ -132,9 +151,12 @@ export function scorePoint(who) {
   syncScoreboardPreview();
 
   // Toast on set win — detect by checking if the latest event reset to
-  // 0,0. A set that closes out the match gets the bigger announcement.
+  // its set's handicap start score (0,0 without handicap; a mid-set
+  // score can never equal the start score because every event adds a
+  // point). A set that closes out the match gets the bigger announcement.
   const latest = project.score_events[project.score_events.length - 1];
-  if (latest && latest.p1_score === 0 && latest.p2_score === 0
+  const [h1, h2] = latest ? handicapStart(latest.p1_set + latest.p2_set) : [0, 0];
+  if (latest && latest.p1_score === h1 && latest.p2_score === h2
       && (latest.p1_set + latest.p2_set) > 0) {
     if (latest.p1_set >= need || latest.p2_set >= need) {
       toast(`🏆 Match won ${latest.p1_set}-${latest.p2_set}!`);

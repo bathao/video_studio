@@ -40,6 +40,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from ..config import config
 from ..ffmpeg_runner import probe_video
 from ..models import ScoreEvent, TrimSegment
+from .retrain import groundtruth_summary, retrain_status, start_retrain
 from .state import (
     ROOT_DIR,
     _AUTOTRIM_CACHE_DIR,
@@ -411,21 +412,35 @@ def auto_trim_confirm_roi(payload: dict = Body(...)) -> dict:
 @router.get("/api/auto_trim/groundtruth_count")
 def auto_trim_groundtruth_count() -> dict:
     """Quick stat used to track milestone progress (≥10 confirmed inputs
-    before unlocking downstream trim-detection work)."""
-    if not _ROI_GROUNDTRUTH_DIR.exists():
-        return {"count": 0, "videos": []}
-    files = sorted(_ROI_GROUNDTRUTH_DIR.glob("*.json"))
-    videos = []
-    for f in files:
-        try:
-            d = json.loads(f.read_text(encoding="utf-8"))
-            videos.append({
-                "video_name": d.get("video_name"),
-                "history_count": len(d.get("history", [])),
-            })
-        except Exception:
-            continue
-    return {"count": len(files), "videos": videos}
+    before unlocking downstream trim-detection work).
+
+    Also reports how STALE the YOLO tier is: the classical tiers (ORB +
+    learned-NN) read the groundtruth dir live on every detect, but the
+    top-priority YOLO model only learns when the operator re-runs
+    `scripts/build_yolo_dataset.py` + `scripts/train_roi_seg.py`.
+    `confirms_since_yolo_train` counts confirm events newer than the
+    model file's mtime so the modal can suggest a retrain at the right
+    moment — this is what closes the confirm → better-detector loop.
+    Computation lives in retrain.groundtruth_summary (shared with the
+    training-status dashboard)."""
+    return groundtruth_summary()
+
+
+@router.post("/api/auto_trim/retrain_yolo")
+def auto_trim_retrain_yolo() -> dict:
+    """Kick off the YOLO retrain pipeline (dataset build + train) on a
+    worker thread. 409 when a retrain or any GPU job is already running.
+    Job logic lives in `backend/server/retrain.py`; on success the
+    in-process model cache reloads — no server restart needed."""
+    ok, reason = start_retrain()
+    if not ok:
+        raise HTTPException(status_code=409, detail=reason)
+    return {"ok": True}
+
+
+@router.get("/api/auto_trim/retrain_status")
+def auto_trim_retrain_status() -> dict:
+    return retrain_status()
 
 
 # ===========================================================================

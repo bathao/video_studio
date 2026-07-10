@@ -34,7 +34,7 @@ Python is pinned `>=3.13` in `pyproject.toml`.
 ```
 backend/
   server/            FastAPI endpoints (videos, projects, render jobs,
-                     avatars, auto-trim, auto-score). 10 modules under
+                     avatars, auto-trim, auto-score). 12 modules under
                      the package:
     __init__.py        Re-exports `app` + `main` so historical entry
                        points keep working (`uvicorn backend.server:app`,
@@ -76,6 +76,29 @@ backend/
                        `_video_identity`, `_extract_refframe`,
                        `_extract_multi_refframes`,
                        `_validate_roi_corners`).
+    retrain.py         YOLO ROI-model retrain job (single state object
+                       + lock, not a registry — at most one retrain).
+                       `start_retrain` backs the current weights up to
+                       assets/models/roi_seg.prev.pt, runs
+                       build_yolo_dataset.py + train_roi_seg.py in
+                       worker-thread subprocesses (refuses while any
+                       GPU job is active), reloads the in-process model
+                       via roi_yolo.invalidate_model_cache() (no server
+                       restart), then auto-runs
+                       scripts/compare_roi_models.py — the SUMMARY
+                       verdict lands in the status message the modal
+                       shows. Thin endpoints in routes_auto_trim.py.
+                       Streams train stdout (Popen) and parses
+                       ultralytics epoch lines into a 0..1 `progress`
+                       fraction in retrain_status(). Also hosts
+                       `groundtruth_summary()` (ROI confirm count +
+                       YOLO staleness), shared by the modal endpoint
+                       and the training dashboard.
+    routes_training.py `GET /api/training/status` — thin aggregator
+                       for the top-bar Training dashboard: corpus
+                       readiness (dataset.training_corpus_stats),
+                       ROI staleness (retrain.groundtruth_summary),
+                       live retrain snapshot (retrain_status).
     routes_auto_score.py `/api/auto_score/*` (start / SSE events /
                        cancel / job) — unanchored rally-segmentation
                        jobs for the Live Score Auto tab. Deliberate
@@ -156,6 +179,12 @@ backend/
                      `dataset/manifest.json`. Runs AFTER `export_groundtruth`
                      in `_finalize`. Best-effort: failures land in
                      `RenderState.message` but never abort the render.
+                     Also hosts `training_corpus_stats()` (G0b corpus
+                     readiness — unique source videos, newest render
+                     wins) and `apply_retro_labels(slug, labels)`
+                     (fill side-info / match_type into an archived
+                     entry without re-render; whitelisted fields,
+                     notes.md provenance section, manifest sync).
   roi/               Multi-stage ROI quadrilateral detector package for the
                      Auto Trim modal. `detect_roi` runs YOLOv8-seg + ORB +
                      color-contrast in parallel and cross-validates. Result
@@ -297,7 +326,7 @@ frontend/
                      detection itself is gated — modal scope is ROI
                      confirmation only until detector hits ≥99% on
                      truly-unseen videos. See `docs/TODO.md`.
-                     Split into 7 ES modules:
+                     Split into 8 ES modules:
     index.js           Public entry — exports `openAutoTrimModal`,
                        wires button bindings + window resize/Escape
                        listeners. Importing this module arms the
@@ -322,6 +351,11 @@ frontend/
                        `refreshGroundtruthCount`, `onConfirmClick`,
                        plus the small `buildQuery` / `videoIdentBody`
                        helpers.
+    retrain.js         YOLO retrain UI — owns the staleness line +
+                       "Retrain now" button in the Groundtruth panel,
+                       the popup offer after Confirm (≥5 pending
+                       confirms, once per session), and status polling
+                       against /api/auto_trim/retrain_*.
   auto_score/        Live Score Auto tab package (Phase 1 semi-auto:
                      rally proposals + operator enters winners; winner
                      detection is Gate G0b, not built). ROI confirm is
@@ -351,6 +385,18 @@ frontend/
   project_io.js      Save / Load Project + load modal.
   render.js          startRender + pollRender + cancel + intro-style
                      mutual exclusion + Open output folder.
+  training_status.js Top-bar "📊 Training" button + status modal.
+                     Renders GET /api/training/status: auto-score
+                     corpus readiness toward the G0b fine-tune target
+                     (per-match table), ROI groundtruth + YOLO
+                     staleness with a Start Retrain button (same
+                     backend job as the Auto Trim modal's), and a live
+                     epoch-level retrain progress bar. While a retrain
+                     runs in background the button shows a percent
+                     chip — regardless of which UI started it
+                     (auto_trim/retrain.js dispatches 'retrain-active'
+                     on window). Single-writer for #modal-training +
+                     #btn-training-prog.
   scoreboard_preview.js
                      Auto-attaches JASSUB (libass-WASM) to the `<video>`
                      element as soon as the source reports
@@ -474,6 +520,14 @@ scripts/             Operator-triggered tooling, organized by purpose.
                            for classical tiers; YOLO still trained on
                            all entries (separate retrain to fully
                            leave-one-out).
+  compare_roi_models.py    A/B two YOLO ROI models on every confirmed
+                           refframe (truth = operator corners; exact
+                           production inference path). Prints stats
+                           tables + a SUMMARY verdict (IMPROVED / TAIL
+                           IMPROVED / EQUIVALENT / REGRESSED). Runs
+                           automatically at the end of every
+                           GUI-triggered retrain; manual:
+                           `--old <pt>` (default roi_seg.prev.pt).
   analyze_detector_errors.py
                            Reads history[] from every groundtruth entry,
                            summarizes per-method-tier error breakdown.
@@ -748,7 +802,7 @@ trim detection backend).
 ## Don't
 
 - Don't add tests next to the modules; if you add tests put them in a
-  `tests/` directory. ~216 tests live there; pure-logic only (segment
+  `tests/` directory. ~265 tests live there; pure-logic only (segment
   math, builder smoke, playlist + remap, quad geometry, job-registry
   eviction, helper formatters), no ffmpeg execution. `tests/conftest.py`
   creates `temp/` so the pinned basetemp works on fresh checkouts (CI).
@@ -788,6 +842,7 @@ trim detection backend).
 | Auto-stinger generation              | `get_or_build_stinger_pair` in [backend/stinger_builder.py](backend/stinger_builder.py) |
 | Brand identity (color / logo / channel name) | [config.json](config.json) `brand_color` / `brand_logo_path` / `channel_name` / `stinger_replay_label` / `stinger_duration_seconds` / `stinger_sound_path` |
 | Score logic (replay, set wins)       | [frontend/score.js](frontend/score.js) — `recomputeAllEvents`, `scorePoint` |
+| Handicap set-start rule (điểm chấp)  | `handicap_set_start` in [backend/ass/scoreboard/events.py](backend/ass/scoreboard/events.py) + mirrored `handicapStart` in [frontend/score.js](frontend/score.js) — keep in sync |
 | Avatar lookup rules                  | [backend/avatars.py](backend/avatars.py) |
 | Render-time pipeline orchestration   | `_intro_stage` / `_main_stage` / `_outro_stage` / `_finalize` in [backend/renderer/](backend/renderer/) |
 | Post-render groundtruth sidecar      | `export_groundtruth` in [backend/groundtruth.py](backend/groundtruth.py) — called from `_finalize` |
@@ -795,7 +850,8 @@ trim detection backend).
 | Auto-filled `notes.md` template      | `build_notes_md` in [backend/dataset.py](backend/dataset.py) |
 | ROI auto-detect (multi-tier pipeline)| `detect_roi_multiframe` in [backend/roi/detector.py](backend/roi/detector.py); tier modules under [backend/roi/](backend/roi/); YOLO loader in [backend/roi_yolo.py](backend/roi_yolo.py) |
 | ROI confirm → groundtruth append     | `/api/auto_trim/confirm_roi` in [backend/server/routes_auto_trim.py](backend/server/routes_auto_trim.py); files land in `dataset/roi_groundtruth/<video_id>.{json,jpg}` |
-| YOLO ROI training                    | `scripts/build_yolo_dataset.py` then `scripts/train_roi_seg.py` → `assets/models/roi_seg.pt` |
+| YOLO ROI training                    | `scripts/build_yolo_dataset.py` then `scripts/train_roi_seg.py` → `assets/models/roi_seg.pt`; or one click in the Auto Trim modal (Groundtruth panel → Retrain) via [backend/server/retrain.py](backend/server/retrain.py) |
+| Training-status dashboard (corpus readiness + retrain progress) | backend: [backend/server/routes_training.py](backend/server/routes_training.py) + `training_corpus_stats` in [backend/dataset.py](backend/dataset.py); frontend: [frontend/training_status.js](frontend/training_status.js) (top-bar 📊 Training button) |
 | Auto Trim modal (frontend)           | [frontend/auto_trim/](frontend/auto_trim/) — public entry [frontend/auto_trim/index.js](frontend/auto_trim/index.js); button hosted in [frontend/trims.js](frontend/trims.js) |
 | Auto Score tab (rally proposals + review) | backend: `segment_rallies` in [backend/auto_score/rally_segmenter.py](backend/auto_score/rally_segmenter.py) + [backend/server/routes_auto_score.py](backend/server/routes_auto_score.py); frontend: [frontend/auto_score/](frontend/auto_score/) (tab DOM in [frontend/index.html](frontend/index.html) `#score-tab-auto`) |
 | Add a new HTTP endpoint              | pick the matching `backend/server/routes_*.py` (videos / projects / render / auto_trim), or [backend/server/app.py](backend/server/app.py) for cross-cutting endpoints |

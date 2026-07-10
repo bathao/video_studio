@@ -20,6 +20,7 @@ from .routes_auto_score import router as auto_score_router
 from .routes_auto_trim import router as auto_trim_router
 from .routes_projects import router as projects_router
 from .routes_render import router as render_router
+from .routes_training import router as training_router
 from .routes_videos import router as videos_router
 from .state import FRONTEND_DIR
 
@@ -137,6 +138,7 @@ app.include_router(projects_router)
 app.include_router(render_router)
 app.include_router(auto_trim_router)
 app.include_router(auto_score_router)
+app.include_router(training_router)
 
 
 def main() -> None:

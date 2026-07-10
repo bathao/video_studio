@@ -27,6 +27,21 @@ Held-out: PINNED by explicit match id (never hash order — hash order
 would rotate membership as new matches arrive). Held-out matches are
 eval-only forever: never train, never tune.
 
+Doubles: excluded from auto-score train+eval (operator directive
+2026-07-08) but records stay in the corpus with train_eligible=false —
+filter on that flag downstream. Since 2026-07-10 each dataset record
+also carries the GUI-confirmed side/swap labels (p1_side_set1 /
+swap_sides_each_set / set5_mid_swap from ProjectInfo); None on
+pre-field groundtruths, which still need the side_truth.json backfill.
+
+Handicap: records carry handicap_receiver (0|1|2) + handicap_pattern
+(digit per set, cycling). Handicap matches stay FULLY train-eligible
+for segmentation + winner labels (every event is a real rally — the
+GUI bakes handicap points into set-start scores, never fake presses),
+but score_after values include the per-set start points, so any
+score-grammar/solver consumer must adjust for them or skip
+handicap_receiver != 0 matches.
+
 Usage:
     python scripts/auto_score_spike/build_corpus.py          # build
     python scripts/auto_score_spike/build_corpus.py --check  # verify only
@@ -104,6 +119,7 @@ def dataset_records(entries: list[dict]) -> list[dict]:
         duration = gt["source_video"]["duration_sec"]
         video = find_source_video(slug)
         split = "held_out" if match_id in HELD_OUT_MATCH_IDS else "train"
+        is_singles = (info.get("match_type") or "single").lower() != "double"
         events = sorted(gt["project"]["score_events"], key=lambda e: e["timestamp"])
         sets_before = [0, 0]
         for idx, ev in enumerate(events):
@@ -128,6 +144,30 @@ def dataset_records(entries: list[dict]) -> list[dict]:
                 "match_type": info["match_type"],
                 "best_of": info["best_of"],
                 "split": split,
+                # Doubles are excluded from auto-score train+eval
+                # (operator directive; records kept on disk). Filter on
+                # this instead of re-deriving from match_type.
+                "train_eligible": is_singles,
+                # GUI-confirmed side/swap labels (ProjectInfo fields,
+                # 2026-07-10). None/default on pre-field groundtruths —
+                # those still need the side_truth.json backfill.
+                "p1_side_set1": info.get("p1_side_set1"),
+                "swap_sides_each_set": info.get("swap_sides_each_set", True),
+                "set5_mid_swap": info.get("set5_mid_swap"),
+                # Handicap (0/"" = none): the receiver starts each set
+                # leading digit-0 (pattern cycles over sets), and the
+                # cached score_after values INCLUDE those start points.
+                # Winner/segmentation consumers can ignore this;
+                # score-grammar/solver consumers MUST read it or every
+                # handicap set replays as an illegal sequence.
+                "handicap_receiver": info.get("handicap_receiver", 0),
+                "handicap_pattern": info.get("handicap_pattern", ""),
+                # "standard" = behind-player diagonal family (all data
+                # through 2026-07-10). Non-standard (e.g. "side" ~90°)
+                # matches are EVAL-ONLY for angle-locked training;
+                # their p1_side_set1 axis is left/right of frame, not
+                # near/far.
+                "camera_angle": info.get("camera_angle", "standard"),
             })
             sets_before = [ev["p1_set"], ev["p2_set"]]
     return records
@@ -165,6 +205,7 @@ def attempt1_records() -> list[dict]:
                 "match_type": "single",
                 "best_of": 5,
                 "split": "train",
+                "train_eligible": True,
             })
     return records
 
@@ -191,6 +232,15 @@ def build() -> dict:
             s: len([r for r in all_records if r["split"] == s])
             for s in ("train", "held_out")
         },
+        "doubles_excluded_records": len(
+            [r for r in all_records if not r["train_eligible"]]
+        ),
+        "gui_side_confirmed_matches": len({
+            r["match_id"] for r in ds if r.get("p1_side_set1")
+        }),
+        "handicap_matches": len({
+            r["match_id"] for r in ds if r.get("handicap_receiver")
+        }),
         "held_out_matches": sorted(HELD_OUT_MATCH_IDS),
     }
     return summary

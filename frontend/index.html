@@ -34,6 +34,7 @@
         <span class="text-xs text-slate-400" id="health-line">checking…</span>
       </div>
       <div class="flex gap-2">
+        <button id="btn-training" class="btn-secondary">📊 Training<span id="btn-training-prog" class="hidden ml-1.5 text-accent-400 font-mono text-xs"></span></button>
         <button id="btn-save" class="btn-secondary">Save Project</button>
         <button id="btn-load" class="btn-secondary">Load Project</button>
         <button id="btn-render" class="btn-primary">Render</button>
@@ -180,6 +181,71 @@
                 <option value="7">Best of 7 (first to 4)</option>
               </select>
             </label>
+
+            <!-- Handicap (điểm chấp). Applies to singles AND doubles —
+                 production display concern. The receiver starts every
+                 set leading by the pattern digit for that set (digits
+                 cycle; "232" → set4 wraps to 2). Scoring stays real:
+                 handicap points are baked into set-start scores by
+                 score.js, never entered as fake key presses. -->
+            <div class="border border-ink-700 rounded-md p-2 mt-1 flex flex-col gap-2">
+              <div class="text-[11px] uppercase tracking-wider text-slate-400">Handicap</div>
+              <label class="lbl">Who receives points
+                <select id="in-hcp-receiver" class="ipt">
+                  <option value="0" selected>— no handicap —</option>
+                  <option value="1">P1 receives (P2 gives)</option>
+                  <option value="2">P2 receives (P1 gives)</option>
+                </select>
+              </label>
+              <label class="lbl">Ratio (one digit per set, cycles)
+                <input id="in-hcp-pattern" class="ipt" list="hcp-presets"
+                       placeholder="e.g. 222" inputmode="numeric"
+                       autocomplete="off" disabled />
+                <datalist id="hcp-presets">
+                  <option value="020"></option>
+                  <option value="202"></option>
+                  <option value="222"></option>
+                  <option value="232"></option>
+                  <option value="323"></option>
+                  <option value="333"></option>
+                  <option value="444"></option>
+                </datalist>
+              </label>
+            </div>
+
+            <!-- Auto Score training labels. Singles only (.setup-singles —
+                 app.js hides the block in doubles mode; doubles matches are
+                 excluded from auto-score training wholesale). Confirmed here
+                 at production time so the dataset archive carries side/swap
+                 truth without a post-hoc side_truth.json backfill. -->
+            <div class="setup-singles border border-ink-700 rounded-md p-2 mt-1 flex flex-col gap-2">
+              <div class="text-[11px] uppercase tracking-wider text-slate-400">Side info (auto-score training)</div>
+              <label class="lbl">Camera angle
+                <select id="in-camera-angle" class="ipt">
+                  <option value="standard" selected>Standard — behind player, diagonal (default)</option>
+                  <option value="side">Side-on (~90° to the table)</option>
+                  <option value="other">Other / unusual</option>
+                </select>
+              </label>
+              <label class="lbl">P1 side in set 1 (camera view)
+                <select id="in-p1-side" class="ipt">
+                  <option value="near" selected>P1 near camera (default)</option>
+                  <option value="far">P1 far from camera</option>
+                  <option value="">— unknown —</option>
+                </select>
+              </label>
+              <label class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                <input type="checkbox" id="in-swap-sides" checked class="accent-accent-500" />
+                <span>Players swap sides after every set</span>
+              </label>
+              <label class="lbl">Set 5 mid-set swap (at 5 points)
+                <select id="in-set5-swap" class="ipt">
+                  <option value="yes" selected>Yes — swapped at 5 points (default)</option>
+                  <option value="no">No — played through</option>
+                  <option value="">— unknown / not reached —</option>
+                </select>
+              </label>
+            </div>
           </div>
         </section>
 
@@ -448,6 +514,12 @@
             <div class="font-mono text-[11px] text-slate-400">
               Confirmed inputs: <span id="at-gt-count" class="text-slate-200">—</span>
             </div>
+            <!-- YOLO retrain — confirms feed the classical tiers
+                 instantly, but the YOLO tier only learns on a retrain.
+                 Line + button owned by auto_trim/retrain.js (popup
+                 offer after Confirm, polling while training). -->
+            <div id="at-gt-stale" class="font-mono text-[11px] text-warn-400 mt-1 hidden"></div>
+            <button id="at-retrain" class="btn-secondary text-xs mt-1 hidden">⟳ Retrain YOLO now (~2 min)</button>
           </section>
 
           <section id="at-detect-section" class="bg-ink-800 border border-ink-700 rounded-md p-3 text-xs">
@@ -480,6 +552,19 @@
             <button id="at-cancel" class="btn-secondary text-sm">Close</button>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- training status modal (see frontend/training_status.js) -->
+  <div id="modal-training" class="fixed inset-0 bg-black/70 hidden items-center justify-center z-40">
+    <div class="bg-ink-900 border border-ink-700 rounded-lg p-5 w-[600px] max-h-[85vh] flex flex-col">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-lg font-semibold">Training Status</h3>
+        <button id="tr-close" class="btn-secondary text-xs">✕ Close</button>
+      </div>
+      <div id="tr-body" class="flex-1 overflow-y-auto space-y-3 text-sm">
+        <div class="text-slate-400">Loading…</div>
       </div>
     </div>
   </div>

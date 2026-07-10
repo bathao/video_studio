@@ -47,11 +47,18 @@ Module layout under backend/ass/scoreboard/:
 """
 
 from .builder import build_scoreboard_ass, build_scoreboard_ass_text
-from .events import ScoreFrame, _set_final_score, _walk_events, resolve_row_names
+from .events import (
+    ScoreFrame,
+    _set_final_score,
+    _walk_events,
+    handicap_set_start,
+    resolve_row_names,
+)
 
 __all__ = [
     "ScoreFrame",
     "resolve_row_names",
+    "handicap_set_start",
     "build_scoreboard_ass",
     "build_scoreboard_ass_text",
     # Re-exported for the pure-logic test suite:

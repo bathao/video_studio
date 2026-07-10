@@ -33,6 +33,49 @@ class ProjectInfo(BaseModel):
     # prompt the operator. Per-project so each match's camera angle / table
     # position is captured separately.
     roi_quadrilateral: Optional[list[list[float]]] = None
+    # --- Handicap (điểm chấp) ---
+    # Which side RECEIVES handicap points at the start of each set:
+    # 0 = no handicap (default), 1 = P1/team-1 receives (P2 gives),
+    # 2 = P2/team-2 receives. Applies to singles and doubles alike —
+    # it's a production-display concern; training consumers only filter
+    # on it for score-grammar solver work.
+    handicap_receiver: Literal[0, 1, 2] = 0
+    # Digit string, one digit per set, CYCLING when the match runs past
+    # its length: "232" → set1=2, set2=3, set3=2, set4=2, set5=3.
+    # Digit n = the receiver starts that set leading n-0; sets still
+    # play to 11 win-by-2. Handicap points are baked into the start
+    # score of each set — score events remain REAL rallies only (never
+    # fake key presses), which is what keeps handicap matches usable
+    # as segmentation / winner-label training data.
+    handicap_pattern: str = Field(default="", pattern=r"^\d*$")
+    # --- Auto Score training labels (operator-confirmed in the GUI at
+    # production time; meaningful for singles only — doubles matches are
+    # excluded from auto-score training/eval wholesale). These flow into
+    # groundtruth.json → dataset/<slug>/ so the flywheel corpus carries
+    # side/swap truth with no post-hoc side_truth.json backfill.
+    #
+    # Camera placement relative to the table. "standard" = the
+    # operator's usual family (behind one player, slightly diagonal —
+    # all corpus data through 2026-07-10); "side" = ~90° side-on
+    # (rare); "other" = anything else. Non-standard matches are tagged
+    # so training stays angle-locked (they become eval-only) and
+    # because near/far side semantics only exist for "standard".
+    camera_angle: Literal["standard", "side", "other"] = "standard"
+    # Which side P1 plays on in set 1. Axis depends on camera_angle:
+    # "standard" uses near/far (distance from the tripod), "side" uses
+    # left/right (viewer's left/right of the video frame). Default
+    # "near" — the operator's P1-near-in-set-1 production convention
+    # (2026-07-10) for the standard angle; the GUI swaps the option
+    # set when the angle changes. None = unknown (legacy projects, or
+    # "other" angles where no axis is defined).
+    p1_side_set1: Optional[Literal["near", "far", "left", "right"]] = "near"
+    # Players swap sides after every set (standard rule, the default).
+    # Rarely a venue quirk / laziness skips the swap — operator unticks.
+    swap_sides_each_set: bool = True
+    # Deciding-set mid-set swap at 5 points (set 5 in best-of-5).
+    # Default True — swapping at 5 is the norm; False = played through
+    # (operator flips when it happens), None = unknown (legacy).
+    set5_mid_swap: Optional[bool] = True
 
 
 class TrimSegment(BaseModel):

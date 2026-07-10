@@ -89,6 +89,48 @@ def test_scoreboard_singles_omits_team_column(out: Path):
     assert len(with_team) < len(with_team_present)
 
 
+def test_scoreboard_handicap_badge_and_initial_score(out: Path):
+    """With a handicap, the receiver's row name carries the gold
+    '+<pattern>' badge and the pre-first-event panel shows the set-1
+    handicap start (2-0 here), not 0-0."""
+    # No event at t=0 → builder synthesises the initial frame itself.
+    events = [ScoreFrame(30.0, 3, 0, 0, 0)]
+    build_scoreboard_ass(
+        output_path=out, video_w=1920, video_h=1080,
+        total_duration=60.0, tournament="Hcp Cup",
+        p1_name="Alice", p2_name="Bob",
+        score_events=events, best_of=5,
+        handicap_receiver=2, handicap_pattern="222",
+    )
+    text = out.read_text(encoding="utf-8")
+    assert "+222" in text
+    # Badge sits after Bob (receiver), never after Alice.
+    assert any("Bob" in ln and "+222" in ln for ln in text.splitlines())
+    assert not any("Alice" in ln and "+222" in ln for ln in text.splitlines())
+    # Initial dynamic-numbers window [0, 30) shows P2's handicap start.
+    pts_lines = [ln for ln in text.splitlines()
+                 if "PtsNum" in ln and ln.startswith("Dialogue: 2,0:00:00.00,0:00:30.00")]
+    assert len(pts_lines) == 2  # P1 row + P2 row
+    assert pts_lines[0].endswith("}0")   # P1 starts 0
+    assert pts_lines[1].endswith("}2")   # P2 starts 2 (receiver)
+
+
+def test_scoreboard_no_handicap_output_unchanged(out: Path):
+    """handicap_receiver=0 must be byte-identical to omitting the
+    params entirely — guards existing renders against drift."""
+    events = [ScoreFrame(0.0, 0, 0, 0, 0), ScoreFrame(5.0, 1, 0, 0, 0)]
+    kwargs = dict(
+        output_path=out, video_w=1920, video_h=1080,
+        total_duration=10.0, tournament="Test Cup",
+        p1_name="Alice", p2_name="Bob",
+        score_events=events, best_of=5,
+    )
+    build_scoreboard_ass(**kwargs)
+    baseline = out.read_text(encoding="utf-8")
+    build_scoreboard_ass(**kwargs, handicap_receiver=0, handicap_pattern="")
+    assert out.read_text(encoding="utf-8") == baseline
+
+
 def test_scoreboard_handles_vietnamese_names(out: Path):
     events = [ScoreFrame(0.0, 0, 0, 0, 0)]
     build_scoreboard_ass(

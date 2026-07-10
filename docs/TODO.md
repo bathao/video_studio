@@ -1,10 +1,13 @@
 # TODO
 
-## RESUME POINTER 2026-07-07 — improvement plan COMPLETE (Phase 0–2, 4–6 done; 3 skipped)
+## RESUME POINTER 2026-07-10 — Auto Score Phase 0 measured + Phase 1 semi-auto GUI shipped
 
-`v3-dev` is pushed to `origin/v3-dev` (tracking set up 2026-07-07 as
-part of improvement-plan Phase 0). Working state after the 2026-06-05
-feature freeze is described in [HISTORY.md](HISTORY.md).
+All Auto Score work below is committed on `v3-dev` (`b516687` step 1
+corpus, `8f4d02c` steps 2+6, `10708ba` G0a + Phase 1 GUI + steps 3+5).
+**These 3 commits are NOT pushed yet** — `origin/v3-dev` is 3 behind.
+Working state after the 2026-06-05 feature freeze is described in
+[HISTORY.md](HISTORY.md); the 2026-07-07 improvement plan (complete)
+is in the next section.
 
 **Next big feature (IN PROGRESS since 2026-07-07):** Live Score
 automation — full plan in [AUTO_SCORE_PLAN.md](AUTO_SCORE_PLAN.md).
@@ -14,7 +17,7 @@ classifier + score-grammar solver; audio ruled out by operator).
 Offline Phase 0 feasibility spike first — no GUI work until Gate G0
 passes. Phase 0 step status:
 
-- ✅ **Step 1 — corpus builder** (2026-07-07, uncommitted):
+- ✅ **Step 1 — corpus builder** (2026-07-07, committed `b516687`):
   `scripts/auto_score_spike/build_corpus.py` →
   `dataset/auto_score_corpus/corpus.jsonl` (gitignored, regenerable).
   622 records = 551 unique manual score events (GOLD winner labels)
@@ -64,8 +67,9 @@ passes. Phase 0 step status:
     (G0a); winner path (G0b) deferred until the flywheel grows the
     corpus. RESUMED 2026-07-08 pm: partial dirs wiped; remaining 4
     models (qwen3.5:9b / qwen3-vl:8b / gemma4:12b / qwen2.5vl:7b)
-    running on the EXACT 60 clips MiniCPM saw (`--ids-file` added to
+    ran on the EXACT 60 clips MiniCPM saw (`--ids-file` added to
     `vlm_bakeoff.py` — corpus rebuilds no longer change the sample).
+    Completed — full results in step 3 below.
   - **Flywheel turn 1 (2026-07-08 pm)**: first new production match
     archived (match_001_20260708_143451, source 0611_Tim_2-3.MP4,
     singles, 5 sets, 90 events, P1 = near per the new convention).
@@ -86,7 +90,7 @@ passes. Phase 0 step status:
     filter demoted to click-count optimization). Details + caveat
     in plan §6 step 2. Segmentation no longer blocks Phase 1
     semi-auto GUI.
-  - 🟢 **Phase 1 semi-auto GUI BUILT (2026-07-08 pm, uncommitted)**:
+  - 🟢 **Phase 1 semi-auto GUI BUILT (2026-07-08 pm, committed `10708ba`)**:
     Live Score panel split into Manual|Auto tabs (manual DOM moved
     verbatim, score.js untouched). Auto tab flow: mandatory ROI
     confirm gate (reuses the Auto Trim modal) → "Detect rallies"
@@ -145,6 +149,144 @@ passes. Phase 0 step status:
   reach >=90-95% raw). Bonus: all 7 real corpora sequences replay
   legally under the grammar; set structure matches every filename.
 
+- 🟢 **Side-info training labels in the GUI (2026-07-10, uncommitted)**:
+  three new `ProjectInfo` fields captured at production time so the
+  flywheel corpus carries side/swap truth without the post-hoc
+  `side_truth.json` backfill — `p1_side_set1` ("near"/"far"/null,
+  camera view, set 1), `swap_sides_each_set` (default true; untick for
+  special no-swap matches), `set5_mid_swap` (true/false/null unknown).
+  Setup panel gets a "Side info (auto-score training)" block, hidden
+  in Double mode. **Doubles exclusion is now explicit in data**:
+  manifest entries carry `match_type` + `auto_score_train_eligible`
+  (false for doubles), notes.md doubles entries carry an
+  "AUTO-SCORE TRAINING: EXCLUDED" marker, and every corpus record
+  carries `train_eligible` + the three side fields (`.get` defaults on
+  pre-field groundtruths). Bonus fix: project load now spreads
+  `data.info` over defaults instead of `Object.assign` onto the live
+  info, so loading a legacy JSON no longer carries the PREVIOUS
+  project's ROI / side labels into it. Also `camera_angle`
+  ("standard" behind-player family default | "side" ~90° | "other",
+  2026-07-10 pm): the P1-side select's AXIS follows the angle —
+  near/far for standard, LEFT/RIGHT of frame for side-on (operator
+  design: same control, options swap), disabled for "other";
+  `p1_side_set1` literal extended to near|far|left|right. Non-standard
+  matches are marked EVAL-ONLY in notes.md / manifest / corpus for
+  angle-locked training; operator holds a few rare side-on
+  recordings → out-of-family eval for G0b. Defaults follow the
+  operator's
+  production conventions (2026-07-10 pm): NEW projects default to
+  `p1_side_set1="near"`, `swap_sides_each_set=true`,
+  `set5_mid_swap=true` — operator flips only when a match deviates
+  (rare venue-quirk no-swap matches use the checkbox). Legacy project
+  loads normalise missing keys to null/unknown, never the defaults —
+  no fabricated labels for old data. Corpus rebuild verified (712
+  records, 166 doubles flagged ineligible); GUI verified E2E in
+  headless Edge (19/19: visibility toggle, defaults, save/load
+  round-trip, legacy reset, undo).
+
+- 🟢 **Handicap (điểm chấp) support (2026-07-10, uncommitted)**: new
+  `ProjectInfo.handicap_receiver` (0|1|2) + `handicap_pattern` (digit
+  string, one digit per set, CYCLING — "232" → set4 wraps to 2; digit
+  n = receiver starts the set leading n–0, sets still play to 11
+  win-by-2). Setup panel gets a "Handicap" block (receiver select +
+  pattern input with datalist presets 020/202/222/232/323/333/444),
+  visible in BOTH singles and doubles (production display; doubles
+  stays train-excluded). Score recompute starts each set from its
+  handicap score and RETRO-recomputes existing events on handicap
+  edits; the scoreboard (burned-in + preview, single source) shows a
+  gold "+<pattern>" badge after the receiver's name and the correct
+  pre-first-event start score. **Training-metadata guarantee: score
+  events remain REAL rallies only** (handicap baked into set-start
+  scores, never fake key presses) → handicap matches stay fully
+  train-eligible for segmentation + winner labels; notes.md gets a
+  prominent HANDICAP declaration, manifest + corpus records carry
+  `handicap_receiver`/`handicap_pattern` so score-grammar/solver
+  consumers can adjust or skip. Shared rule lives in
+  `handicap_set_start` (backend/ass/scoreboard/events.py) mirrored by
+  `handicapStart` (frontend/score.js). Tests 222 → 233 (incl. a
+  no-handicap byte-identity guard); E2E in headless Edge 19/19 (real
+  scoring on a live video: 11×A wins the set at 11–2, next set cycles
+  to 0–2, retro-recompute 222→020 verified).
+
+- 🟢 **YOLO retrain flywheel closed (2026-07-10, uncommitted)**:
+  (1) `/api/auto_trim/groundtruth_count` reports
+  `confirms_since_yolo_train` (confirm events newer than
+  `assets/models/roi_seg.pt` mtime) + `yolo_model_exists`. (2) NEW
+  module `backend/server/retrain.py` owns an in-server retrain job
+  (`POST /api/auto_trim/retrain_yolo` + status endpoint): runs
+  `build_yolo_dataset.py` → `train_roi_seg.py` on a worker thread,
+  refuses to overlap itself or any GPU job (render / auto-trim /
+  auto-score), and on success calls the new
+  `roi_yolo.invalidate_model_cache()` so the running server picks up
+  the new weights with NO restart. (3) NEW frontend module
+  `frontend/auto_trim/retrain.js` owns the whole retrain UI: staleness
+  line + "Retrain now" button in the Groundtruth panel, a popup offer
+  right after Confirm when ≥5 confirms are pending (once per modal
+  session), and 5 s status polling with toast on done/error. Rationale:
+  classical tiers (ORB + learned-NN) learn from confirms instantly;
+  YOLO used to lag silently (13 confirms pending when found). Same day
+  the backlog was cleared with a manual retrain on 56 videos / 126
+  images: mask mAP50-95 **0.908**, mAP50 0.995 (val = 26 images incl.
+  new venues; old 0.921 was on the smaller 53-entry val — not directly
+  comparable). (4) **Auto-comparison after every retrain**
+  (`scripts/compare_roi_models.py`, operator request): the retrain job
+  backs up the previous weights to `assets/models/roi_seg.prev.pt`,
+  and after training A/Bs old-vs-new through the exact production
+  inference path on every confirmed refframe (truth = operator
+  corners) — SUMMARY verdict (IMPROVED / TAIL IMPROVED / EQUIVALENT /
+  REGRESSED) lands in the modal's status toast/log. Measured verdict
+  for today's retrain: **TAIL IMPROVED** — within-2% 50→53/56, worst
+  2.81→2.28%, mean ~equal (1.01→1.07%); the recorded production
+  proposals the operator corrected averaged only 0.85% error (max
+  1.94%) — the remaining offsets are fine-precision edge adjustments,
+  not detection failures.
+  Tests 238 → 251; smoke E2E 4/4.
+
+- 🟢 **Training-status dashboard (2026-07-10, uncommitted)**: top-bar
+  "📊 Training" button (next to Save/Load/Render) opens a popup that
+  answers "is my manual production paying off, and is any training
+  action due?" without leaving the web UI. (1) NEW
+  `GET /api/training/status` (`backend/server/routes_training.py`,
+  thin aggregator) = corpus readiness + ROI staleness + live retrain
+  snapshot. (2) `dataset.training_corpus_stats()` counts MATCHES
+  (unique source videos, newest render wins) toward the G0b fine-tune
+  target (15): labeled (singles + score events + side info in the
+  archived project snapshot) / unlabeled legacy / doubles-excluded /
+  no-events; per-match table in the popup. The G0b fine-tune itself is
+  a milestone DECISION — the popup reports readiness only; the real
+  Start button is ROI retrain (same backend job as the Auto Trim
+  modal's). (3) Retrain job now reports **epoch-level progress**:
+  `retrain.py` streams `train_roi_seg.py` stdout via Popen, parses
+  ultralytics `epoch/total` lines into a 0..1 fraction (build 0→0.10,
+  train 0.10→0.90 by epoch, compare →1.0) exposed in
+  `retrain_status()`; progress bar in the popup + a "⟳ 42%" chip on
+  the top-bar button while a retrain runs in background (whichever UI
+  started it — Auto Trim modal dispatches `retrain-active`). (4)
+  `groundtruth_summary()` moved to `retrain.py` (shared by the modal
+  endpoint + dashboard). Frontend: `frontend/training_status.js`
+  (single-writer for `#modal-training` + `#btn-training-prog`).
+  Tests 251 → 260; E2E in headless Edge 10/10 on real data
+  (1/15 labeled, 56 ROI videos, retrain button disabled at staleness 0).
+
+- 🟢 **Retro-labeling of archived entries (2026-07-10, uncommitted)**:
+  `dataset.apply_retro_labels(slug, labels)` fills side-info into an
+  archived entry WITHOUT re-render — the expensive label (score
+  events) already sits in `dataset/<slug>/project.json`; only the
+  cheap geometry labels were missing. Whitelisted fields only
+  (`match_type` / `p1_side_set1` / `swap_sides_each_set` /
+  `set5_mid_swap` / `camera_angle`); snapshot updated in place,
+  "## Retro labels" provenance section appended to notes.md (original
+  auto-filled sections untouched), manifest `camera_angle` /
+  `match_type` + `auto_score_train_eligible` synced. Applied the
+  operator's answers to all 8 pre-GUI entries the same evening: 6
+  singles labeled (5 near + 1 far, all standard angle, swap yes,
+  set5 mid-swap yes where reached), and 2 entries turned out to be
+  **doubles mis-recorded as singles** (pre-match_type archives) — now
+  corrected + excluded. Corpus: **7/15 labeled, 0 unlabeled left**.
+  No GUI (operator preference — answers gathered in chat, applied by
+  the assistant); `resolve_entry_file` is traversal-safe for any
+  future dashboard use. Tests 260 → 265.
+
 **Operator-driven open item:** (A) run Auto Trim on a fresh match
 outside the 3 PHASE0_REPORT spike entries to measure real recall on
 truly-unseen venue + audio. Needs a new recording; the assistant can
@@ -165,7 +307,7 @@ Status per phase:
   5 doc-drift fixes (intro 6s→4s docstrings, stinger 2s→1.5s default,
   `models.py` detect_roi name, test count, STALE warning on
   `verify_rally_detector.py` EXPECTED targets).
-- ✅ **Phase 1 — backend robustness** (2026-07-07, uncommitted):
+- ✅ **Phase 1 — backend robustness** (2026-07-07, committed `715d0c1`):
   see PROGRESS.md "Polish & robustness" for the 4 fixes (job.trims
   race, registry eviction, 404 on missing video, swallowed-failure
   surfacing). 175 tests pass (+5 new for registry eviction).

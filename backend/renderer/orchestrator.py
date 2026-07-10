@@ -375,6 +375,8 @@ def _main_stage(ctx: RenderContext) -> None:
         p4_name=plan.project.info.p4,
         score_events=final_events,
         best_of=plan.project.info.best_of,
+        handicap_receiver=plan.project.info.handicap_receiver,
+        handicap_pattern=plan.project.info.handicap_pattern,
     )
     # SLOW MOTION badge: one Dialogue range per spliced-in replay, in
     # final-render coords. Skipped when no replays were spliced — saves

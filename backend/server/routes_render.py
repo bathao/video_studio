@@ -74,6 +74,8 @@ def preview_scoreboard(req: ScoreboardPreviewRequest) -> str:
         p3_name=p.info.p3, p4_name=p.info.p4,
         score_events=events,
         best_of=p.info.best_of,
+        handicap_receiver=p.info.handicap_receiver,
+        handicap_pattern=p.info.handicap_pattern,
     )
     return text
 

@@ -13,6 +13,7 @@ import { redraw, loadImage } from './canvas.js';
 import { syncDetectionUI } from './detection.js';
 import { log, setLoading } from './log.js';
 import { updateInfoPanel } from './info_panel.js';
+import { offerRetrainIfDue, updateRetrainUI } from './retrain.js';
 import { els, state } from './state.js';
 
 
@@ -78,13 +79,24 @@ export async function loadRefframeAndDetect() {
 
 export async function refreshGroundtruthCount() {
   try {
-    const r = await fetch('/api/auto_trim/groundtruth_count');
-    if (!r.ok) throw new Error(r.status);
-    const j = await r.json();
-    els.gtCount.textContent = `${j.count} / 10`;
-    els.gtCount.classList.toggle('text-success-400', j.count >= 10);
+    // Both payloads feed the retrain UI: the count drives the
+    // staleness line, the status resumes polling when a retrain is
+    // already running (e.g. modal reopened mid-train).
+    const [gtR, stR] = await Promise.all([
+      fetch('/api/auto_trim/groundtruth_count'),
+      fetch('/api/auto_trim/retrain_status'),
+    ]);
+    if (!gtR.ok) throw new Error(gtR.status);
+    const gt = await gtR.json();
+    const st = stR.ok ? await stR.json() : null;
+    els.gtCount.textContent = `${gt.count} / 10`;
+    els.gtCount.classList.toggle('text-success-400', gt.count >= 10);
+    updateRetrainUI(gt, st);
+    return { gt, st };
   } catch (e) {
     els.gtCount.textContent = '—';
+    updateRetrainUI(null, null);
+    return null;
   }
 }
 
@@ -122,7 +134,10 @@ export async function onConfirmClick() {
     toast(state.wasEdited
       ? 'ROI corrected — saved as groundtruth'
       : 'ROI confirmed as-detected');
-    await refreshGroundtruthCount();
+    const gtSt = await refreshGroundtruthCount();
+    // Enough confirms piled up since the last YOLO train? Offer a
+    // one-click retrain right where the data was just created.
+    if (gtSt) offerRetrainIfDue(gtSt.gt, gtSt.st);
     // ROI now locked in. Button becomes informational; close happens via
     // the bottom Close button or the ✕ in the modal header.
     state.confirmed = true;

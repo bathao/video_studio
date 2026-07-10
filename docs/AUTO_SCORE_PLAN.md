@@ -131,6 +131,37 @@ offline against labeled data BEFORE building GUI.
 - Different matches → different angles/venues; within a match the
   frame is constant (same property the ROI multi-frame detector
   exploits).
+- **REVISED (operator, 2026-07-10): one angle FAMILY with small
+  per-match jitter, not per-match random.** The operator places the
+  camera himself and has converged on a near-optimal setup that fits
+  the clubs he plays at: behind one player, slightly diagonal — like
+  all current corpus data — with small placement variation match to
+  match. Only a few percent of matches will ever deviate from the
+  family. What varies meaningfully per match is the VENUE
+  (background, lighting, floor, adjacent tables); the small angle
+  jitter is beneficial (natural augmentation) and is absorbed by the
+  ROI-canonical warp below.
+  Consequences for training (angle-locked strategy):
+  (a) geometric priors are stable across the whole corpus — the
+  bake-off's winning geometry prompt (near = BOTTOM/large, far =
+  TOP/small) holds everywhere; (b) the right normalization is
+  ROI-canonical: crop/warp the playzone relative to the confirmed
+  table quad so every match lands in one canonical layout, and
+  suppress the background — this attacks the measured venue-overfit
+  directly (pixel CNNs learned the venue, not the play state);
+  (c) venue diversity still matters for lighting/background
+  invariance but the §3.2 data budget is likely CONSERVATIVE — a
+  fixed-geometry task needs less data than a per-match-angle task;
+  (d) rare off-angle matches: tagged at production time via
+  `ProjectInfo.camera_angle` ("standard" default | "side" ~90° |
+  "other"; Setup → Side info block, added 2026-07-10). The P1-side
+  label's AXIS follows the angle (operator GUI design): near/far for
+  standard, LEFT/RIGHT of the video frame for side-on, no axis for
+  "other" — so side-on matches keep a fully usable winner-side
+  mapping. Non-standard matches flow into notes.md / manifest /
+  corpus records marked eval-only — never let a few-percent slice
+  drive train decisions. The operator holds a few rare ~90° side-on
+  recordings: valuable as an out-of-family robustness eval for G0b.
 - Source quality is 2K (e.g. 2688×1512 observed in dataset) — ROI
   crops retain usable player-level detail; the ball itself is still
   only a few pixels (ball tracking stays ruled out).

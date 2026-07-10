@@ -130,6 +130,27 @@ def test_manifest_entry_appended(tmp_path, monkeypatch):
     assert e["source_duration_sec"] == 100.0
     # Slug starts with project name and has timestamp suffix
     assert e["slug"].startswith("match01_")
+    # Singles by default → eligible for auto-score training
+    assert e["match_type"] == "single"
+    assert e["auto_score_train_eligible"] is True
+
+
+def test_manifest_flags_doubles_as_train_ineligible(tmp_path, monkeypatch):
+    """A doubles render must land in the manifest with
+    auto_score_train_eligible=False so corpus/eval scripts can skip it
+    without opening groundtruth.json."""
+    dataset_root = _setup_dataset_dir(monkeypatch, tmp_path)
+    ctx, output_mp4 = _make_fake_render(tmp_path)
+    ctx.plan.project.info.match_type = "double"
+
+    dataset.archive_to_dataset(ctx, output_mp4)
+
+    manifest = json.loads(
+        (dataset_root / "manifest.json").read_text(encoding="utf-8"),
+    )
+    e = manifest["entries"][0]
+    assert e["match_type"] == "double"
+    assert e["auto_score_train_eligible"] is False
 
 
 def test_manifest_appends_across_calls(tmp_path, monkeypatch):
@@ -330,6 +351,112 @@ def test_notes_doubles_uses_team_format():
     assert "doubles" in md
 
 
+def test_notes_doubles_marks_auto_score_training_excluded():
+    """Doubles matches must carry an explicit exclusion marker so
+    nobody feeds them into auto-score training by accident — and the
+    singles-only side/swap section must NOT appear."""
+    project = _basic_project(info={"match_type": "double", "p3": "C", "p4": "D"})
+    md = dataset.build_notes_md(project, {}, project_name="m")
+    assert "AUTO-SCORE TRAINING: EXCLUDED" in md
+    assert "## Side / swap" not in md
+
+
+def test_notes_singles_side_swap_defaults():
+    """New projects carry the production-convention defaults (P1 near,
+    swap every set, set-5 mid-swap yes)."""
+    md = dataset.build_notes_md(_basic_project(), {}, project_name="m")
+    assert "## Side / swap (auto-score training labels)" in md
+    assert "P1 side in set 1 (camera view): near" in md
+    assert "Swap sides after every set: yes (standard)" in md
+    assert "Set 5 mid-set swap at 5 points: yes" in md
+    assert "AUTO-SCORE TRAINING: EXCLUDED" not in md
+
+
+def test_notes_singles_side_swap_legacy_unknown():
+    """Legacy projects (explicit nulls) surface as unknown — never a
+    fabricated label for old data."""
+    project = _basic_project(info={
+        "p1_side_set1": None,
+        "set5_mid_swap": None,
+    })
+    md = dataset.build_notes_md(project, {}, project_name="m")
+    assert "P1 side in set 1 (camera view): unknown" in md
+    assert "Set 5 mid-set swap at 5 points: unknown / not reached" in md
+
+
+def test_notes_side_angle_marked_eval_only():
+    """A non-standard camera angle must be flagged loudly — it is
+    eval-only for angle-locked training and near/far has no meaning."""
+    project = _basic_project(info={"camera_angle": "side"})
+    md = dataset.build_notes_md(project, {}, project_name="m")
+    assert "CAMERA ANGLE: side" in md
+    assert "EVAL-ONLY" in md
+
+
+def test_notes_standard_angle_stays_quiet():
+    md = dataset.build_notes_md(_basic_project(), {}, project_name="m")
+    assert "CAMERA ANGLE" not in md
+
+
+def test_manifest_carries_camera_angle(tmp_path, monkeypatch):
+    dataset_root = _setup_dataset_dir(monkeypatch, tmp_path)
+    ctx, output_mp4 = _make_fake_render(tmp_path)
+    ctx.plan.project.info.camera_angle = "side"
+
+    dataset.archive_to_dataset(ctx, output_mp4)
+
+    manifest = json.loads(
+        (dataset_root / "manifest.json").read_text(encoding="utf-8"),
+    )
+    assert manifest["entries"][0]["camera_angle"] == "side"
+
+
+def test_notes_handicap_declared_as_training_metadata():
+    """A handicap match must declare receiver + pattern prominently —
+    solver-style consumers replay cached scores and NEED this to make
+    sense of sets that start at e.g. 2-0."""
+    project = _basic_project(info={
+        "handicap_receiver": 2,
+        "handicap_pattern": "222",
+    })
+    md = dataset.build_notes_md(project, {}, project_name="m")
+    assert "HANDICAP: P2 receives '222' from P1" in md
+    assert "REAL rally" in md
+
+
+def test_notes_no_handicap_line_when_none():
+    md = dataset.build_notes_md(_basic_project(), {}, project_name="m")
+    assert "HANDICAP" not in md
+
+
+def test_manifest_carries_handicap_fields(tmp_path, monkeypatch):
+    dataset_root = _setup_dataset_dir(monkeypatch, tmp_path)
+    ctx, output_mp4 = _make_fake_render(tmp_path)
+    ctx.plan.project.info.handicap_receiver = 1
+    ctx.plan.project.info.handicap_pattern = "020"
+
+    dataset.archive_to_dataset(ctx, output_mp4)
+
+    manifest = json.loads(
+        (dataset_root / "manifest.json").read_text(encoding="utf-8"),
+    )
+    e = manifest["entries"][0]
+    assert e["handicap_receiver"] == 1
+    assert e["handicap_pattern"] == "020"
+
+
+def test_notes_singles_side_swap_confirmed():
+    project = _basic_project(info={
+        "p1_side_set1": "far",
+        "swap_sides_each_set": False,
+        "set5_mid_swap": False,
+    })
+    md = dataset.build_notes_md(project, {}, project_name="m")
+    assert "P1 side in set 1 (camera view): far" in md
+    assert "NO — special match, no per-set swap" in md
+    assert "Set 5 mid-set swap at 5 points: no" in md
+
+
 def test_notes_final_score_from_last_event():
     project = _basic_project(score_events=[
         ScoreEvent(timestamp=10.0, who=1, p1_score=1, p1_set=0, p2_set=0),
@@ -462,3 +589,169 @@ def test_archive_runs_after_groundtruth_export_missing_sidecars(tmp_path, monkey
     assert not (entry / "groundtruth.json").exists()
     assert not (entry / "refframe.png").exists()
     assert "missing in output/" in ctx.state.message
+
+
+# ---------- training_corpus_stats -------------------------------------------
+
+
+def _corpus_entry(root: Path, slug: str, video: str, *, match_type="single",
+                  rallies=50, archived_at="2026-07-10T20:00:00", side=None):
+    """Write a minimal dataset entry dir + return its manifest line."""
+    entry_dir = root / slug
+    entry_dir.mkdir(parents=True, exist_ok=True)
+    info = {"p1_side_set1": side} if side is not None else {}
+    (entry_dir / "project.json").write_text(
+        json.dumps({"info": info}), encoding="utf-8")
+    return {"slug": slug, "source_video_name": video,
+            "match_type": match_type, "real_rally_count": rallies,
+            "archived_at": archived_at}
+
+
+def _write_manifest(root: Path, entries: list[dict]) -> None:
+    (root / "manifest.json").write_text(
+        json.dumps({"version": 1, "entries": entries}), encoding="utf-8")
+
+
+def test_corpus_stats_classifies_matches(tmp_path):
+    entries = [
+        _corpus_entry(tmp_path, "a", "a.mp4", side="near"),
+        _corpus_entry(tmp_path, "b", "b.mp4"),                      # legacy, no side
+        _corpus_entry(tmp_path, "c", "c.mp4", match_type="double", side="near"),
+        _corpus_entry(tmp_path, "d", "d.mp4", rallies=0, side="near"),
+    ]
+    _write_manifest(tmp_path, entries)
+    s = dataset.training_corpus_stats(tmp_path)
+    assert s["labeled_matches"] == 1
+    assert s["unlabeled_matches"] == 1
+    assert s["doubles_matches"] == 1
+    assert s["no_event_matches"] == 1
+    assert s["total_entries"] == 4
+    assert s["ready"] is False
+    by_video = {m["video"]: m["status"] for m in s["matches"]}
+    assert by_video == {"a.mp4": "labeled", "b.mp4": "unlabeled",
+                        "c.mp4": "doubles", "d.mp4": "no_events"}
+
+
+def test_corpus_stats_dedupes_re_renders_newest_wins(tmp_path):
+    """Two renders of the same source video are ONE match; the newer
+    entry (with side info) decides its status."""
+    entries = [
+        _corpus_entry(tmp_path, "old", "same.mp4",
+                      archived_at="2026-07-01T10:00:00"),
+        _corpus_entry(tmp_path, "new", "same.mp4", side="far",
+                      archived_at="2026-07-10T10:00:00"),
+    ]
+    _write_manifest(tmp_path, entries)
+    s = dataset.training_corpus_stats(tmp_path)
+    assert s["labeled_matches"] == 1
+    assert s["unlabeled_matches"] == 0
+    assert s["total_entries"] == 2
+    assert len(s["matches"]) == 1
+    assert s["matches"][0]["slug"] == "new"
+
+
+def test_corpus_stats_ready_at_target(tmp_path):
+    entries = [
+        _corpus_entry(tmp_path, f"m{i}", f"m{i}.mp4", side="near")
+        for i in range(dataset.G0B_TARGET_MATCHES)
+    ]
+    _write_manifest(tmp_path, entries)
+    s = dataset.training_corpus_stats(tmp_path)
+    assert s["labeled_matches"] == dataset.G0B_TARGET_MATCHES
+    assert s["ready"] is True
+
+
+def test_corpus_stats_no_manifest(tmp_path):
+    s = dataset.training_corpus_stats(tmp_path)
+    assert s["labeled_matches"] == 0
+    assert s["ready"] is False
+    assert s["matches"] == []
+
+
+def test_corpus_stats_missing_project_json_is_unlabeled(tmp_path):
+    """Entry dir deleted or snapshot unreadable → conservative: not
+    labeled (never fabricate a training label)."""
+    entries = [{"slug": "gone", "source_video_name": "x.mp4",
+                "match_type": "single", "real_rally_count": 10,
+                "archived_at": "2026-07-10T10:00:00"}]
+    _write_manifest(tmp_path, entries)
+    s = dataset.training_corpus_stats(tmp_path)
+    assert s["unlabeled_matches"] == 1
+    assert s["labeled_matches"] == 0
+
+
+# ---------- retro-labeling ---------------------------------------------------
+
+
+def test_apply_retro_labels_updates_snapshot_and_notes(tmp_path):
+    entries = [_corpus_entry(tmp_path, "e1", "v.mp4")]
+    _write_manifest(tmp_path, entries)
+    (tmp_path / "e1" / "notes.md").write_text("# v\n", encoding="utf-8")
+
+    applied = dataset.apply_retro_labels("e1", {
+        "p1_side_set1": "far",
+        "swap_sides_each_set": True,
+        "set5_mid_swap": None,
+        "camera_angle": "standard",
+    }, tmp_path)
+
+    info = json.loads(
+        (tmp_path / "e1" / "project.json").read_text(encoding="utf-8"))["info"]
+    assert info["p1_side_set1"] == "far"
+    assert info["set5_mid_swap"] is None
+    notes = (tmp_path / "e1" / "notes.md").read_text(encoding="utf-8")
+    assert "## Retro labels" in notes
+    assert "- p1_side_set1: far" in notes
+    assert "- set5_mid_swap: unknown" in notes
+    assert applied["p1_side_set1"] == "far"
+    # Entry flips to labeled in the corpus stats.
+    s = dataset.training_corpus_stats(tmp_path)
+    assert s["labeled_matches"] == 1
+
+
+def test_apply_retro_labels_match_type_syncs_manifest(tmp_path):
+    """Correcting a pre-GUI doubles entry must flip the manifest's
+    exclusion flag, not just the snapshot."""
+    entries = [_corpus_entry(tmp_path, "e1", "v.mp4")]
+    _write_manifest(tmp_path, entries)
+
+    dataset.apply_retro_labels("e1", {"match_type": "double"}, tmp_path)
+
+    manifest = json.loads(
+        (tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    e = manifest["entries"][0]
+    assert e["match_type"] == "double"
+    assert e["auto_score_train_eligible"] is False
+    s = dataset.training_corpus_stats(tmp_path)
+    assert s["doubles_matches"] == 1
+    assert s["labeled_matches"] == 0
+
+
+def test_apply_retro_labels_rejects_unknown_fields(tmp_path):
+    _write_manifest(tmp_path, [_corpus_entry(tmp_path, "e1", "v.mp4")])
+    try:
+        dataset.apply_retro_labels("e1", {"score_events": []}, tmp_path)
+        raise AssertionError("unknown field must be rejected")
+    except ValueError as e:
+        assert "score_events" in str(e)
+
+
+def test_apply_retro_labels_missing_entry_raises_lookup(tmp_path):
+    _write_manifest(tmp_path, [])
+    try:
+        dataset.apply_retro_labels("nope", {"match_type": "double"}, tmp_path)
+        raise AssertionError("missing entry must raise")
+    except LookupError:
+        pass
+
+
+def test_resolve_entry_file_blocks_traversal(tmp_path):
+    (tmp_path / "e1").mkdir()
+    (tmp_path / "e1" / "project.json").write_text("{}", encoding="utf-8")
+    assert dataset.resolve_entry_file("e1", "project.json", tmp_path).is_file()
+    for bad in ("..", "e1/../..", "../e1"):
+        try:
+            dataset.resolve_entry_file(bad, "project.json", tmp_path)
+            raise AssertionError(f"traversal not blocked: {bad}")
+        except LookupError:
+            pass

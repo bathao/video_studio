@@ -307,6 +307,16 @@ def _extract_quad_from_result(img_bgr: np.ndarray, r0) -> dict | None:
     }
 
 
+def invalidate_model_cache() -> None:
+    """Drop the cached model (or cached False) so the next call
+    re-checks disk and lazy-loads fresh weights. Called by the retrain
+    job after it replaces `roi_seg.pt` — the running server picks up
+    the new model without a restart."""
+    global _model_cache
+    with _model_lock:
+        _model_cache = None
+
+
 def warm_up() -> bool:
     """Pre-load + warm-cache the YOLO model. Idempotent. Returns True if
     the model is now loaded; False if missing/unavailable (silent no-op).

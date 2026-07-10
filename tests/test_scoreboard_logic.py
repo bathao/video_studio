@@ -12,7 +12,38 @@ from backend.ass.scoreboard import (
     ScoreFrame,
     _set_final_score,
     _walk_events,
+    handicap_set_start,
 )
+
+
+# ---------- handicap_set_start ----------------------------------------------
+
+
+def test_handicap_no_receiver_or_pattern_is_zero_zero():
+    assert handicap_set_start(0, "222", 0) == (0, 0)
+    assert handicap_set_start(1, "", 0) == (0, 0)
+    assert handicap_set_start(2, None, 3) == (0, 0)
+
+
+def test_handicap_receiver_side():
+    assert handicap_set_start(1, "222", 0) == (2, 0)
+    assert handicap_set_start(2, "222", 0) == (0, 2)
+
+
+def test_handicap_pattern_cycles_past_length():
+    # "232" → set1=2, set2=3, set3=2, set4 wraps to digit 0 (=2), set5=3.
+    assert [handicap_set_start(2, "232", i)[1] for i in range(5)] == [2, 3, 2, 2, 3]
+
+
+def test_handicap_pattern_ignores_non_digits():
+    assert handicap_set_start(1, " 2-2/2 ", 1) == (2, 0)
+
+
+def test_handicap_zero_digit_means_scratch_set():
+    # "020": sets 1 and 3 start level, set 2 gives 2 points.
+    assert handicap_set_start(2, "020", 0) == (0, 0)
+    assert handicap_set_start(2, "020", 1) == (0, 2)
+    assert handicap_set_start(2, "020", 2) == (0, 0)
 
 
 # ---------- _set_final_score -----------------------------------------------

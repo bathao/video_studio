@@ -41,6 +41,21 @@ def resolve_row_names(
     return (p1 or "", p2 or "")
 
 
+def handicap_set_start(receiver: int, pattern: str,
+                       set_index: int) -> tuple[int, int]:
+    """Start score (p1, p2) of 0-based set `set_index` under handicap.
+
+    `pattern` is a digit string cycling over sets ("232" → set 4 wraps
+    back to digit 0); the digit goes to the receiving side, the other
+    side starts at 0. (0, 0) when there is no handicap. Mirrored by
+    `handicapStart` in frontend/score.js — keep the two in sync."""
+    digits = "".join(ch for ch in (pattern or "") if ch.isdigit())
+    if receiver not in (1, 2) or not digits:
+        return (0, 0)
+    pts = int(digits[set_index % len(digits)])
+    return (pts, 0) if receiver == 1 else (0, pts)
+
+
 def _set_final_score(prev_p1: int, prev_p2: int, won_by: int) -> tuple[int, int]:
     """
     Recover the final score of a set from the event immediately BEFORE

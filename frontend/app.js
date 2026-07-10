@@ -15,7 +15,9 @@
 import { $ } from './dom.js';
 import { refreshAvatarThumb } from './avatars.js';
 import { live, mut, project, snapshot, undoStack } from './state.js';
-import { syncLiveFromTime, syncScore, syncEvents, scorePoint } from './score.js';
+import {
+  syncLiveFromTime, syncScore, syncEvents, scorePoint, recomputeAllEvents,
+} from './score.js';
 import {
   player, setVideoSource, togglePlay, seekBy, loadVideoList,
 } from './player.js';
@@ -27,6 +29,7 @@ import { renderReviewList } from './auto_score/index.js';
 import { syncScoreboardPreview } from './scoreboard_preview.js';
 import { syncTimeline } from './timeline.js';
 import { toast } from './toast.js';
+import './training_status.js'; // top-bar Training button + status modal
 
 
 // ---------- orchestration --------------------------------------------------
@@ -62,6 +65,11 @@ function applyMatchTypeUI() {
   for (const el of document.querySelectorAll('.setup-doubles')) {
     el.classList.toggle('hidden', mt !== 'double');
   }
+  // Side-info block is singles-only: doubles matches are excluded from
+  // auto-score training, so the labels would be meaningless there.
+  for (const el of document.querySelectorAll('.setup-singles')) {
+    el.classList.toggle('hidden', mt === 'double');
+  }
   // Player-1 / Player-2 row labels — in doubles each row is a pair.
   $('lbl-in-p1').firstChild.nodeValue = mt === 'double'
     ? 'Player 1 (Team 1, key A)'
@@ -69,6 +77,35 @@ function applyMatchTypeUI() {
   $('lbl-in-p2').firstChild.nodeValue = mt === 'double'
     ? 'Player 2 (Team 2, key D)'
     : 'Player 2 (Right, key D)';
+}
+
+// P1-side axis depends on the camera angle: near/far (distance from
+// the tripod) for the standard behind-player family, left/right (of
+// the video frame) for side-on; "other" has no defined axis. Mirrors
+// backend ProjectInfo semantics.
+const P1_SIDE_OPTIONS = {
+  standard: [
+    ['near', 'P1 near camera (default)'],
+    ['far', 'P1 far from camera'],
+    ['', '— unknown —'],
+  ],
+  side: [
+    ['', '— unknown —'],
+    ['left', 'P1 on the LEFT of frame'],
+    ['right', 'P1 on the RIGHT of frame'],
+  ],
+  other: [['', '— n/a (unusual angle) —']],
+};
+function syncP1SideOptions(angle, value) {
+  const sel = $('in-p1-side');
+  const opts = P1_SIDE_OPTIONS[angle] || P1_SIDE_OPTIONS.other;
+  sel.innerHTML = opts
+    .map(([v, label]) => `<option value="${v}">${label}</option>`)
+    .join('');
+  sel.disabled = !(angle in P1_SIDE_OPTIONS) || angle === 'other';
+  // Stale values from another axis (e.g. 'near' after switching to
+  // side-on) fall back to unknown.
+  sel.value = opts.some(([v]) => v === (value || '')) ? (value || '') : '';
 }
 
 function syncInfoFromInputs() {
@@ -80,6 +117,21 @@ function syncInfoFromInputs() {
   project.info.p1_team = $('in-p1-team').value;
   project.info.p2_team = $('in-p2-team').value;
   project.info.best_of = parseInt($('in-best-of').value, 10) || 5;
+  // Handicap — receiver 0 means none; pattern is digits-only (the
+  // input listener sanitises as the operator types).
+  project.info.handicap_receiver = parseInt($('in-hcp-receiver').value, 10) || 0;
+  project.info.handicap_pattern = $('in-hcp-pattern').value.replace(/\D/g, '');
+  $('in-hcp-pattern').disabled = project.info.handicap_receiver === 0;
+  // Auto Score training labels ('' in the selects means "not
+  // confirmed" / "unknown" and maps to null in the project schema).
+  // The P1-side option set follows the camera angle (near/far vs
+  // left/right) — rebuilt by syncP1SideOptions at the angle-change
+  // listener and in syncAllUI, so here we only read.
+  project.info.camera_angle = $('in-camera-angle').value || 'standard';
+  project.info.p1_side_set1 = $('in-p1-side').value || null;
+  project.info.swap_sides_each_set = $('in-swap-sides').checked;
+  const s5 = $('in-set5-swap').value;
+  project.info.set5_mid_swap = s5 === '' ? null : s5 === 'yes';
   const isDoubles = project.info.match_type === 'double';
   const top = isDoubles
     ? combineDoublesName(project.info.p1, project.info.p3) || 'P1'
@@ -87,8 +139,13 @@ function syncInfoFromInputs() {
   const bot = isDoubles
     ? combineDoublesName(project.info.p2, project.info.p4) || 'P2'
     : (project.info.p2 || 'P2');
-  $('lbl-p1').textContent = top.toUpperCase();
-  $('lbl-p2').textContent = bot.toUpperCase();
+  // Mirror of the scoreboard's gold "+<pattern>" badge after the
+  // receiving side's name (the burned-in version lives in
+  // backend/ass/scoreboard/builder.py).
+  const hcpBadge = (project.info.handicap_receiver && project.info.handicap_pattern)
+    ? ` +${project.info.handicap_pattern}` : '';
+  $('lbl-p1').textContent = top.toUpperCase() + (project.info.handicap_receiver === 1 ? hcpBadge : '');
+  $('lbl-p2').textContent = bot.toUpperCase() + (project.info.handicap_receiver === 2 ? hcpBadge : '');
   syncScoreboardPreview();
 }
 
@@ -101,6 +158,17 @@ function syncAllUI() {
   $('in-p1-team').value = project.info.p1_team || '';
   $('in-p2-team').value = project.info.p2_team || '';
   $('in-best-of').value = String(project.info.best_of || 5);
+  $('in-hcp-receiver').value = String(project.info.handicap_receiver || 0);
+  $('in-hcp-pattern').value = project.info.handicap_pattern || '';
+  $('in-hcp-pattern').disabled = !(project.info.handicap_receiver || 0);
+  $('in-camera-angle').value = project.info.camera_angle || 'standard';
+  syncP1SideOptions(
+    project.info.camera_angle || 'standard',
+    project.info.p1_side_set1 || '',
+  );
+  $('in-swap-sides').checked = project.info.swap_sides_each_set !== false;
+  $('in-set5-swap').value = project.info.set5_mid_swap == null
+    ? '' : (project.info.set5_mid_swap ? 'yes' : 'no');
   applyMatchTypeUI();
   const vf = project.info.video_file || '';
   if (vf) {
@@ -177,10 +245,44 @@ $('in-p4').addEventListener('input', () => refreshAvatarThumb('p4'));
   snapshotInfoBurst();
   syncInfoFromInputs();
 }));
-$('in-best-of').addEventListener('change', () => {
+[
+  'in-best-of', 'in-p1-side', 'in-swap-sides', 'in-set5-swap',
+].forEach((id) => $(id).addEventListener('change', () => {
   snapshotInfoBurst();
   syncInfoFromInputs();
+}));
+
+// Changing the angle switches the P1-side AXIS (near/far vs
+// left/right), so the option set rebuilds and the value resets to
+// that family's convention default ('near' for standard, unknown for
+// side-on/other) instead of carrying a stale cross-axis value. Loads
+// of saved projects keep their explicit value — this only fires on an
+// operator click.
+$('in-camera-angle').addEventListener('change', () => {
+  snapshotInfoBurst();
+  const angle = $('in-camera-angle').value || 'standard';
+  syncP1SideOptions(angle, angle === 'standard' ? 'near' : '');
+  syncInfoFromInputs();
 });
+
+// Handicap edits change how EXISTING score events replay (each set's
+// start score moves), so beyond the usual info sync they recompute the
+// derived score cache + refresh the score panel and events list.
+function onHandicapChange() {
+  snapshotInfoBurst();
+  // Sanitise in place so the operator sees digits-only immediately.
+  const pat = $('in-hcp-pattern');
+  if (pat.value !== pat.value.replace(/\D/g, '')) {
+    pat.value = pat.value.replace(/\D/g, '');
+  }
+  syncInfoFromInputs();
+  recomputeAllEvents();
+  syncLiveFromTime(player.currentTime);
+  syncScore();
+  syncEvents();
+}
+$('in-hcp-receiver').addEventListener('change', onHandicapChange);
+$('in-hcp-pattern').addEventListener('input', onHandicapChange);
 
 // Match-type tabs. Clicking either tab updates state, re-renders the
 // setup UI (which hides / shows the partner inputs), and re-fetches

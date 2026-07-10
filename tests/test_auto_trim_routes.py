@@ -112,3 +112,72 @@ def test_trim_segment_accepts_auto_source():
 def test_trim_segment_rejects_unknown_source():
     with pytest.raises(Exception):
         TrimSegment.model_validate({"start": 1.0, "end": 5.0, "source": "bogus"})
+
+
+def test_project_info_side_fields_default_to_production_conventions():
+    """Missing side-info keys default to the operator's production
+    conventions (P1 near in set 1, swap every set, set-5 mid-swap at
+    5). Explicit nulls (legacy loads normalised by project_io.js)
+    still round-trip as unknown."""
+    from backend.models import ProjectInfo
+
+    info = ProjectInfo.model_validate({"p1": "A", "p2": "B"})
+    assert info.p1_side_set1 == "near"
+    assert info.swap_sides_each_set is True
+    assert info.set5_mid_swap is True
+
+    info = ProjectInfo.model_validate(
+        {"p1_side_set1": None, "set5_mid_swap": None})
+    assert info.p1_side_set1 is None
+    assert info.set5_mid_swap is None
+
+
+def test_project_info_side_fields_roundtrip_and_validate():
+    from backend.models import ProjectInfo
+
+    info = ProjectInfo.model_validate({
+        "p1_side_set1": "far",
+        "swap_sides_each_set": False,
+        "set5_mid_swap": True,
+    })
+    dumped = info.model_dump()
+    assert dumped["p1_side_set1"] == "far"
+    assert dumped["swap_sides_each_set"] is False
+    assert dumped["set5_mid_swap"] is True
+    # Side-on matches record left/right of frame instead of near/far.
+    assert ProjectInfo.model_validate(
+        {"camera_angle": "side", "p1_side_set1": "left"}).p1_side_set1 == "left"
+    with pytest.raises(Exception):
+        ProjectInfo.model_validate({"p1_side_set1": "top"})
+
+
+def test_project_info_camera_angle_defaults_and_validation():
+    """Legacy projects default to the standard behind-player angle
+    family; only the three known values validate."""
+    from backend.models import ProjectInfo
+
+    assert ProjectInfo.model_validate({}).camera_angle == "standard"
+    assert ProjectInfo.model_validate(
+        {"camera_angle": "side"}).camera_angle == "side"
+    with pytest.raises(Exception):
+        ProjectInfo.model_validate({"camera_angle": "90deg"})
+
+
+def test_project_info_handicap_defaults_and_validation():
+    """Legacy projects (no handicap keys) default to no handicap; the
+    pattern only accepts digit strings and the receiver only 0/1/2."""
+    from backend.models import ProjectInfo
+
+    info = ProjectInfo.model_validate({"p1": "A"})
+    assert info.handicap_receiver == 0
+    assert info.handicap_pattern == ""
+
+    info = ProjectInfo.model_validate(
+        {"handicap_receiver": 2, "handicap_pattern": "232"})
+    assert info.handicap_receiver == 2
+    assert info.handicap_pattern == "232"
+
+    with pytest.raises(Exception):
+        ProjectInfo.model_validate({"handicap_pattern": "2a2"})
+    with pytest.raises(Exception):
+        ProjectInfo.model_validate({"handicap_receiver": 3})

@@ -80,7 +80,24 @@ async function loadProject(name) {
   } catch {
     return toast('Load failed: backend unreachable');
   }
-  Object.assign(project.info, data.info || {});
+  // Spread over defaults instead of Object.assign onto the live info:
+  // a project JSON saved before a field existed (roi_quadrilateral,
+  // the side-info labels) has no key for it, and assign would silently
+  // keep the PREVIOUS project's value — a stale ROI or side label then
+  // poisons this project on the next save.
+  project.info = {
+    tournament: '', match_type: 'single', p1: '', p2: '', p3: '', p4: '',
+    p1_team: '', p2_team: '', video_file: '', best_of: 5,
+    roi_quadrilateral: null,
+    handicap_receiver: 0, handicap_pattern: '',
+    // Deliberately null (unknown), NOT the new-project defaults
+    // ('near'/true): a legacy project predates the side-info fields
+    // and its true side/swap facts are unknown — don't fabricate
+    // training labels for old data.
+    camera_angle: 'standard',
+    p1_side_set1: null, swap_sides_each_set: true, set5_mid_swap: null,
+    ...(data.info || {}),
+  };
   project.trim_segments = data.trim_segments || [];
   project.highlights = data.highlights || [];
   project.score_events = data.score_events || [];

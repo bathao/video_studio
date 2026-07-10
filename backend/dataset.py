@@ -175,11 +175,25 @@ def archive_to_dataset(ctx: "RenderContext", output_mp4: Path) -> None:
         except (TypeError, ValueError):
             pass
 
+    # Doubles matches are excluded from auto-score training/eval
+    # (operator directive) — flag it in the manifest so downstream
+    # corpus/eval scripts can filter without opening groundtruth.json.
+    match_type = (ctx.plan.project.info.match_type or "single").lower()
     entry = {
         "slug": entry_dir.name,
         "archived_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(when)),
         "project_name": project_name,
         "source_video_name": ctx.src.name,
+        "match_type": match_type,
+        "auto_score_train_eligible": match_type != "double",
+        # Handicap metadata (0/"" = none). Cached event scores include
+        # the per-set handicap start — solver-style consumers filter or
+        # adjust on these; segmentation + winner labels are unaffected.
+        "handicap_receiver": int(getattr(ctx.plan.project.info, "handicap_receiver", 0) or 0),
+        "handicap_pattern": str(getattr(ctx.plan.project.info, "handicap_pattern", "") or ""),
+        # "standard" = the operator's usual behind-player diagonal
+        # family; anything else → eval-only for angle-locked training.
+        "camera_angle": str(getattr(ctx.plan.project.info, "camera_angle", "standard") or "standard"),
         "source_duration_sec": round(source_duration, 3),
         "kept_segment_count": kept_segment_count,
         "real_rally_count": real_rally_count,
@@ -239,6 +253,11 @@ def build_notes_md(
             team2 += f" ({info.p2_team})"
         lines.append(f"- Teams: {team1} vs {team2}")
         lines.append(f"- Format: doubles, best of {info.best_of}")
+        lines.append(
+            "- **AUTO-SCORE TRAINING: EXCLUDED** — doubles match; the "
+            "auto-score corpus trains and evaluates on singles only "
+            "(operator directive 2026-07-08). Kept for reference only."
+        )
     else:
         p1 = info.p1 + (f" ({info.p1_team})" if info.p1_team else "")
         p2 = info.p2 + (f" ({info.p2_team})" if info.p2_team else "")
@@ -254,7 +273,61 @@ def build_notes_md(
             f"- Final: {info.p1} {last.p1_set}–{last.p2_set} {info.p2} "
             f"(last game {last.p1_score}–{last.p2_score})"
         )
+    # Handicap declaration — critical training metadata. Cached event
+    # scores INCLUDE the handicap start of each set, so any consumer
+    # replaying the score grammar must read this or the sequence looks
+    # illegal (sets appear to start at e.g. 2-0).
+    hcp_recv = getattr(info, "handicap_receiver", 0)
+    hcp_pat = "".join(
+        ch for ch in str(getattr(info, "handicap_pattern", "") or "")
+        if ch.isdigit()
+    )
+    if hcp_recv in (1, 2) and hcp_pat:
+        receiver = "P1" if hcp_recv == 1 else "P2"
+        giver = "P2" if hcp_recv == 1 else "P1"
+        lines.append(
+            f"- **HANDICAP: {receiver} receives '{hcp_pat}' from {giver}** — "
+            "one digit per set, cycling past the pattern length; the "
+            "receiver starts each set leading digit–0 and sets still "
+            "play to 11 win-by-2. Handicap points are baked into each "
+            "set's START score: every score event here is a REAL rally "
+            "(no fake key presses), so segmentation and winner labels "
+            "are fully train-eligible. Only score-grammar/solver work "
+            "must account for the shifted set starts."
+        )
     lines.append("")
+
+    # ----- Side / swap (auto-score training labels; singles only) -----
+    # GUI-confirmed at production time — replaces the post-hoc
+    # side_truth.json backfill for new matches. getattr defaults keep
+    # the builder working on pre-field project snapshots.
+    if not is_doubles:
+        side = getattr(info, "p1_side_set1", None)
+        swap = getattr(info, "swap_sides_each_set", True)
+        s5 = getattr(info, "set5_mid_swap", None)
+        lines.append("## Side / swap (auto-score training labels)")
+        angle = getattr(info, "camera_angle", "standard") or "standard"
+        if angle != "standard":
+            lines.append(
+                f"- **CAMERA ANGLE: {angle}** — OUTSIDE the standard "
+                "behind-player diagonal family. Keep this match "
+                "EVAL-ONLY for angle-locked training. P1 side (when "
+                "recorded) uses LEFT/RIGHT of the video frame here, "
+                "not near/far."
+            )
+        lines.append(
+            "- P1 side in set 1 (camera view): "
+            + (side if side else "unknown (legacy project, pre-field)")
+        )
+        lines.append(
+            "- Swap sides after every set: "
+            + ("yes (standard)" if swap else "**NO — special match, no per-set swap**")
+        )
+        lines.append(
+            "- Set 5 mid-set swap at 5 points: "
+            + ("unknown / not reached" if s5 is None else ("yes" if s5 else "no"))
+        )
+        lines.append("")
 
     # ----- Source video -----
     sv = (gt_data or {}).get("source_video") or {}
@@ -498,5 +571,231 @@ def _rmtree_quietly(p: Path) -> None:
     try:
         shutil.rmtree(p)
     except OSError:
+        pass
+
+
+# ---------- training corpus stats -------------------------------------------
+
+# Lower edge of the ~15-20 labeled-match window AUTO_SCORE_PLAN.md sets
+# for the G0b winner-detection fine-tune decision.
+G0B_TARGET_MATCHES = 15
+
+
+def training_corpus_stats(dataset_root: Path | None = None) -> dict:
+    """Readiness snapshot of the auto-score corpus for the G0b milestone.
+
+    Counts MATCHES (unique source videos, newest render wins — re-renders
+    of the same video are one match), classified by what the fine-tune
+    can actually use:
+
+      labeled     singles with score events AND GUI side-info confirmed
+                  (p1_side_set1 present in the archived project snapshot)
+      unlabeled   singles with score events but archived before the
+                  side-info GUI existed — usable only after re-labeling
+      doubles     excluded from auto-score training (operator directive)
+      no_events   renders without score events (nothing to learn from)
+
+    Read-only; safe to call from a request handler (manifest is tiny and
+    per-entry project.json reads are bounded by entry count)."""
+    if dataset_root is None:
+        try:
+            dataset_root = config.dataset_dir
+        except Exception:
+            return {"target_matches": G0B_TARGET_MATCHES, "labeled_matches": 0,
+                    "unlabeled_matches": 0, "doubles_matches": 0,
+                    "no_event_matches": 0, "total_entries": 0,
+                    "ready": False, "matches": []}
+    manifest_path = dataset_root / "manifest.json"
+    entries: list[dict] = []
+    if manifest_path.exists():
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            entries = [e for e in data.get("entries", []) if isinstance(e, dict)]
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    # Dedupe by source video, keeping the NEWEST entry (manifest is
+    # append-ordered, so later wins).
+    by_video: dict[str, dict] = {}
+    for e in entries:
+        key = str(e.get("source_video_name") or e.get("slug") or "")
+        if key:
+            by_video[key] = e
+
+    matches: list[dict] = []
+    counts = {"labeled": 0, "unlabeled": 0, "doubles": 0, "no_events": 0}
+    for video, e in by_video.items():
+        match_type = str(e.get("match_type") or "single").lower()
+        rallies = int(e.get("real_rally_count") or 0)
+        info = _entry_snapshot_info(dataset_root, e)
+        if match_type == "double":
+            status = "doubles"
+        elif rallies <= 0:
+            status = "no_events"
+        elif info.get("p1_side_set1"):
+            status = "labeled"
+        else:
+            status = "unlabeled"
+        counts[status] += 1
+        matches.append({
+            "video": video,
+            "slug": str(e.get("slug") or ""),
+            "archived_at": str(e.get("archived_at") or ""),
+            "status": status,
+            "match_type": match_type,
+            "rallies": rallies,
+            # Names give the retro-label form its "P1 = who?" context.
+            "p1": str(info.get("p1") or ""),
+            "p2": str(info.get("p2") or ""),
+            "camera_angle": str(e.get("camera_angle") or "standard"),
+            "handicap": str(e.get("handicap_pattern") or ""),
+        })
+    matches.sort(key=lambda m: m["archived_at"], reverse=True)
+
+    return {
+        "target_matches": G0B_TARGET_MATCHES,
+        "labeled_matches": counts["labeled"],
+        "unlabeled_matches": counts["unlabeled"],
+        "doubles_matches": counts["doubles"],
+        "no_event_matches": counts["no_events"],
+        "total_entries": len(entries),
+        "ready": counts["labeled"] >= G0B_TARGET_MATCHES,
+        "matches": matches,
+    }
+
+
+def _entry_snapshot_info(dataset_root: Path, entry: dict) -> dict:
+    """The `info` block of the entry's archived project snapshot, or {}
+    when unreadable. The manifest predates the side-info fields, so
+    corpus stats read them from here — bounded, tiny files."""
+    slug = str(entry.get("slug") or "")
+    if not slug:
+        return {}
+    pj = dataset_root / slug / "project.json"
+    try:
+        info = json.loads(pj.read_text(encoding="utf-8")).get("info", {})
+        return info if isinstance(info, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+# ---------- retro-labeling of archived entries ------------------------------
+
+# The only fields retro-labeling may fill. Everything else in the
+# snapshot (names, events, trims) stays verbatim — score events
+# especially: they ARE the expensive label and must never be touched
+# after the fact. match_type is here because pre-GUI archives recorded
+# doubles as "single" (the field didn't exist yet) and the exclusion
+# rule depends on it.
+_RETRO_LABEL_FIELDS = (
+    "match_type",
+    "p1_side_set1", "swap_sides_each_set", "set5_mid_swap", "camera_angle",
+)
+
+
+def resolve_entry_file(slug: str, filename: str,
+                       dataset_root: Path | None = None) -> Path:
+    """Path of a file inside a dataset entry, traversal-safe.
+
+    Raises LookupError when the slug isn't a direct child of the
+    dataset root or the file doesn't exist."""
+    if dataset_root is None:
+        dataset_root = config.dataset_dir
+    root = dataset_root.resolve()
+    entry_dir = (root / slug).resolve()
+    if entry_dir.parent != root or not entry_dir.is_dir():
+        raise LookupError(f"No dataset entry named {slug!r}")
+    p = entry_dir / filename
+    if not p.is_file():
+        raise LookupError(f"{filename} missing in dataset entry {slug!r}")
+    return p
+
+
+def apply_retro_labels(slug: str, labels: dict,
+                       dataset_root: Path | None = None) -> dict:
+    """Retro-fill side-info labels into an archived entry.
+
+    Old entries were rendered before the side-info GUI existed, so
+    their (already complete, expensive-to-produce) score events sit in
+    the corpus unusable for winner-detection training. This lets the
+    operator label them from the Training dashboard without re-render:
+
+      · dataset/<slug>/project.json  info fields updated in place
+      · dataset/<slug>/notes.md      "## Retro labels" section appended
+                                     (provenance — the original Side/swap
+                                     section keeps its honest "unknown")
+      · manifest.json                entry's camera_angle / match_type
+                                     (+ auto_score_train_eligible) synced
+
+    `labels` must be pre-validated (the HTTP layer's pydantic model);
+    unknown keys raise ValueError as a guard against silently widening
+    what this can touch. Returns the applied labels."""
+    if dataset_root is None:
+        dataset_root = config.dataset_dir
+    unknown = set(labels) - set(_RETRO_LABEL_FIELDS)
+    if unknown:
+        raise ValueError(f"Not retro-labelable: {sorted(unknown)}")
+
+    pj_path = resolve_entry_file(slug, "project.json", dataset_root)
+    try:
+        snapshot = json.loads(pj_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise LookupError(f"project.json unreadable in {slug!r}: {e}") from e
+    info = snapshot.get("info")
+    if not isinstance(info, dict):
+        raise LookupError(f"project.json has no info block in {slug!r}")
+    info.update(labels)
+
+    tmp = pj_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2),
+                   encoding="utf-8")
+    tmp.replace(pj_path)
+
+    # Provenance in notes.md — append, never rewrite the original
+    # auto-filled sections.
+    notes = pj_path.parent / "notes.md"
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    lines = [f"\n## Retro labels (added {stamp} via Training dashboard)"]
+    for k in _RETRO_LABEL_FIELDS:
+        if k in labels:
+            v = labels[k]
+            lines.append(f"- {k}: {'unknown' if v is None else v}")
+    try:
+        with open(notes, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except OSError:
+        pass  # provenance is best-effort; the label itself landed
+
+    manifest_fields: dict = {}
+    if "camera_angle" in labels:
+        manifest_fields["camera_angle"] = str(
+            labels["camera_angle"] or "standard")
+    if "match_type" in labels:
+        mt = str(labels["match_type"] or "single").lower()
+        manifest_fields["match_type"] = mt
+        manifest_fields["auto_score_train_eligible"] = mt != "double"
+    if manifest_fields:
+        _update_manifest_entry(
+            dataset_root / "manifest.json", slug, manifest_fields)
+    return dict(labels)
+
+
+def _update_manifest_entry(manifest_path: Path, slug: str,
+                           fields: dict) -> None:
+    """Best-effort read-modify-write of one manifest entry (atomic via
+    .tmp rename, same idiom as _append_manifest)."""
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for e in data.get("entries", []):
+            if isinstance(e, dict) and e.get("slug") == slug:
+                e.update(fields)
+                break
+        else:
+            return
+        tmp = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                       encoding="utf-8")
+        tmp.replace(manifest_path)
+    except (OSError, json.JSONDecodeError):
         pass
 
