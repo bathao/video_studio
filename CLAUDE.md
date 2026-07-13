@@ -43,7 +43,9 @@ backend/
     app.py             Composition root — FastAPI instance + CORS +
                        no-cache middleware + StaticFiles mount + `/`
                        index + `/api/health` + `main()` uvicorn launcher.
-                       Includes every routes_*.py router.
+                       Includes every routes_*.py router. Lifespan
+                       prunes stale failed-render temp/<job_id> dirs
+                       (>7 days) at startup.
     state.py           Module-level state shared across routers:
                        `_jobs` + `_jobs_lock` (render job registry),
                        `_external_videos` + `_external_lock` (token →
@@ -54,7 +56,9 @@ backend/
     utils.py           Pure helpers — no app instance, no router:
                        `_validate_video_path`, `_register_*` /
                        `_resolve_external_video`, `_safe_name`,
-                       `_resolve_inside`, `_sanitize_for_json`, and
+                       `_resolve_inside`, `_sanitize_for_json`,
+                       `prune_stale_job_dirs` (age-gated startup
+                       cleanup of failed-render temp dirs), and
                        the `_open_or_focus_explorer` PowerShell shim.
     routes_videos.py   `/api/videos/*` (local list + probe + range-
                        aware stream), `/api/videos/browse` (native
@@ -66,10 +70,15 @@ backend/
                        `/api/output*`, `/api/output-folder/open`,
                        `/api/outputs`, `/api/preview/scoreboard.ass`
                        (+ ScoreboardPreviewRequest model),
-                       `/api/highlights/export` (cut one highlight's raw
-                       source segment to output/ via NVENC re-encode;
-                       `_resolve_export_source` mirrors the renderer's
-                       token-or-path source resolution).
+                       `/api/preview/intro` (render ONLY the ~4s intro
+                       via the shared `render_intro_clip` — exact
+                       production code path; content-keyed cache at
+                       temp/intro_preview/, 409 while any GPU job
+                       runs), `/api/highlights/export` (cut one
+                       highlight's raw source segment to output/ via
+                       NVENC re-encode). `_resolve_request_source`
+                       mirrors the renderer's token-or-path source
+                       resolution for both export + intro preview.
     routes_auto_trim.py `/api/auto_trim/*` (refframe / detect_roi /
                        confirm_roi / groundtruth_count) + sidecar
                        helpers (`_resolve_video_for_auto_trim`,
@@ -87,7 +96,11 @@ backend/
                        restart), then auto-runs
                        scripts/compare_roi_models.py — the SUMMARY
                        verdict lands in the status message the modal
-                       shows. Thin endpoints in routes_auto_trim.py.
+                       shows. Keep-the-winner: a REGRESSED verdict
+                       auto-restores roi_seg.prev.pt (mtime reset to
+                       now so the staleness counter only wakes on NEW
+                       confirms); EQUIVALENT keeps the new weights.
+                       Thin endpoints in routes_auto_trim.py.
                        Streams train stdout (Popen) and parses
                        ultralytics epoch lines into a 0..1 `progress`
                        fraction in retrain_status(). Also hosts
@@ -146,7 +159,10 @@ backend/
                        + `trim` instead of N parallel `-i src` inputs.
     orchestrator.py    Top-level: `RenderPlan`, `RenderContext`,
                        `_prepare_context`, `_resolve_source`,
-                       `all_intro_photos_present`, `_intro_stage`,
+                       `all_intro_photos_present`, `render_intro_clip`
+                       (kwargs-only cinematic-vs-text decision +
+                       builder call — shared by `_intro_stage` AND
+                       `/api/preview/intro`), `_intro_stage`,
                        `_main_stage`, `_outro_stage`, `_finalize`,
                        `run_render`. Knows the pipeline shape.
   intro_builder.py   Cinematic intro ffmpeg filter graph (avatars +
@@ -385,6 +401,15 @@ frontend/
   project_io.js      Save / Load Project + load modal.
   render.js          startRender + pollRender + cancel + intro-style
                      mutual exclusion + Open output folder.
+  intro_preview.js   "👁 Preview intro" button in the Render panel →
+                     POST /api/preview/intro (renders just the intro
+                     clip through the production code path, seconds)
+                     → plays it in #modal-intro-preview with fallback /
+                     placeholder notes. Single-writer for that modal.
+  timeline.js        Live totals under the Live Score panel: highlight
+                     sum, trimmed sum, output-duration estimate (intro
+                     + kept main + replay/stinger stretch + outro;
+                     constants mirror backend defaults).
   training_status.js Top-bar "📊 Training" button + status modal.
                      Renders GET /api/training/status: auto-score
                      corpus readiness toward the G0b fine-tune target
@@ -460,7 +485,9 @@ temp/                Runtime caches and per-job intermediates (gitignored,
   <job_id>/            Per-render scratch (intro.mp4, main.mp4,
                        outro.mp4, .ass, concat.txt). Deleted on
                        successful `_finalize`; preserved on failure so
-                       ffmpeg inputs are inspectable.
+                       ffmpeg inputs are inspectable, then pruned at
+                       server start once older than 7 days
+                       (`prune_stale_job_dirs`).
 
 runs/                 YOLO training output history (gitignored). Each
                      `runs/segment/roi_seg-N/` is one full training run
@@ -854,5 +881,6 @@ trim detection backend).
 | Training-status dashboard (corpus readiness + retrain progress) | backend: [backend/server/routes_training.py](backend/server/routes_training.py) + `training_corpus_stats` in [backend/dataset.py](backend/dataset.py); frontend: [frontend/training_status.js](frontend/training_status.js) (top-bar 📊 Training button) |
 | Auto Trim modal (frontend)           | [frontend/auto_trim/](frontend/auto_trim/) — public entry [frontend/auto_trim/index.js](frontend/auto_trim/index.js); button hosted in [frontend/trims.js](frontend/trims.js) |
 | Auto Score tab (rally proposals + review) | backend: `segment_rallies` in [backend/auto_score/rally_segmenter.py](backend/auto_score/rally_segmenter.py) + [backend/server/routes_auto_score.py](backend/server/routes_auto_score.py); frontend: [frontend/auto_score/](frontend/auto_score/) (tab DOM in [frontend/index.html](frontend/index.html) `#score-tab-auto`) |
+| Intro preview (render just the intro)| backend: `render_intro_clip` in [backend/renderer/orchestrator.py](backend/renderer/orchestrator.py) + `/api/preview/intro` in [backend/server/routes_render.py](backend/server/routes_render.py); frontend: [frontend/intro_preview.js](frontend/intro_preview.js) |
 | Add a new HTTP endpoint              | pick the matching `backend/server/routes_*.py` (videos / projects / render / auto_trim), or [backend/server/app.py](backend/server/app.py) for cross-cutting endpoints |
 | Add new project field                | [backend/models.py](backend/models.py) `ProjectInfo`, then frontend `project.info` schema in [frontend/state.js](frontend/state.js), then UI input in [frontend/index.html](frontend/index.html) |

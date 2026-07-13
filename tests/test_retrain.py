@@ -195,6 +195,80 @@ def test_comparison_failure_is_not_fatal(monkeypatch, tmp_path):
     assert "comparison failed" in st["message"]
 
 
+def test_is_regression_parsing():
+    """Rollback triggers only on a clean REGRESSED verdict — never on
+    improvements, equivalence, or a broken/skipped comparison."""
+    assert retrain._is_regression(
+        "SUMMARY: REGRESSED (consider restoring roi_seg.prev.pt) — "
+        "within-2%: 55->50/58")
+    assert retrain._is_regression(
+        "SUMMARY: REGRESSED (new model misses frames the old one caught)")
+    assert not retrain._is_regression("SUMMARY: IMPROVED — mean 1.1->0.6%")
+    assert not retrain._is_regression(
+        "SUMMARY: TAIL IMPROVED (averages equal, worst cases better)")
+    assert not retrain._is_regression("SUMMARY: EQUIVALENT")
+    assert not retrain._is_regression("comparison failed: no frames")
+    assert not retrain._is_regression("comparison skipped: boom")
+    assert not retrain._is_regression("")
+
+
+def _keep_winner_run(monkeypatch, tmp_path, summary_line):
+    """Drive the full worker with a fake train that overwrites the
+    weights and a fake comparison returning `summary_line`. Returns
+    (model_path, backup_path, final_status, invalidate_count)."""
+    model = tmp_path / "roi_seg.pt"
+    model.write_bytes(b"OLD-WEIGHTS")
+    backup = tmp_path / "roi_seg.prev.pt"
+    monkeypatch.setattr(retrain, "_MODEL_PATH", model)
+    monkeypatch.setattr(retrain, "_MODEL_BACKUP", backup)
+
+    def fake_run(cmd, **kw):
+        out = "ok"
+        if Path(cmd[1]).name == "compare_roi_models.py":
+            out = f"header\n{summary_line}"
+        return SimpleNamespace(returncode=0, stdout=out, stderr="")
+
+    def fake_popen(cmd, **kw):
+        model.write_bytes(b"NEW-WEIGHTS")  # train produces fresh weights
+        return _FakePopen(cmd)
+
+    monkeypatch.setattr(retrain.subprocess, "run", fake_run)
+    monkeypatch.setattr(retrain.subprocess, "Popen", fake_popen)
+    invalidated: list[bool] = []
+    monkeypatch.setattr(
+        roi_yolo, "invalidate_model_cache", lambda: invalidated.append(True))
+
+    ok, reason = retrain.start_retrain()
+    assert ok, reason
+    return model, backup, _wait_terminal(), invalidated
+
+
+def test_regressed_verdict_rolls_back_to_backup(monkeypatch, tmp_path):
+    """Keep-the-winner: REGRESSED → previous weights restored + model
+    cache invalidated again so the server serves the restored weights."""
+    summary = ("SUMMARY: REGRESSED (consider restoring roi_seg.prev.pt) — "
+               "within-2%: 55->50/58")
+    model, backup, st, invalidated = _keep_winner_run(
+        monkeypatch, tmp_path, summary)
+    assert st["status"] == "done"
+    assert model.read_bytes() == b"OLD-WEIGHTS"
+    assert backup.read_bytes() == b"OLD-WEIGHTS"
+    assert "previous weights kept" in st["message"]
+    assert "SUMMARY: REGRESSED" in st["message"]
+    assert len(invalidated) == 2  # after train + after rollback
+
+
+def test_improved_verdict_keeps_new_weights(monkeypatch, tmp_path):
+    model, backup, st, invalidated = _keep_winner_run(
+        monkeypatch, tmp_path, "SUMMARY: IMPROVED — mean 1.1->0.6%")
+    assert st["status"] == "done"
+    assert model.read_bytes() == b"NEW-WEIGHTS"
+    assert backup.read_bytes() == b"OLD-WEIGHTS"
+    assert "model retrained + reloaded" in st["message"]
+    assert "SUMMARY: IMPROVED" in st["message"]
+    assert len(invalidated) == 1
+
+
 def test_failed_script_surfaces_error_and_skips_second(monkeypatch, tmp_path):
     monkeypatch.setattr(retrain, "_MODEL_PATH", tmp_path / "missing.pt")
     monkeypatch.setattr(retrain, "_MODEL_BACKUP", tmp_path / "prev.pt")

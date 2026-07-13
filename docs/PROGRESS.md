@@ -1,7 +1,8 @@
 ﻿# Progress Status
 
-Last update: 2026-07-10 (side-info training labels incl. camera-angle tag + handicap support + one-click YOLO retrain flywheel with auto old-vs-new comparison + top-bar training-status dashboard with epoch-level retrain progress + retro-labeling of the 8 pre-GUI archive entries → corpus 7/15 labeled; all committed as 893b263 — see Referee logic, Auto Score + Auto Trim sections). Tests: **265 pass**.
-**Live Score automation (Auto Score)** — Phase 0 spike MEASURED (steps 1,2,3,5,6; plan in [AUTO_SCORE_PLAN.md](AUTO_SCORE_PLAN.md)): segmentation **G0a reached** with v7-tuned2 (coverage recall 97.5% total, truly-unseen 97.8%); zero-shot VLM winner detection tops out ~60% (Qwen3.5-9B + geometry prompt = fine-tune base) so **G0b deferred** until the flywheel grows the corpus (~15-20 matches). **Phase 1 semi-auto GUI SHIPPED**: Live Score Manual|Auto tabs, ROI-gated rally detect (`backend/auto_score/` + `/api/auto_score/*` SSE), keyboard-first review, Apply → `source:"auto"` events; 216 tests; E2E-verified in headless Edge. Committed on `v3-dev` as `b516687` + `8f4d02c` + `10708ba` + `893b263` (**4 commits not pushed yet**). Step detail lives in [TODO.md](TODO.md).
+Last update: 2026-07-14 pm (intro preview: "👁 Preview intro" in the Render panel renders just the ~4 s intro through the production code path — cinematic cold 4.4 s, cache hit 120 ms — so title overflow / missing avatars surface in seconds, not after a full render. Tests: **281 pass**. Same day: keep-the-winner retrain policy: the 07-13 GUI retrain A/B'd REGRESSED, so the previous weights were restored and `retrain.py` now auto-rolls back to `roi_seg.prev.pt` on any REGRESSED verdict — retrain frequency can no longer hurt the production model; verified E2E with a real retrain reproducing the regression. Dead-artifact cleanup: obsolete YOLO run dirs + ~3 GB of failed-render temp leftovers deleted, and `prune_stale_job_dirs` now age-gates (7 d) failed-render temp/<job_id> dirs at every server start. Plus status sync: production flywheel running — 6 new manual-production matches archived 07-10..07-13 with side-info + handicap labels captured at production time → **corpus 12/15 labeled** toward the G0b target).
+Previous milestone 2026-07-10: side-info training labels incl. camera-angle tag + handicap support + one-click YOLO retrain flywheel with auto old-vs-new comparison + top-bar training-status dashboard with epoch-level retrain progress + retro-labeling of the 8 pre-GUI archive entries → corpus 7/15 labeled; all committed as 893b263 — see Referee logic, Auto Score + Auto Trim sections.
+**Live Score automation (Auto Score)** — Phase 0 spike MEASURED (steps 1,2,3,5,6; plan in [AUTO_SCORE_PLAN.md](AUTO_SCORE_PLAN.md)): segmentation **G0a reached** with v7-tuned2 (coverage recall 97.5% total, truly-unseen 97.8%); zero-shot VLM winner detection tops out ~60% (Qwen3.5-9B + geometry prompt = fine-tune base) so **G0b deferred** until the flywheel grows the corpus (~15-20 matches). **Phase 1 semi-auto GUI SHIPPED**: Live Score Manual|Auto tabs, ROI-gated rally detect (`backend/auto_score/` + `/api/auto_score/*` SSE), keyboard-first review, Apply → `source:"auto"` events; 216 tests; E2E-verified in headless Edge. Committed on `v3-dev` as `b516687` + `8f4d02c` + `10708ba` + `893b263` + docs sync `1525016` (**5 commits not pushed yet**). Step detail lives in [TODO.md](TODO.md).
 Previous milestone 2026-07-07: improvement plan COMPLETE (Phase 0 housekeeping `a20d7dc`+`ffd7d54`, Phase 1 backend robustness `715d0c1`, Phase 2 frontend correctness/UX `7508d91`, Phase 3 skipped, Phase 4 perf plumbing, Phase 5 tests + debt, Phase 6 backlog picks — dry-run script, GitHub Actions CI, Python pin).
 
 ## Module map
@@ -31,7 +32,8 @@ refactor pass shipped in commits fb4d2aa / 6993a37 / 3c4f167 /
 | Auto Score SSE orchestration (job + cache + endpoints) | ✅ done | [backend/server/routes_auto_score.py](../backend/server/routes_auto_score.py) |
 | Auto Score tab (proposals + keyboard review) | ✅ done | [frontend/auto_score/](../frontend/auto_score/) (4 modules) |
 | Frontend HTML + Tailwind | ✅ done | [frontend/index.html](../frontend/index.html) |
-| Frontend logic (player + state) | ✅ done | [frontend/app.js](../frontend/app.js) (boot) + 12 ES6 modules |
+| Frontend logic (player + state) | ✅ done | [frontend/app.js](../frontend/app.js) (boot) + 15 ES6 modules |
+| Intro preview (button + modal) | ✅ done | [frontend/intro_preview.js](../frontend/intro_preview.js) + `/api/preview/intro` |
 | Auto Trim modal (Phase A ROI + Phase B detection) | ✅ done | [frontend/auto_trim/](../frontend/auto_trim/) (8 modules) |
 | Frontend styles | ✅ done | [frontend/styles.css](../frontend/styles.css) |
 | Run launcher (Windows) | ✅ done | [run.bat](../run.bat) |
@@ -149,6 +151,17 @@ render started splicing a full 50% replay after every highlight.)
       (P1+P3 left pair, P2+P4 right pair, each ~60% of the singles
       avatar size) so all four players appear without re-rendering or
       a separate pipeline.
+- ✅ Intro preview (2026-07-14): "👁 Preview intro" in the Render panel
+      renders ONLY the intro clip via `POST /api/preview/intro` and
+      plays it in a modal — checks title fit / avatar resolution in
+      seconds (cinematic cold ~4.4 s, cached repeat ~120 ms, text
+      ~3 s). WYSIWYG guaranteed: the endpoint calls the same
+      `render_intro_clip` as `_intro_stage` (extracted kwargs-only,
+      pure refactor). Content-keyed cache in `temp/intro_preview/`
+      (avatar mtimes + config.json mtime included; 7-day age-out);
+      409 while any GPU job is active. The modal notes text-intro
+      fallback and placeholder-avatar names. E2E 14/14 in headless
+      Edge on a real source video.
 - ✅ Main match (multi-input ffmpeg with input seeking, scoreboard
       burned via `ass=`). Every highlight gets a 50%-speed replay
       spliced in **right after its real-time occurrence** (setpts*2 +
@@ -266,6 +279,12 @@ render started splicing a full 50% replay after every highlight.)
 - ✅ List of past outputs at `/api/outputs`
 
 ### Polish & robustness
+- ✅ Startup auto-prune of failed-render temp leftovers (2026-07-14):
+  `prune_stale_job_dirs` (backend/server/utils.py, called from the app
+  lifespan) deletes temp/<job_id> dirs older than 7 days — failed
+  renders stay inspectable for a week, then stop costing gigabytes.
+  Named cache dirs (refframes / auto_trim_cache / auto_score_cache /
+  pytest) never match the 12-hex job-id pattern. Verified live.
 - ✅ Performance plumbing pass (2026-07-07, improvement-plan Phase 4):
   - Scoreboard preview refresh no longer runs on every `timeupdate`
     tick (was a full-project `JSON.stringify` 4×/s); the .ass depends
@@ -372,6 +391,20 @@ render started splicing a full 50% replay after every highlight.)
       manual retrain on 56 videos / 126 images → mask mAP50-95 0.908 /
       mAP50 0.995; A/B verdict TAIL IMPROVED (within-2% 50→53/56,
       worst 2.81→2.28%).
+- ✅ **Keep-the-winner retrain policy (2026-07-14)**: a REGRESSED A/B
+      verdict now auto-restores `roi_seg.prev.pt` (copyfile so
+      mtime=now — the staleness counter only wakes on NEW confirms,
+      since seed=42 training would reproduce the same weights from the
+      same data) and re-invalidates the in-process model cache; the
+      status message reads "previous weights kept" + the SUMMARY
+      numbers. EQUIVALENT keeps the new weights on purpose (the A/B is
+      a production replay on known venues; more training venues at the
+      same score wins). Motivated by the 07-13 GUI retrain regressing
+      (within-2% 55→50/58, worst 2.28→2.64% — run-to-run jitter at the
+      ~1% precision floor plus a reshuffled val split, not the new
+      confirms); previous weights restored same day. Verified E2E with
+      a real retrain (seeded training reproduced the regression →
+      rollback fired). Tests **268 pass**.
 - ✅ Training-status dashboard (2026-07-10, committed 893b263): top-bar
       "📊 Training" button → popup with (a) auto-score corpus readiness
       toward the G0b fine-tune target (15 labeled matches; unique

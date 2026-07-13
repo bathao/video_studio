@@ -41,6 +41,7 @@ from .orchestrator import (
     _prepare_context,
     _resolve_source,
     all_intro_photos_present,
+    render_intro_clip,
     run_render,
 )
 from .replays import (
@@ -78,4 +79,6 @@ __all__ = [
     "render_outro_card",
     "concat_parts",
     "all_intro_photos_present",
+    # Intro clip (shared by _intro_stage and /api/preview/intro)
+    "render_intro_clip",
 ]

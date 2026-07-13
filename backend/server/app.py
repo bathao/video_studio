@@ -23,6 +23,7 @@ from .routes_render import router as render_router
 from .routes_training import router as training_router
 from .routes_videos import router as videos_router
 from .state import FRONTEND_DIR
+from .utils import prune_stale_job_dirs
 
 
 @asynccontextmanager
@@ -38,7 +39,17 @@ async def _lifespan(app: FastAPI):
     uvicorn from accepting connections. Disabled → server starts light
     (no torch in RAM); the first Auto Trim click pays the load instead."""
     import asyncio
+    import logging
     import threading
+
+    # Failed renders deliberately keep temp/<job_id> for inspection;
+    # reclaim the ones nobody will ever look at again (age-gated).
+    stale = prune_stale_job_dirs(config.temp_dir)
+    if stale:
+        logging.getLogger("startup").info(
+            "pruned %d stale render job dir(s): %s",
+            len(stale), ", ".join(stale))
+
     if sys.platform == "win32":
         def _handler(loop, context):
             exc = context.get("exception")
@@ -48,7 +59,6 @@ async def _lifespan(app: FastAPI):
         asyncio.get_running_loop().set_exception_handler(_handler)
 
     def _warmup_worker() -> None:
-        import logging
         log = logging.getLogger("roi.warmup")
         try:
             from ..roi_yolo import warm_up as _warm_yolo
@@ -78,7 +88,6 @@ async def _lifespan(app: FastAPI):
     if config.roi_warmup_enabled:
         threading.Thread(target=_warmup_worker, daemon=True, name="roi_warmup").start()
     else:
-        import logging
         logging.getLogger("roi.warmup").info(
             "ROI warmup disabled by config — first Auto Trim click pays the load",
         )

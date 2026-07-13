@@ -196,22 +196,31 @@ def all_intro_photos_present(
     return all(photos.get(slot, (None, False))[0] is not None for slot in required)
 
 
-def _intro_stage(ctx: RenderContext) -> None:
-    """Render the intro card. Cinematic when every player has an avatar
-    on disk (or falls back to the shipped placeholder) and intro_style
-    is not 'text'; otherwise the libass-only title card. Doubles needs
-    all four photos to resolve before it can use the 4-avatar layout —
-    when one is missing even after the default fallback, we drop back
-    to the text intro instead of rendering a lopsided card."""
-    plan = ctx.plan
-    if not plan.include_intro:
-        return
-    ctx._bail_if_cancelled()
+def render_intro_clip(
+    *,
+    out_path: Path,
+    src: Path,
+    width: int,
+    height: int,
+    fps: float,
+    info,  # ProjectInfo
+    intro_style: str,
+    on_progress: Callable[[float, str], None] = lambda f, m: None,
+    cancel_check: Callable[[], bool] = lambda: False,
+) -> tuple[bool, list[str]]:
+    """Render one intro clip with the render pipeline's exact decision
+    logic — cinematic when every player has an avatar on disk (or falls
+    back to the shipped placeholder) and intro_style is not 'text';
+    otherwise the libass-only title card. Doubles needs all four photos
+    to resolve before it can use the 4-avatar layout — when one is
+    missing even after the default fallback, we drop back to the text
+    intro instead of rendering a lopsided card.
 
-    intro_path = ctx.job_dir / "intro.mp4"
-    style = (plan.intro_style or "cinematic").lower()
+    Kwargs-only (no ctx) so the /api/preview/intro endpoint can call it
+    directly and the preview stays byte-identical to the render.
+    Returns (used_cinematic, names_that_got_the_placeholder)."""
+    style = (intro_style or "cinematic").lower()
     use_cinematic = style != "text"
-    info = plan.project.info
     is_doubles = (info.match_type or "single").lower() == "double"
 
     # Names on each scoreboard row — used for the libass label below
@@ -232,9 +241,9 @@ def _intro_stage(ctx: RenderContext) -> None:
 
     if use_cinematic and have_all_photos:
         render_cinematic_intro(
-            out_path=intro_path,
-            src=ctx.src,
-            width=ctx.width, height=ctx.height, fps=ctx.fps,
+            out_path=out_path,
+            src=src,
+            width=width, height=height, fps=fps,
             tournament=info.tournament,
             p1_name=top_label, p1_avatar=photos["p1"][0],
             p2_name=bot_label, p2_avatar=photos["p2"][0],
@@ -243,38 +252,60 @@ def _intro_stage(ctx: RenderContext) -> None:
             match_type=info.match_type,
             p3_avatar=photos.get("p3", (None, False))[0],
             p4_avatar=photos.get("p4", (None, False))[0],
-            on_progress=ctx.make_progress("intro"),
-            cancel_check=ctx.cancel_check,
+            on_progress=on_progress,
+            cancel_check=cancel_check,
         )
-        # Build the "used default placeholder for …" message from
-        # whichever slots fell back to the shipped silhouette.
-        missing: list[str] = []
-        for slot, raw_name in (
-            ("p1", info.p1), ("p2", info.p2),
-            ("p3", info.p3), ("p4", info.p4),
-        ):
-            entry = photos.get(slot)
-            if entry and entry[1] and raw_name:
-                missing.append(raw_name)
-        if missing:
-            ctx.state.message = (
-                f"Cinematic intro used the default placeholder for "
-                f"{', '.join(missing)} — drop a real photo into "
-                f"assets/avatars/ when you have one."
+        # Whichever slots fell back to the shipped silhouette.
+        placeholders = [
+            raw_name
+            for slot, raw_name in (
+                ("p1", info.p1), ("p2", info.p2),
+                ("p3", info.p3), ("p4", info.p4),
             )
-    else:
-        # User picked text intro, OR cinematic was requested but at
-        # least one required photo (and the default fallback) is
-        # missing. The text card uses the row labels so doubles still
-        # shows the combined pair names.
-        render_intro(
-            out_path=intro_path,
-            width=ctx.width, height=ctx.height, fps=ctx.fps,
-            tournament=info.tournament,
-            p1=top_label,
-            p2=bot_label,
-            on_progress=ctx.make_progress("intro"),
-            cancel_check=ctx.cancel_check,
+            if (entry := photos.get(slot)) and entry[1] and raw_name
+        ]
+        return True, placeholders
+
+    # User picked text intro, OR cinematic was requested but at
+    # least one required photo (and the default fallback) is
+    # missing. The text card uses the row labels so doubles still
+    # shows the combined pair names.
+    render_intro(
+        out_path=out_path,
+        width=width, height=height, fps=fps,
+        tournament=info.tournament,
+        p1=top_label,
+        p2=bot_label,
+        on_progress=on_progress,
+        cancel_check=cancel_check,
+    )
+    return False, []
+
+
+def _intro_stage(ctx: RenderContext) -> None:
+    """Render the intro card via `render_intro_clip` (shared with the
+    preview endpoint) and thread its result into the job's parts +
+    progress + operator message."""
+    plan = ctx.plan
+    if not plan.include_intro:
+        return
+    ctx._bail_if_cancelled()
+
+    intro_path = ctx.job_dir / "intro.mp4"
+    _, placeholders = render_intro_clip(
+        out_path=intro_path,
+        src=ctx.src,
+        width=ctx.width, height=ctx.height, fps=ctx.fps,
+        info=plan.project.info,
+        intro_style=plan.intro_style,
+        on_progress=ctx.make_progress("intro"),
+        cancel_check=ctx.cancel_check,
+    )
+    if placeholders:
+        ctx.state.message = (
+            f"Cinematic intro used the default placeholder for "
+            f"{', '.join(placeholders)} — drop a real photo into "
+            f"assets/avatars/ when you have one."
         )
     ctx.parts.append(intro_path)
     ctx.completed_weight += ctx.weight_lookup["intro"]

@@ -236,3 +236,42 @@ def test_optional_asset_existing_file_resolves(tmp_path):
     f.write_bytes(b"x")
     c = _config_with({"intro_sound_path": str(f)})
     assert c.intro_sound_path == f
+
+
+# ---------------------------------------------------------------------------
+# prune_stale_job_dirs (backend/server/utils.py)
+# ---------------------------------------------------------------------------
+
+def test_prune_stale_job_dirs(tmp_path):
+    """Only hex-named job dirs past the age gate go; fresh job dirs,
+    named cache dirs and plain files always survive."""
+    import os
+    import time
+    from backend.server.utils import prune_stale_job_dirs
+
+    old = time.time() - 10 * 24 * 3600
+    stale_job = tmp_path / "3230abf4f117"
+    stale_job.mkdir()
+    (stale_job / "main.mp4").write_bytes(b"x")
+    os.utime(stale_job, (old, old))
+
+    fresh_job = tmp_path / "aa86e376b06b"
+    fresh_job.mkdir()
+
+    cache = tmp_path / "auto_trim_cache"
+    cache.mkdir()
+    os.utime(cache, (old, old))  # old but named -> kept
+
+    hexfile = tmp_path / "5748821a81f2"  # 12-hex FILE, not a dir -> kept
+    hexfile.write_bytes(b"x")
+    os.utime(hexfile, (old, old))
+
+    deleted = prune_stale_job_dirs(tmp_path)
+    assert deleted == ["3230abf4f117"]
+    assert not stale_job.exists()
+    assert fresh_job.exists() and cache.exists() and hexfile.exists()
+
+
+def test_prune_stale_job_dirs_missing_temp_is_noop(tmp_path):
+    from backend.server.utils import prune_stale_job_dirs
+    assert prune_stale_job_dirs(tmp_path / "nope") == []

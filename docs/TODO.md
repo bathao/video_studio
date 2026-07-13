@@ -1,12 +1,13 @@
 ﻿# TODO
 
-## RESUME POINTER 2026-07-10 — Auto Score Phase 0 measured + Phase 1 semi-auto GUI shipped
+## RESUME POINTER 2026-07-14 — production flywheel running; corpus 12/15
 
 All Auto Score work below is committed on `v3-dev` (`b516687` step 1
 corpus, `8f4d02c` steps 2+6, `10708ba` G0a + Phase 1 GUI + steps 3+5,
 `893b263` side-info + handicap labels + YOLO retrain flywheel +
-training dashboard + retro-labeling → corpus 7/15).
-**These 4 commits are NOT pushed yet** — `origin/v3-dev` is 4 behind.
+training dashboard + retro-labeling → corpus 7/15 at commit time,
+`1525016` docs sync).
+**These 5 commits are NOT pushed yet** — `origin/v3-dev` is 5 behind.
 Working state after the 2026-06-05 feature freeze is described in
 [HISTORY.md](HISTORY.md); the 2026-07-07 improvement plan (complete)
 is in the next section.
@@ -290,6 +291,77 @@ passes. Phase 0 step status:
   No GUI (operator preference — answers gathered in chat, applied by
   the assistant); `resolve_entry_file` is traversal-safe for any
   future dashboard use. Tests 260 → 265.
+
+- 🟢 **Production flywheel status (2026-07-14, dataset-only — no code
+  changes since `1525016`)**: 6 new manual-production matches archived
+  since the retro-labeling (all singles, standard angle, side-info
+  labeled at production time via the 893b263 GUI fields; 3 carry
+  handicap patterns 222/444/232): 0709_PhungSang + 0504_vs_Vinh
+  (07-10), 0402_Loi (07-11), 0307_NgocHieu + 0709_TuanGo +
+  0712_MaiTranTri (07-13). `training_corpus_stats()`: **12/15 labeled,
+  0 unlabeled, 2 doubles-excluded** — 3 matches to the G0b fine-tune
+  decision. Operator also ran the one-click YOLO retrain in production
+  on 2026-07-13 (58 confirmed videos, staleness back to 0; run
+  `roi_seg-2` val mask mAP50-95 0.862 / mAP50 0.995 — val split
+  changes per dataset rebuild, so not directly comparable to the
+  earlier 0.908/0.921 figures). Flywheel working exactly as designed:
+  pure manual production, labels + retrains accumulating with zero
+  assistant involvement.
+
+- 🟢 **Keep-the-winner retrain policy (2026-07-14)**: the 07-13 GUI
+  retrain came back **REGRESSED** (within-2% 55→50/58, worst
+  2.28→2.64%, mean 1.09→1.11% — run-to-run jitter at the precision
+  floor plus a reshuffled hash-based val split steering best-epoch
+  selection, NOT the 5 new confirms poisoning anything). Response, per
+  operator decision: (1) restored `roi_seg.prev.pt` → `roi_seg.pt`
+  (mtime touched to now so the staleness counter doesn't immediately
+  re-offer a retrain that seed=42 would reproduce verbatim);
+  (2) `retrain.py` now **auto-rolls back on a REGRESSED verdict** —
+  restore backup via copyfile (mtime=now), invalidate the in-process
+  model cache again, status message says "previous weights kept" +
+  the SUMMARY numbers. EQUIVALENT deliberately keeps the NEW weights
+  (the A/B is a production replay on known venues; same score with
+  more training venues wins). The operator's proposed alternative
+  (raise the retrain-offer threshold 5→10 confirms) was rejected:
+  frequency was never the risk once the loser can't survive a retrain.
+  Verified E2E with a real retrain (unchanged data + seed=42
+  reproduced the regressed weights → rollback fired, `roi_seg.pt`
+  byte-identical to the restored model). Tests 265 → 268.
+
+- 🟢 **Dead-artifact cleanup + startup auto-prune (2026-07-14)**: per
+  the operator's new standing rule (anything useless gets cleaned up
+  without asking), deleted the obsolete YOLO run dirs
+  (`runs/segment/roi_seg-2/-3` regressed, `roi_seg-6` from 05-19) and
+  ~3 GB of failed-render leftovers under `temp/` (6 job dirs from
+  05-19..07-13, all long since re-rendered successfully). Made it
+  permanent: `prune_stale_job_dirs` in `backend/server/utils.py` runs
+  in the app lifespan and deletes 12-hex job dirs older than 7 days
+  (age gate keeps fresh failures inspectable and protects a mid-flight
+  render across a restart; named cache dirs never match). Verified
+  live against a planted 10-day-old dir. Tests 268 → 270.
+
+- 🟢 **Intro preview (2026-07-14, operator request)**: "👁 Preview
+  intro" button in the Render panel renders ONLY the ~4 s intro clip
+  and plays it in a modal — long titles that overflow the card are now
+  visible in seconds instead of after a full render. WYSIWYG by
+  construction: the endpoint calls the SAME `render_intro_clip` the
+  render pipeline's `_intro_stage` calls (extracted kwargs-only in
+  `renderer/orchestrator.py` — pure refactor, identical builder args).
+  Backend: `POST /api/preview/intro` + `GET /api/preview/intro/{key}.mp4`
+  in routes_render.py; content-keyed cache at `temp/intro_preview/`
+  (video identity + style + names/teams + avatar file mtimes +
+  config.json mtime; 7-day age-out), 409 while any GPU job runs
+  (reuses `retrain.gpu_busy_reason`), response reports text-fallback +
+  placeholder-avatar names which the modal surfaces as notes.
+  `_resolve_export_source` generalized to `_resolve_request_source`
+  (token → absolute path → videos/ name), shared with highlight
+  export. Frontend: `frontend/intro_preview.js` (+ modal in
+  index.html, sync callback wired in app.js). Tests 270 → 281 (11 new:
+  cinematic/text/fallback/doubles decision matrix, cache-key
+  determinism + sensitivity, traversal guard on the GET). E2E in
+  headless Edge 14/14 on a real video: cinematic cold render 4.4 s,
+  cache hit 120 ms, text style 3.0 s, placeholder note, Escape/backdrop
+  close, disabled-intro toast.
 
 **Operator-driven open item:** (A) run Auto Trim on a fresh match
 outside the 3 PHASE0_REPORT spike entries to measure real recall on

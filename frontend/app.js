@@ -25,6 +25,7 @@ import { syncHighlights, toggleHighlightMark } from './highlights.js';
 import { syncTrims, markTrimStart, markTrimEnd } from './trims.js';
 import { setSyncAllUI, setSyncInfoFromInputs as setProjectIoSync } from './project_io.js';
 import { setSyncInfoFromInputs as setRenderSync } from './render.js';
+import { setSyncInfoFromInputs as setIntroPreviewSync } from './intro_preview.js';
 import { renderReviewList } from './auto_score/index.js';
 import { syncScoreboardPreview } from './scoreboard_preview.js';
 import { syncTimeline } from './timeline.js';
@@ -304,6 +305,7 @@ for (const id of ['tab-single', 'tab-double']) {
 setSyncAllUI(syncAllUI);
 setProjectIoSync(syncInfoFromInputs);
 setRenderSync(syncInfoFromInputs);
+setIntroPreviewSync(syncInfoFromInputs);
 
 
 // ---------- keyboard -------------------------------------------------------

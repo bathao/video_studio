@@ -352,6 +352,7 @@
           <div class="space-y-2 text-sm">
             <label class="flex items-center gap-2"><input type="checkbox" id="opt-intro-cinematic" checked> Intro: cinematic (4s, avatars + bg blur)</label>
             <label class="flex items-center gap-2"><input type="checkbox" id="opt-intro-text"> Intro: text only (3s, classic title card)</label>
+            <button id="btn-intro-preview" class="btn-secondary text-xs w-full">👁 Preview intro (renders just the intro, seconds)</button>
             <label class="lbl mt-1">Output filename
               <input id="in-output" class="ipt" placeholder="auto" />
             </label>
@@ -566,6 +567,18 @@
       <div id="tr-body" class="flex-1 overflow-y-auto space-y-3 text-sm">
         <div class="text-slate-400">Loading…</div>
       </div>
+    </div>
+  </div>
+
+  <!-- intro preview modal (see frontend/intro_preview.js) -->
+  <div id="modal-intro-preview" class="fixed inset-0 bg-black/70 hidden items-center justify-center z-40">
+    <div class="bg-ink-900 border border-ink-700 rounded-lg p-5 w-[880px] max-w-[95vw] flex flex-col">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-lg font-semibold">Intro Preview</h3>
+        <button id="ip-close" class="btn-secondary text-xs">✕ Close</button>
+      </div>
+      <video id="ip-video" class="w-full rounded bg-black" controls></video>
+      <p id="ip-note" class="text-xs text-slate-400 mt-2"></p>
     </div>
   </div>
 

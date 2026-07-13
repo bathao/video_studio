@@ -1,8 +1,11 @@
-"""Render jobs + output files + scoreboard preview routes."""
+"""Render jobs + output files + scoreboard/intro preview routes."""
 
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -10,16 +13,20 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from ..ass import ScoreFrame, build_scoreboard_ass_text
-from ..config import config
+from ..avatars import find_avatar_or_default
+from ..config import CONFIG_FILE, config
 from ..ffmpeg_runner import (
     FFmpegError,
     aac_args,
     hwaccel_input_args,
     nvenc_args,
+    probe_video,
     run_ffmpeg_with_progress,
 )
 from ..models import ProjectData, RenderRequest
-from ..renderer import RenderPlan, run_render
+from ..renderer import RenderPlan, render_intro_clip, run_render
+from .retrain import gpu_busy_reason
+from .routes_auto_trim import _video_identity
 from .state import _jobs, _jobs_lock, prune_finished_jobs
 from .utils import (
     _open_or_focus_explorer,
@@ -80,6 +87,123 @@ def preview_scoreboard(req: ScoreboardPreviewRequest) -> str:
     return text
 
 
+# ---------- intro preview ---------------------------------------------------
+
+
+_INTRO_PREVIEW_DIR = config.temp_dir / "intro_preview"
+_INTRO_PREVIEW_MAX_AGE_S = 7 * 24 * 3600.0
+
+
+def _intro_preview_key(video_id: str, intro_style: str, info) -> str:
+    """Cache key over everything that changes the preview's pixels:
+    source identity, intro style, every name/team field, the resolved
+    avatar files (path + mtime — catches photo swaps in assets/avatars/)
+    and config.json's mtime (folds in the intro_* tuning knobs without
+    enumerating them). Same key → the cached mp4 is byte-fresh."""
+    style = (intro_style or "cinematic").lower()
+    is_doubles = ((info.match_type or "single").lower() == "double")
+    names = [info.p1, info.p2] + ([info.p3, info.p4] if is_doubles else [])
+    avatars: list[list | None] = []
+    if style != "text":
+        for n in names:
+            p, _ = find_avatar_or_default(n)
+            avatars.append([str(p), int(p.stat().st_mtime)] if p else None)
+    try:
+        config_stamp = int(CONFIG_FILE.stat().st_mtime)
+    except OSError:
+        config_stamp = 0
+    raw = json.dumps({
+        "video": video_id,
+        "style": style,
+        "tournament": info.tournament,
+        "names": names,
+        "teams": [info.p1_team, info.p2_team],
+        "match_type": info.match_type,
+        "avatars": avatars,
+        "config": config_stamp,
+    }, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _prune_old_intro_previews() -> None:
+    """Previews are tiny (~1-5 MB) but write-only — age them out so the
+    cache dir can't grow unbounded across weeks of title tweaking."""
+    cutoff = time.time() - _INTRO_PREVIEW_MAX_AGE_S
+    try:
+        for f in _INTRO_PREVIEW_DIR.iterdir():
+            if f.is_file() and f.stat().st_mtime < cutoff:
+                f.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+class IntroPreviewRequest(BaseModel):
+    """Body of POST /api/preview/intro. Carries the full project (the
+    intro reads info.* only) + the render panel's intro style + the
+    session token for externally-picked source files."""
+    project: ProjectData
+    intro_style: str = "cinematic"   # "cinematic" | "text"
+    token: str | None = None
+
+
+@router.post("/api/preview/intro")
+def preview_intro(req: IntroPreviewRequest) -> dict:
+    """Render ONLY the intro clip (~4 s) with the exact production code
+    path (`render_intro_clip` — same function `_intro_stage` calls) so
+    the operator can check title fit / avatars in seconds instead of
+    waiting out a full render. Cached by content key; a repeat click
+    with nothing changed returns instantly."""
+    busy = gpu_busy_reason()
+    if busy is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"GPU busy: {busy} — preview when it finishes",
+        )
+    src = _resolve_request_source(req.token, req.project.info.video_file)
+    if not src.exists():
+        raise HTTPException(status_code=404, detail=f"Source video not found: {src}")
+
+    probe = probe_video(src)
+    key = _intro_preview_key(_video_identity(src), req.intro_style, req.project.info)
+    _INTRO_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+    _prune_old_intro_previews()
+    out = _INTRO_PREVIEW_DIR / f"{key}.mp4"
+    meta_path = _INTRO_PREVIEW_DIR / f"{key}.json"
+
+    if out.exists() and meta_path.exists():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        return {**meta, "cached": True}
+
+    try:
+        used_cinematic, placeholders = render_intro_clip(
+            out_path=out,
+            src=src,
+            width=probe["width"], height=probe["height"], fps=probe["fps"],
+            info=req.project.info,
+            intro_style=req.intro_style,
+        )
+    except FFmpegError as e:
+        raise HTTPException(status_code=500, detail=f"Intro preview failed: {e}")
+
+    meta = {
+        "ok": True,
+        "url": f"/api/preview/intro/{key}.mp4",
+        "used_cinematic": used_cinematic,
+        "placeholders": placeholders,
+    }
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    return {**meta, "cached": False}
+
+
+@router.get("/api/preview/intro/{name}")
+def fetch_intro_preview(name: str) -> FileResponse:
+    """Serve a rendered intro preview inline for the modal's <video>."""
+    target = _resolve_inside(_INTRO_PREVIEW_DIR, name)
+    if not target.exists() or target.suffix.lower() != ".mp4":
+        raise HTTPException(status_code=404, detail="Preview not found")
+    return FileResponse(str(target), media_type="video/mp4")
+
+
 # ---------- output files ----------------------------------------------------
 
 
@@ -134,17 +258,18 @@ class HighlightExportRequest(BaseModel):
     index: int = Field(default=1, ge=1)
 
 
-def _resolve_export_source(req: "HighlightExportRequest") -> Path:
+def _resolve_request_source(token: str | None, video_file: str | None) -> Path:
     """Token first (cheapest, already validated on register); fall back to
-    `video_file` / `name`. A bare name is confined to `videos/`; an
-    absolute path is trusted directly, exactly like the render pipeline
-    (the path originates from the operator's own project, not the browser)."""
-    if req.token:
+    `video_file`. A bare name is confined to `videos/`; an absolute path
+    is trusted directly, exactly like the render pipeline (the path
+    originates from the operator's own project, not the browser). Shared
+    by highlight export and the intro preview."""
+    if token:
         try:
-            return _resolve_external_video(req.token)
+            return _resolve_external_video(token)
         except HTTPException:
             pass  # stale token (session restart) — fall through to the path
-    vf = (req.video_file or req.name or "").strip()
+    vf = (video_file or "").strip()
     if not vf:
         raise HTTPException(status_code=400, detail="No source video in request")
     p = Path(vf)
@@ -158,7 +283,7 @@ def export_highlight(req: HighlightExportRequest) -> dict:
     cut is frame-accurate, no slow-mo / scoreboard). Returns the saved
     name + a `/api/output/<name>` URL the frontend uses to also trigger a
     browser download."""
-    src = _resolve_export_source(req)
+    src = _resolve_request_source(req.token, req.video_file or req.name)
     if not src.exists():
         raise HTTPException(status_code=404, detail=f"Source video not found: {src}")
 

@@ -20,6 +20,14 @@ On success the in-process YOLO model cache is invalidated
 (`backend.roi_yolo.invalidate_model_cache`), so the NEXT detect click
 uses the new weights without a server restart.
 
+Keep-the-winner policy: after every retrain the old-vs-new comparison
+runs on all confirmed refframes, and a ``REGRESSED`` verdict triggers an
+automatic rollback to the pre-retrain weights (`roi_seg.prev.pt`) — the
+production model can only stay equal or get better, no matter how often
+the operator retrains. EQUIVALENT keeps the NEW weights on purpose: the
+benchmark is a production replay on known venues, while the new model
+trained on more venues — same replay score with more data wins.
+
 The HTTP wrappers live in routes_auto_trim.py and stay thin — this
 module is importable and unit-testable without FastAPI. Deliberately
 NOT the render-job registry pattern: there is at most ONE retrain,
@@ -192,6 +200,34 @@ def _compare_old_vs_new() -> str:
         return f"comparison skipped: {e}"
 
 
+def _is_regression(summary: str) -> bool:
+    """True when the comparison verdict says the fresh weights are worse.
+
+    Only a clean ``SUMMARY: REGRESSED…`` line counts — "comparison
+    failed/skipped" strings return False so a rollback never happens on
+    missing evidence."""
+    if not summary.startswith("SUMMARY:"):
+        return False
+    return summary.removeprefix("SUMMARY:").strip().startswith("REGRESSED")
+
+
+def _rollback_to_backup() -> bool:
+    """Restore the pre-retrain weights after a REGRESSED verdict.
+
+    Uses copyfile (not copy2) so the restored file's mtime is NOW, not
+    the backup's: training is seeded, so re-running on the same confirms
+    would reproduce the same regressed weights — the staleness counter
+    should only wake up again on NEW confirms. Returns True when the
+    restore succeeded."""
+    try:
+        shutil.copyfile(_MODEL_BACKUP, _MODEL_PATH)
+        return True
+    except OSError:
+        _logger.warning("rollback to %s failed — keeping fresh weights",
+                        _MODEL_BACKUP, exc_info=True)
+        return False
+
+
 def _set_progress(fraction: float, message: str | None = None) -> None:
     with _lock:
         _state.progress = max(_state.progress, min(1.0, fraction))
@@ -262,12 +298,19 @@ def _worker() -> None:
         invalidate_model_cache()
         # Prove (or disprove) the improvement on the operator's own
         # confirmed corners — the verdict lands in the status message
-        # the modal shows.
+        # the modal shows. Keep-the-winner: a REGRESSED verdict rolls
+        # the weights back to the pre-retrain backup automatically.
         summary = ""
+        rolled_back = False
         if have_backup:
             _set_progress(0.92, "comparing old vs new model")
             summary = _compare_old_vs_new()
-        msg = "model retrained + reloaded"
+            if _is_regression(summary):
+                rolled_back = _rollback_to_backup()
+                if rolled_back:
+                    invalidate_model_cache()
+        msg = ("model retrained but REGRESSED — previous weights kept"
+               if rolled_back else "model retrained + reloaded")
         if summary:
             msg += f" — {summary}"
         with _lock:

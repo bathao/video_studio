@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -21,6 +24,39 @@ from .state import (
     _external_lock,
     _external_videos,
 )
+
+# Render job dirs are temp/<uuid4().hex[:12]> (see renderer.orchestrator);
+# every named dir under temp/ (refframes, auto_trim_cache, …) fails this.
+_JOB_DIR_RE = re.compile(r"^[0-9a-f]{12}$")
+_STALE_JOB_DIR_AGE_S = 7 * 24 * 3600.0
+
+
+def prune_stale_job_dirs(temp_dir: Path,
+                         max_age_s: float = _STALE_JOB_DIR_AGE_S) -> list[str]:
+    """Delete failed-render leftovers under temp/ at server start.
+
+    `_finalize` keeps temp/<job_id> on failure so the broken ffmpeg
+    inputs stay inspectable — but once the render has been retried the
+    dir is just dead gigabytes (a long source leaves ~2 GB of
+    intermediates). Job dirs untouched for `max_age_s` (default 7 days)
+    are past any realistic debugging window; the age gate also protects
+    a render that is mid-flight during a restart. Returns the deleted
+    names for the caller to log."""
+    deleted: list[str] = []
+    if not temp_dir.is_dir():
+        return deleted
+    cutoff = time.time() - max_age_s
+    for child in temp_dir.iterdir():
+        if not child.is_dir() or not _JOB_DIR_RE.match(child.name):
+            continue
+        try:
+            if child.stat().st_mtime >= cutoff:
+                continue
+            shutil.rmtree(child)
+            deleted.append(child.name)
+        except OSError:
+            continue  # locked/in use — retried on the next startup
+    return deleted
 
 
 def _validate_video_path(path: Path) -> Path:
