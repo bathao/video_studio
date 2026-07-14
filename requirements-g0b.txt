@@ -1,0 +1,11 @@
+# G0b fine-tune stack (scripts/auto_score_spike/train_g0b_lora.py).
+# Deliberately NOT in requirements-dev.txt: these are heavy,
+# GPU-training-only deps that CI must never install. torch itself is
+# already present in the operator venv (ultralytics).
+#
+#   venv\Scripts\pip install -r requirements-g0b.txt
+transformers>=4.57
+peft>=0.14
+bitsandbytes>=0.45
+accelerate>=1.2
+qwen-vl-utils

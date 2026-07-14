@@ -308,6 +308,17 @@ passes. Phase 0 step status:
   pure manual production, labels + retrains accumulating with zero
   assistant involvement.
 
+- 🟢 **Truly-unseen segmentation eval on the 6 new production matches
+  (2026-07-14, `eval_unseen.py`, 363 events)**: v7-tuned2 (frozen)
+  coverage **93.7% (340/363)**, association 91.7%; per-match coverage
+  88.2–98.1% (worst 0402_Loi 88.2%, best 0712_MaiTranTri 98.1%).
+  Softer than the corpus-era 97.5% total but measured on 6 fully
+  unseen matches; association is ABOVE the historical 85.5%. Ladder
+  intact (default 85.7% < tuned 88.7% < tuned2 93.7%). Verdict: G0a
+  continues to hold in production; corpus rebuilt to 1197 records
+  (1024 train / 173 held-out; 3 duplicate slugs dropped, newest render
+  wins).
+
 - 🟢 **Keep-the-winner retrain policy (2026-07-14)**: the 07-13 GUI
   retrain came back **REGRESSED** (within-2% 55→50/58, worst
   2.28→2.64%, mean 1.09→1.11% — run-to-run jitter at the precision
@@ -417,9 +428,44 @@ passes. Phase 0 step status:
   → cancelled (dataset kept clean); caught a listener-registration
   race (modal closed during its opening fetch left Render disabled).
   Tests unchanged (289) — chain is frontend-only.
-  **STATUS: machine-verified only — operator live test pending
-  (planned evening 2026-07-14).** Committed before that test by
-  operator request; if the evening run surfaces issues, fix forward.
+  **STATUS: operator live-tested OK (evening 2026-07-14)** — real
+  production render (match_001_20260714_212307, 48 auto trims / 0
+  manual) went through the chain end-to-end; operator confirmed the
+  flow is fine.
+
+- 🟡 **G0b fine-tune pipeline PREPPED (2026-07-14, operator-approved —
+  awaiting the 15-match milestone to fire)**: everything between
+  "corpus hits 15" and "LoRA verdict" is now scripted so milestone day
+  is execution-only. Three new siblings under scripts/auto_score_spike/:
+  (1) `build_g0b_dataset.py` — corpus → chat-format winner dataset
+  reusing the bake-off's EXACT measured recipe (imports
+  `extract_frames` + `PROMPT_B`; 8 ROI-cropped 640px frames over the
+  ±6s window; frame cache shared with out/vlm_frames/). Truth derived
+  from the side fields ON each record (p1_side_set1 + per-set flip +
+  displayed-score-5 mid-set-5 swap — handicap-correct via
+  score_after); splits by MATCH, pinned held-out stays eval-only, val
+  = newest train match. (2) `train_g0b_lora.py` — QLoRA NF4 4-bit +
+  LoRA r16 on language attention+MLP (vision tower frozen, plan
+  §3.1), batch 1 × grad-accum 8, bf16, sized for the 16GB 5060 Ti;
+  `--check` mode = one forward pass to validate env before committing.
+  Assistant target is `{"winner": "near|far"}` only (bake-off showed
+  confidence flat/useless). (3) `eval_g0b.py` — true-accuracy on the
+  pinned held-out (no mapping fit), per-match table, PASS ≥80% /
+  MARGINAL 75–80% / STOP-LOSS <75% verdict; also runs the zero-shot HF
+  baseline via `--adapter` omitted. Base model VERIFIED on HF:
+  **Qwen/Qwen3.5-9B** (natively multimodal image-text-to-text,
+  Qwen3_5ForConditionalGeneration, Apache-2.0, ungated, ~19 GB) — the
+  fine-tunable weights of the bake-off's `qwen3.5:9b`. New
+  `requirements-g0b.txt` (transformers 5.13 / peft 0.19 / bnb 0.49 /
+  accelerate; deliberately NOT in requirements-dev — CI never installs
+  it). Verified so far: base model loads in 4-bit via transformers
+  5.13 (Qwen3_5ForConditionalGeneration + Qwen3VLProcessor, 7.4 GiB
+  VRAM) and the ~19 GB weights are in the HF cache. Dataset frame
+  extraction **PAUSED at 364/~960 windows** (operator freed the
+  machine for the evening render test; fully resumable — re-run
+  `build_g0b_dataset.py`, cache is per-record). Remaining: finish
+  extraction (~1 h) → `train_g0b_lora.py --check` forward pass.
+  Outputs land in dataset/g0b/ + runs/g0b/ (both gitignored).
 
 **Operator-driven open item:** (A) run Auto Trim on a fresh match
 outside the 3 PHASE0_REPORT spike entries to measure real recall on
