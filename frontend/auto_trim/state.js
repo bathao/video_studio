@@ -47,6 +47,7 @@ export const els = {
   detTrimTotal: $('at-det-trim-total'),
   detCache: $('at-det-cache'),
   detRun: $('at-det-run'),
+  detRunRender: $('at-det-run-render'),
   detCancel: $('at-det-cancel'),
   detApplyRow: $('at-det-apply-row'),
   detApply: $('at-det-apply'),

@@ -22,6 +22,7 @@
 //   api.js        — backend HTTP calls + onConfirmClick
 //   index.js      — openAutoTrimModal + button bindings + window listeners
 
+import { ensureTrimsAndRender, setOpenAutoTrimModal } from '../render_chain.js';
 import { mut, project } from '../state.js';
 import { toast } from '../toast.js';
 import {
@@ -112,6 +113,19 @@ els.detRun.addEventListener('click', onRunDetectionClick);
 els.detCancel.addEventListener('click', onCancelDetectionClick);
 els.detApply.addEventListener('click', onApplyClick);
 els.detDiscard.addEventListener('click', onDiscardClick);
+
+// One-click chain: close the modal and hand over to render_chain.js
+// (detect → apply → render, progress in the Render panel). forceDetect
+// makes a re-click replace previous auto trims — the detection cache
+// turns the re-run into milliseconds.
+els.detRunRender.addEventListener('click', () => {
+  closeModal();
+  ensureTrimsAndRender({ forceDetect: true });
+});
+
+// Register the modal opener with the chain (cycle-breaking setter —
+// render_chain must not import this module).
+setOpenAutoTrimModal(openAutoTrimModal);
 
 window.addEventListener('resize', () => {
   if (state.open) redraw();

@@ -406,7 +406,21 @@ frontend/
                        stopImmediatePropagation's while reviewing.
   project_io.js      Save / Load Project + load modal.
   render.js          startRender + pollRender + cancel + intro-style
-                     mutual exclusion + Open output folder.
+                     mutual exclusion + Open output folder. The Render
+                     button routes through render_chain.js — startRender
+                     is registered with it as the raw entry.
+  render_chain.js    One-click render chain: Render guarantees auto
+                     trims exist before ffmpeg starts. Trims present →
+                     render; missing → headless rally detection via
+                     the /api/auto_trim/* job (progress in the Render
+                     panel) + auto-apply; ROI missing too → opens the
+                     Auto Trim modal at the ROI step and resumes on the
+                     'roi-confirmed' window event ('auto-trim-closed'
+                     aborts). <10 score events → confirm dialog (the
+                     only untrimmed-render path). Fail-loud: detection
+                     error aborts the render. Entry points registered
+                     via setters (setStartRender /
+                     setOpenAutoTrimModal) to avoid import cycles.
   intro_preview.js   "👁 Preview intro" button in the Render panel →
                      POST /api/preview/intro (renders just the intro
                      clip through the production code path, seconds)
@@ -898,5 +912,6 @@ trim detection backend).
 | Auto Trim modal (frontend)           | [frontend/auto_trim/](frontend/auto_trim/) — public entry [frontend/auto_trim/index.js](frontend/auto_trim/index.js); button hosted in [frontend/trims.js](frontend/trims.js) |
 | Auto Score tab (rally proposals + review) | backend: `segment_rallies` in [backend/auto_score/rally_segmenter.py](backend/auto_score/rally_segmenter.py) + [backend/server/routes_auto_score.py](backend/server/routes_auto_score.py); frontend: [frontend/auto_score/](frontend/auto_score/) (tab DOM in [frontend/index.html](frontend/index.html) `#score-tab-auto`) |
 | Intro preview (render just the intro)| backend: `render_intro_clip` in [backend/renderer/orchestrator.py](backend/renderer/orchestrator.py) + `/api/preview/intro` in [backend/server/routes_render.py](backend/server/routes_render.py); frontend: [frontend/intro_preview.js](frontend/intro_preview.js) |
+| One-click Render (auto trim chained in) | [frontend/render_chain.js](frontend/render_chain.js) — `ensureTrimsAndRender`; modal combo button in [frontend/auto_trim/index.js](frontend/auto_trim/index.js) |
 | Add a new HTTP endpoint              | pick the matching `backend/server/routes_*.py` (videos / projects / render / auto_trim), or [backend/server/app.py](backend/server/app.py) for cross-cutting endpoints |
 | Add new project field                | [backend/models.py](backend/models.py) `ProjectInfo`, then frontend `project.info` schema in [frontend/state.js](frontend/state.js), then UI input in [frontend/index.html](frontend/index.html) |

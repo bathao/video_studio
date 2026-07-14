@@ -15,4 +15,7 @@ export function closeModal() {
   state.open = false;
   els.modal.classList.add('hidden');
   els.modal.classList.remove('flex');
+  // Lets a waiting render chain abort when the operator closes the
+  // modal without confirming the ROI (no-op for every other close).
+  window.dispatchEvent(new CustomEvent('auto-trim-closed'));
 }

@@ -43,24 +43,32 @@ function setStatusUI() {
   els.detProgressWrap.classList.toggle('hidden', !showProg);
   els.detProgress.style.width = `${Math.round(d.progress * 100)}%`;
 
-  // Buttons: Run / Cancel / (Apply + Discard).
+  // Buttons: Detect+Render / Run / Cancel / (Apply + Discard).
   const enoughScores = (project.score_events?.length || 0) >= 10;
-  els.detRun.classList.toggle('hidden', d.status === 'running' || d.status === 'done');
+  const runsHidden = d.status === 'running' || d.status === 'done';
+  els.detRun.classList.toggle('hidden', runsHidden);
+  els.detRunRender.classList.toggle('hidden', runsHidden);
   els.detCancel.classList.toggle('hidden', d.status !== 'running');
   els.detApplyRow.classList.toggle('hidden', d.status !== 'done');
 
   // Re-run after done/error/cancelled: button is re-shown above; relabel.
   if (d.status === 'idle' || d.status === 'cancelled' || d.status === 'error') {
     els.detRun.textContent = state.confirmed
-      ? '▶ Run detection'
+      ? '▶ Run detection only'
       : '▶ Run detection (confirm ROI first)';
     const blocked = !state.confirmed || !enoughScores;
-    els.detRun.disabled = blocked;
-    els.detRun.title = !state.confirmed
+    const blockedTitle = !state.confirmed
       ? 'Confirm ROI first'
       : (!enoughScores
         ? `Need ≥10 score events (have ${project.score_events?.length || 0})`
-        : 'Run rally detection');
+        : '');
+    els.detRun.disabled = blocked;
+    els.detRun.title = blockedTitle || 'Run rally detection';
+    // The one-click chain button shares the same gate: it closes the
+    // modal and runs detect → apply → render via render_chain.js.
+    els.detRunRender.disabled = blocked;
+    els.detRunRender.title = blockedTitle
+      || 'Detect dead time, apply trims, and start the render';
   }
 
   // Results panel

@@ -392,14 +392,46 @@ passes. Phase 0 step status:
   roster (incl. the accent-less query and a fold-equal bug the E2E
   caught: "tuong thuy" must still suggest "Tường Thụy").
 
+- 🟢 **One-click Render — auto trim chained in (2026-07-14, operator
+  request + directive "every clip always needs auto trim")**: the
+  Render button now routes through `frontend/render_chain.js`
+  (`ensureTrimsAndRender`) instead of starting ffmpeg blindly.
+  Production data behind it: 6/6 recent matches used auto trim
+  exclusively, cutting ~45-60% of the source; a forgotten Auto Trim
+  meant a ~2× render of a bad output. Chain: auto trims present →
+  render unchanged; missing → headless rally detection via the
+  existing `/api/auto_trim/*` job (progress + cancel in the Render
+  panel, cache-aware) + auto-apply (replace-own-output); ROI also
+  missing → the Auto Trim modal opens at the ROI step and the chain
+  resumes on the new `roi-confirmed` window event (closing without
+  confirm aborts via `auto-trim-closed`). <10 score events → confirm
+  dialog, the ONLY remaining untrimmed-render path; detection failure
+  is fail-loud (toast + abort, never a silent full render). Second
+  entry point per operator idea: "⚡ Detect + Apply + Render" button in
+  the Auto Trim modal (forceDetect → re-run replaces old auto trims;
+  cache makes it ms). Cycle-breaking via setter registration. This
+  effectively closes the old deferred item "headless auto-trim inside
+  the Render button" — superseded by frontend chaining that reuses the
+  job pipeline. E2E 12/12 checks across 2 runs in headless Edge incl.
+  a REAL 193 s detection on 0307_NgocHieu → 13 trims → render started
+  → cancelled (dataset kept clean); caught a listener-registration
+  race (modal closed during its opening fetch left Render disabled).
+  Tests unchanged (289) — chain is frontend-only.
+  **STATUS: machine-verified only — operator live test pending
+  (planned evening 2026-07-14).** Committed before that test by
+  operator request; if the evening run surfaces issues, fix forward.
+
 **Operator-driven open item:** (A) run Auto Trim on a fresh match
 outside the 3 PHASE0_REPORT spike entries to measure real recall on
 truly-unseen venue + audio. Needs a new recording; the assistant can
 only analyse the result, not produce the input.
 
-Lower-priority / deferred: headless auto-trim inside the Render button
-and YOLOv8-pose escalation — both gated on (A) producing enough
-confidence in detector reliability first.
+Lower-priority / deferred: YOLOv8-pose escalation — gated on (A)
+producing enough confidence in detector reliability first. (The other
+deferred item, headless auto-trim inside the Render button, shipped
+2026-07-14 as the frontend render chain — see the One-click Render
+entry above; production usage 6/6 matches stood in for (A)'s
+confidence requirement on the segmentation side.)
 
 ## Improvement plan 2026-07-07 (source-sweep driven)
 

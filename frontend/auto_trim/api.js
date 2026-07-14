@@ -145,6 +145,10 @@ export async function onConfirmClick() {
     els.confirm.disabled = true;
     // Unlock the Rally-detection panel now that ROI is locked in.
     syncDetectionUI();
+    // Signal for the one-click render chain (render_chain.js): when the
+    // Render button opened this modal just for the ROI step, this event
+    // resumes the detect→apply→render pipeline.
+    window.dispatchEvent(new CustomEvent('roi-confirmed'));
   } catch (e) {
     log(`ERROR: ${e.message || e}`);
     toast(`Save failed: ${e.message || e}`);

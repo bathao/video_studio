@@ -3,6 +3,7 @@
 // flags, gets a job_id back, and polls /api/render/{id} every 600 ms
 // until status is "done" or "error".
 import { $ } from './dom.js';
+import { ensureTrimsAndRender, setStartRender } from './render_chain.js';
 import { mut, project } from './state.js';
 import { toast } from './toast.js';
 
@@ -116,7 +117,12 @@ function pollRender(jobId) {
   }, 600);
 }
 
-$('btn-render').addEventListener('click', startRender);
+// The Render button goes through the auto-trim chain (render_chain.js):
+// it guarantees auto trims exist — detecting them first when missing —
+// before startRender is invoked. startRender itself stays the raw
+// "post the plan, poll the job" entry and is handed to the chain here.
+setStartRender(startRender);
+$('btn-render').addEventListener('click', () => ensureTrimsAndRender());
 
 // Intro style — radio-like behaviour: ticking one auto-unticks the
 // other so cinematic and text never run simultaneously. Both can
