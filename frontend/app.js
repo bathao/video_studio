@@ -31,6 +31,7 @@ import { syncScoreboardPreview } from './scoreboard_preview.js';
 import { syncTimeline } from './timeline.js';
 import { toast } from './toast.js';
 import './training_status.js'; // top-bar Training button + status modal
+import './avatar_suggest.js'; // type-ahead roster suggestions on name inputs
 
 
 // ---------- orchestration --------------------------------------------------
@@ -41,8 +42,19 @@ import './training_status.js'; // top-bar Training button + status modal
 // without an extra round-trip to the server for every keystroke. The
 // scoreboard preview itself still goes through the backend, so this
 // stays cosmetic (the labels above the score counters).
+// Trailing '(note)' on a typed name is a viewer-facing annotation
+// ('Lương Đức Tuấn (Gai Dài)') — mirror of backend strip_note_suffix
+// in backend/ass/common.py: display keeps it, the combine rule drops it.
+function stripNoteSuffix(name) {
+  let text = (name || '').trim();
+  for (;;) {
+    const s = text.replace(/\s*\([^()]*\)\s*$/, '');
+    if (s === text) return text;
+    text = s;
+  }
+}
 function lastTwoWords(name) {
-  const text = (name || '').trim();
+  const text = stripNoteSuffix(name);
   if (!text) return '';
   const tokens = text.split(/\s+/);
   if (tokens.length <= 2) return text;

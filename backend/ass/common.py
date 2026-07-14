@@ -9,6 +9,8 @@ trust a single source of truth.
 
 from __future__ import annotations
 
+import re
+
 
 def _fmt_time(seconds: float) -> str:
     if seconds < 0:
@@ -36,6 +38,25 @@ def _trim_name(text: str, max_len: int = 22) -> str:
     return text
 
 
+_NOTE_SUFFIX_RE = re.compile(r"\s*\([^()]*\)\s*$")
+
+
+def strip_note_suffix(name: str) -> str:
+    """Drop trailing parenthetical notes from a player name:
+    'Lương Đức Tuấn (Gai Dài)' → 'Lương Đức Tuấn'. Operator convention:
+    a '(note)' at the END of the typed name is a viewer-facing
+    annotation (playing style, club, …), not part of the player's
+    identity — scoreboard/intro display keep it verbatim, but avatar
+    lookup and the doubles name-combine rule ignore it. Repeats so
+    'X (a) (b)' also reduces; parentheses mid-name are untouched."""
+    text = (name or "").strip()
+    while True:
+        stripped = _NOTE_SUFFIX_RE.sub("", text)
+        if stripped == text:
+            return text
+        text = stripped
+
+
 def _last_two_words(name: str) -> str:
     """Last 2 whitespace-separated tokens of a player's name. Used to
     compose the combined doubles label (e.g. 'Nguyễn Văn An' →
@@ -47,8 +68,10 @@ def _last_two_words(name: str) -> str:
     column width). Combining two full Vietnamese 3-token names blows
     that budget; the last-2 convention keeps the personal-name part
     (which is what locals refer to each other by) and drops only the
-    family prefix that all four players might share."""
-    text = (name or "").strip()
+    family prefix that all four players might share. A trailing
+    '(note)' annotation is stripped first — otherwise it would BE the
+    last two tokens and eat the whole label."""
+    text = strip_note_suffix(name)
     if not text:
         return ""
     tokens = text.split()

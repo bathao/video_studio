@@ -318,6 +318,12 @@ frontend/
   timecode.js        `fmt(s)` and `parseTimecode("m:ss.xx")`.
   toast.js           Floating toast.
   avatars.js         `refreshAvatarThumb(slot)` debounced lookup.
+  avatar_suggest.js  Type-ahead name suggestions on the p1-p4 inputs,
+                     backed by GET /api/avatars (roster of photo file
+                     stems). Accent-insensitive fold (NFD + đ→d),
+                     prefix-first ranking, thumbnail rows, ↑/↓/Enter/
+                     Escape keyboard nav; picking dispatches a normal
+                     'input' event so the existing sync pipeline runs.
   player.js          <video> element + HUD + seek/scrub + speed +
                      source switching (loadVideoList / setVideoSource /
                      browseForVideo / external token registration). Also
@@ -776,6 +782,16 @@ trim detection backend).
 
 - **Vietnamese diacritics are NFC-normalised on lookup.** `find_avatar`
   case-insensitive + NFC compare. Project schema is UTF-8 throughout.
+
+- **A trailing "(note)" on a player name is display-only.** Operator
+  convention: `Lương Đức Tuấn (Gai Dài)` annotates playing style for
+  viewers. The scoreboard + intro render the name verbatim, but
+  `find_avatar` retries without the note (exact match still wins) and
+  the doubles `_last_two_words` combine rule strips it first (else the
+  note would BE the last two tokens). Single source:
+  `strip_note_suffix` in [backend/ass/common.py](backend/ass/common.py),
+  mirrored as `stripNoteSuffix` in [frontend/app.js](frontend/app.js)
+  for the Live Score labels — keep in sync.
 
 ## Things that surprise people
 

@@ -14,6 +14,7 @@ from backend.avatars import (
     find_avatar,
     find_avatar_or_default,
     find_default_avatar,
+    list_avatar_names,
 )
 from backend import avatars as avatars_module
 
@@ -110,6 +111,56 @@ def test_subfolder_files_ignored(avatars_dir: Path):
     assert find_avatar("Ma Long") is None
 
 
+# ---------- note-suffix tolerance -------------------------------------------
+
+
+def test_trailing_note_suffix_is_ignored(avatars_dir: Path):
+    p = avatars_dir / "Lương Đức Tuấn.jpg"
+    _touch(p)
+    assert find_avatar("Lương Đức Tuấn (Gai Dài)") == p
+    assert find_avatar("Lương Đức Tuấn (Gai Dài) (CLB Q7)") == p
+    assert find_avatar("lương đức tuấn (GAI DÀI)") == p
+
+
+def test_exact_match_with_parens_wins_over_stripped(avatars_dir: Path):
+    exact = avatars_dir / "Ma Long (Trung Quốc).jpg"
+    plain = avatars_dir / "Ma Long.jpg"
+    _touch(exact)
+    _touch(plain)
+    assert find_avatar("Ma Long (Trung Quốc)") == exact
+
+
+def test_mid_name_parens_not_stripped(avatars_dir: Path):
+    _touch(avatars_dir / "Ma Long.jpg")
+    # The note rule only applies at the END of the name.
+    assert find_avatar("Ma (Gai) Long") is None
+
+
+def test_name_that_is_only_a_note_matches_nothing(avatars_dir: Path):
+    _touch(avatars_dir / "Ma Long.jpg")
+    assert find_avatar("(Gai Dài)") is None
+
+
+def test_note_suffix_falls_back_to_default(avatars_dir: Path):
+    default = avatars_dir / "_default.jpg"
+    _touch(default)
+    path, used_default = find_avatar_or_default("Ai Đó (Mới)")
+    assert path == default
+    assert used_default is True
+
+
+def test_strip_note_suffix_and_doubles_label():
+    from backend.ass.common import _combine_doubles_name, _last_two_words, strip_note_suffix
+    assert strip_note_suffix("Lương Đức Tuấn (Gai Dài)") == "Lương Đức Tuấn"
+    assert strip_note_suffix("Tommy") == "Tommy"
+    assert strip_note_suffix("") == ""
+    # Without stripping, the note WOULD be the last two tokens.
+    assert _last_two_words("Lương Đức Tuấn (Gai Dài)") == "Đức Tuấn"
+    assert _combine_doubles_name("Nguyễn Bá Thảo (Chủ Kênh)", "Lương Đức Tuấn (Gai Dài)") == "Bá Thảo + Đức Tuấn"
+    # Names without notes are byte-identical to the old rule.
+    assert _last_two_words("Nguyễn Văn An") == "Văn An"
+
+
 # ---------- find_default_avatar ---------------------------------------------
 
 
@@ -156,6 +207,25 @@ def test_returns_none_when_both_missing(avatars_dir: Path):
     path, used_default = find_avatar_or_default("Ma Long")
     assert path is None
     assert used_default is False
+
+
+# ---------- list_avatar_names -----------------------------------------------
+
+
+def test_list_names_empty_and_missing_dir(avatars_dir: Path):
+    assert list_avatar_names() == []
+    avatars_dir.rmdir()
+    assert list_avatar_names() == []
+
+
+def test_list_names_sorted_dedup_and_reserved_excluded(avatars_dir: Path):
+    _touch(avatars_dir / "Tường Thụy.jpg")
+    _touch(avatars_dir / "an nguyễn.jpg")     # casefold sort → before T
+    _touch(avatars_dir / "Ma Long.png")
+    _touch(avatars_dir / "Ma Long.jpg")        # same stem twice → once
+    _touch(avatars_dir / "_default.jpg")       # reserved → excluded
+    _touch(avatars_dir / "notes.txt")          # non-image → excluded
+    assert list_avatar_names() == ["an nguyễn", "Ma Long", "Tường Thụy"]
 
 
 # ---------- AVATAR_EXTS sanity ---------------------------------------------

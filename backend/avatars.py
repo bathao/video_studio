@@ -15,6 +15,7 @@ import unicodedata
 from pathlib import Path
 from typing import Optional
 
+from .ass.common import strip_note_suffix
 from .config import config
 
 # Order encodes priority: when both `Ma Long.png` and `Ma Long.jpg`
@@ -60,13 +61,45 @@ def _scan(stem_target: str) -> Optional[Path]:
 def find_avatar(name: str) -> Optional[Path]:
     """Strict lookup: returns the path to <name>'s avatar image, or
     None. Never falls back to the default placeholder — used by the UI
-    so a missing photo stays visible to the operator."""
+    so a missing photo stays visible to the operator.
+
+    A trailing '(note)' on the typed name is a viewer-facing annotation
+    ('Lương Đức Tuấn (Gai Dài)'), not part of the player's identity —
+    when the verbatim name has no photo we retry without the note, so
+    annotating a name never loses the avatar. An exact filename match
+    (including parentheses) still wins."""
     if not name or not name.strip():
         return None
     target = _norm(name)
     if target.startswith(_RESERVED_PREFIX):
         return None  # reserved filenames cannot be claimed as a name
-    return _scan(target)
+    hit = _scan(target)
+    if hit is not None:
+        return hit
+    stripped = _norm(strip_note_suffix(name))
+    if stripped and stripped != target and not stripped.startswith(_RESERVED_PREFIX):
+        return _scan(stripped)
+    return None
+
+
+def list_avatar_names() -> list[str]:
+    """Every player name that has a photo on disk — the file stems
+    (NFC-normalised, whitespace-trimmed), sorted case-insensitively.
+    Reserved `_*` files are excluded; a stem present in several
+    extensions counts once. Powers the type-ahead name suggestions in
+    the Setup panel (`GET /api/avatars`)."""
+    root = _avatars_root()
+    if not root.exists():
+        return []
+    names: dict[str, str] = {}
+    for entry in root.iterdir():
+        if not entry.is_file() or entry.suffix.lower() not in AVATAR_EXTS:
+            continue
+        stem = unicodedata.normalize("NFC", entry.stem.strip())
+        if not stem or stem.startswith(_RESERVED_PREFIX):
+            continue
+        names.setdefault(_norm(stem), stem)
+    return sorted(names.values(), key=str.casefold)
 
 
 def find_default_avatar() -> Optional[Path]:

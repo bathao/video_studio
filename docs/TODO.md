@@ -363,6 +363,35 @@ passes. Phase 0 step status:
   cache hit 120 ms, text style 3.0 s, placeholder note, Escape/backdrop
   close, disabled-intro toast.
 
+- 🟢 **Note-suffix tolerant avatar lookup (2026-07-14, operator
+  request)**: typing `Lương Đức Tuấn (Gai Dài)` used to lose the
+  avatar (lookup was exact-match only). New convention: a trailing
+  `(note)` is a viewer-facing annotation — scoreboard/intro display it
+  verbatim, but `find_avatar` retries without it (exact filename match
+  incl. parens still wins) and the doubles last-two-words combine rule
+  strips it first (else the note IS the last two tokens →
+  `_combine_doubles_name("… (Chủ Kênh)", "… (Gai Dài)")` now yields
+  "Bá Thảo + Đức Tuấn"). Single source `strip_note_suffix` in
+  `backend/ass/common.py`, mirrored `stripNoteSuffix` in
+  `frontend/app.js`; thumb + status endpoints inherit via backend.
+  Verified on the real roster + endpoints. Tests 281 → 287.
+
+- 🟢 **Avatar name type-ahead (2026-07-14, operator request)**: the
+  p1-p4 name inputs now suggest from the avatar roster while typing —
+  no more digging through assets/avatars/ to remember whether the file
+  is "Tường Thụy" or "Nguyễn Tưởng Thụy". NEW `GET /api/avatars`
+  (`avatars.list_avatar_names()` — photo file stems, `_*` excluded,
+  dedup across extensions) + NEW `frontend/avatar_suggest.js`:
+  accent-insensitive matching (NFD fold + đ→d, so "thuy" finds Thụy /
+  Thùy / Thủy), prefix matches ranked first, max 8 rows with photo
+  thumbnails, ↑/↓/Enter/Escape keyboard nav, mouse pick; selection
+  dispatches a real 'input' event so undo-burst + info sync + thumb
+  refresh run unchanged. Suggestions never restrict input (new player
+  without a photo types as usual). Roster cached 60 s client-side.
+  Tests 287 → 289; E2E 10/10 in headless Edge on the real 298-name
+  roster (incl. the accent-less query and a fold-equal bug the E2E
+  caught: "tuong thuy" must still suggest "Tường Thụy").
+
 **Operator-driven open item:** (A) run Auto Trim on a fresh match
 outside the 3 PHASE0_REPORT spike entries to measure real recall on
 truly-unseen venue + audio. Needs a new recording; the assistant can

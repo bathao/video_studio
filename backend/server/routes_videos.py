@@ -16,7 +16,7 @@ from pathlib import Path
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
-from ..avatars import find_avatar
+from ..avatars import find_avatar, list_avatar_names
 from ..config import config
 from ..ffmpeg_runner import probe_video
 from .state import VIDEO_EXTS
@@ -268,6 +268,13 @@ _AVATAR_MIME = {
     ".jpeg": "image/jpeg",
     ".webp": "image/webp",
 }
+
+
+@router.get("/api/avatars")
+def list_avatars() -> dict:
+    """Roster of player names that have a photo on disk — powers the
+    type-ahead suggestions in the Setup panel name inputs."""
+    return {"names": list_avatar_names()}
 
 
 @router.get("/api/avatars/{name}")
