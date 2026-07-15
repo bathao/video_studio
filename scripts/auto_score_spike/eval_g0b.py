@@ -33,6 +33,7 @@ sys.path.insert(0, str(ROOT))
 from scripts.auto_score_spike.train_g0b_lora import (  # noqa: E402
     load_model_and_processor,
     load_rows,
+    open_frame,
     row_to_messages,
 )
 
@@ -71,6 +72,11 @@ def main() -> int:
     rows = load_rows(args.split, args.max_samples)
     print(f"{args.split}: {len(rows)} examples, "
           f"{len({r['match_id'] for r in rows})} matches")
+    if not rows:
+        print(f"ERROR: split {args.split!r} is empty — a verdict over "
+              "nothing is meaningless. Check dataset/g0b/stats.json.",
+              file=sys.stderr)
+        return 1
 
     model, processor = load_model_and_processor(args.model)
     if args.adapter:
@@ -88,14 +94,21 @@ def main() -> int:
     with resp_path.open("w", encoding="utf-8") as fh:
         for i, row in enumerate(rows):
             messages = row_to_messages(row, include_answer=False)
+            # enable_thinking=False closes the <think> block in the
+            # generation prompt — EXACTLY the format the training
+            # collator supervises (the full-conversation template
+            # renders assistant turns as "<think>\n\n</think>\n\n{json}").
+            # With the default open <think> the base model free-reasons
+            # past any sane token budget and 0/79 answers parse.
             text = processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True)
-            images = [Image.open(f) for f in row["frames"]]
+                messages, tokenize=False, add_generation_prompt=True,
+                enable_thinking=False)
+            images = [open_frame(f) for f in row["frames"]]
             batch = processor(text=[text], images=[images],
                               return_tensors="pt").to(model.device)
             with torch.no_grad():
                 out_ids = model.generate(
-                    **batch, max_new_tokens=32, do_sample=False)
+                    **batch, max_new_tokens=64, do_sample=False)
             answer = processor.tokenizer.decode(
                 out_ids[0][batch["input_ids"].shape[1]:],
                 skip_special_tokens=True)
@@ -111,8 +124,12 @@ def main() -> int:
                 print(f"  {i + 1}/{len(rows)}  running acc {acc_so_far:.1%}")
 
     valid = [r for r in results if r["pred"]]
-    acc = sum(r["correct"] for r in valid) / max(1, len(valid))
     print(f"\nvalid answers : {len(valid)}/{len(results)}")
+    if not valid:
+        print("ERROR: no parseable answers — model or prompt is broken; "
+              f"inspect {resp_path}", file=sys.stderr)
+        return 1
+    acc = sum(r["correct"] for r in valid) / len(valid)
     print(f"TRUE accuracy : {acc:.1%}   (zero-shot ollama baseline 60.4%, chance ~50%)")
 
     per_match = defaultdict(list)

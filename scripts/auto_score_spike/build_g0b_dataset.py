@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -167,10 +168,18 @@ def main() -> int:
         else:
             skips["train_ineligible"] += 1
 
-    # Val = the newest N train matches (slug embeds the archive date).
+    # Val = the newest N train matches. The slug's trailing
+    # YYYYMMDD_HHMMSS is the archive date — extract it explicitly;
+    # sorting on split("_") picked aTrung_20260528 over
+    # match_001_20260714 (prefix compared before the date) and made a
+    # May match the early-stopping val split (caught 2026-07-15).
+    def _slug_date(s: str) -> str:
+        m = re.search(r"(\d{8}_\d{6})$", s)
+        return m.group(1) if m else s
+
     train_matches = sorted(
         {r["slug"] for r in pools["train"]},
-        key=lambda s: s.split("_", 1)[-1],
+        key=_slug_date,
     )
     val_slugs = set(train_matches[-args.val_matches:]) if args.val_matches else set()
 
@@ -222,6 +231,15 @@ def main() -> int:
         json.dumps(stats, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"skips: {dict(skips)}")
     print(f"balance: {stats['target_balance']}")
+
+    # Fail loud: an empty train or eval split means every downstream
+    # step (baseline, fine-tune, verdict) would run on nothing and
+    # still exit 0 — exactly the 2026-07-14 retro-label bug.
+    empty = [s for s in ("train", "eval") if not counts.get(s)]
+    if empty:
+        print(f"ERROR: empty split(s) {empty} — check side labels / "
+              "corpus rebuild before training", file=sys.stderr)
+        return 1
     return 0
 
 

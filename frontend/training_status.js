@@ -108,6 +108,57 @@ function roiSection(roi, rt) {
   </section>`;
 }
 
+// G0b fine-tune heartbeat: written per step by train_g0b_lora.py,
+// served via /api/training/status. The train process is NOT managed by
+// the backend — health comes from heartbeat freshness, so "stalled"
+// (🔴) means the process died / machine slept, not merely "slow".
+const G0B_HEALTH = {
+  running: ['🟢', 'text-emerald-400', 'training'],
+  stalled: ['🔴', 'text-red-400', 'NO HEARTBEAT — process dead or machine slept'],
+  error: ['🔴', 'text-red-400', 'aborted'],
+  done: ['✅', 'text-emerald-400', 'finished'],
+  unreadable: ['🟡', 'text-amber-400', 'heartbeat unreadable'],
+};
+
+function g0bSection(g) {
+  if (!g) {
+    // Explicit empty state — silently omitting the section made a
+    // deleted/never-started run indistinguishable from a GUI bug.
+    return `
+  <section class="bg-ink-800 border border-ink-700 rounded-md p-3">
+    <h4 class="text-slate-300 font-semibold mb-1">G0b winner fine-tune</h4>
+    <div class="text-xs text-slate-500">No run detected (runs/g0b/ has no heartbeat). Start one via scripts/auto_score_spike/g0b_overnight.py.</div>
+  </section>`;
+  }
+  const [icon, cls, label] = G0B_HEALTH[g.health] || G0B_HEALTH.unreadable;
+  const frac = g.total_steps ? (g.step || 0) / g.total_steps : 0;
+  const spst = g.seconds_per_step || 0;
+  // Speed color mirrors the measured incident thresholds: ~60 s/step
+  // healthy, >150 s suspicious, >300 s is the guard's kill zone.
+  const spstCls = spst > 150 ? (spst > 300 ? 'text-red-400' : 'text-amber-400')
+    : 'text-slate-300';
+  const eta = g.eta_min != null
+    ? (g.eta_min >= 90 ? `${(g.eta_min / 60).toFixed(1)} h` : `${g.eta_min} min`)
+    : '—';
+  return `
+  <section class="bg-ink-800 border border-ink-700 rounded-md p-3">
+    <h4 class="text-slate-300 font-semibold mb-2">G0b winner fine-tune <span class="font-mono text-[11px] text-slate-500">${esc(g.run_name || '')}</span></h4>
+    <div class="text-xs mb-1"><span class="${cls}">${icon} ${esc(label)}</span>
+      ${g.health === 'stalled' ? `<span class="text-slate-500"> (last signal ${Math.round((g.age_s || 0) / 60)} min ago)</span>` : ''}</div>
+    <div class="flex items-center gap-3 mb-1">
+      <div class="flex-1">${bar(frac, g.health === 'running' ? 'bg-accent-500' : 'bg-ink-600')}</div>
+      <div class="font-mono text-xs text-slate-300 whitespace-nowrap">${g.step || 0} / ${g.total_steps || '?'} steps</div>
+    </div>
+    <div class="font-mono text-[11px] text-slate-400">
+      speed <span class="${spstCls}">${spst ? `${spst}s/step` : '—'}</span>
+      · ETA ${esc(eta)}
+      · loss ${g.loss != null ? g.loss.toFixed(3) : '—'}
+      · VRAM ${g.vram_reserved_gb != null ? `${g.vram_reserved_gb}G` : '—'}
+    </div>
+    ${g.note ? `<div class="text-[11px] text-slate-500 mt-1">${esc(g.note)}</div>` : ''}
+  </section>`;
+}
+
 async function fetchStatus() {
   const r = await fetch('/api/training/status');
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -115,8 +166,8 @@ async function fetchStatus() {
 }
 
 function render(data) {
-  $('tr-body').innerHTML =
-    corpusSection(data.corpus) + roiSection(data.roi, data.retrain);
+  $('tr-body').innerHTML = g0bSection(data.g0b)
+    + corpusSection(data.corpus) + roiSection(data.roi, data.retrain);
 }
 
 function modalOpen() {
@@ -136,20 +187,24 @@ async function refresh() {
   }
   const rt = data.retrain;
   if (modalOpen()) render(data);
-  updateTopBar(rt);
+  updateTopBar(rt, data.g0b);
   // Edge: running → terminal. Toast carries the A/B comparison verdict.
   if (lastRetrainStatus === 'running' && rt.status !== 'running') {
     toast(rt.status === 'done' ? `✅ ${rt.message}` : `Retrain failed: ${rt.message}`);
   }
   lastRetrainStatus = rt.status;
-  if (rt.status === 'running') beginPolling();
+  const g0bLive = data.g0b && data.g0b.health === 'running';
+  if (rt.status === 'running' || g0bLive) beginPolling();
   else if (!modalOpen()) stopPolling();
 }
 
-function updateTopBar(rt) {
+function updateTopBar(rt, g0b) {
   const chip = $('btn-training-prog');
   if (rt.status === 'running') {
     chip.textContent = `⟳ ${Math.round((rt.progress || 0) * 100)}%`;
+    chip.classList.remove('hidden');
+  } else if (g0b && g0b.health === 'running' && g0b.total_steps) {
+    chip.textContent = `🎓 ${Math.round((g0b.step / g0b.total_steps) * 100)}%`;
     chip.classList.remove('hidden');
   } else {
     chip.classList.add('hidden');

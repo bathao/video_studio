@@ -1,6 +1,103 @@
 ﻿# TODO
 
-## RESUME POINTER 2026-07-14 — production flywheel running; corpus 12/15
+## RESUME POINTER 2026-07-15 pm — G0b MEASURED: STOP-LOSS (honest number)
+
+The finish-the-training plan ran to completion 2026-07-15 midday.
+**Verdict: STOP-LOSS — do not build Phase 2 on this.** The numbers
+(79-event pinned held-out 0510, zero-shot re-measured under the same
+padded recipe):
+
+  zero-shot            57.7%   (78/79 valid answers)
+  fine-tune epoch 1    48.1%   held-out  — chance
+  fine-tune on val     63.3%   = EXACTLY the majority-class share;
+                                the model answers "far" 49/49 times
+  train_loss           0.12    — it memorizes the 881 train events
+
+Diagnosis: with 13 train matches the 9B QLoRA memorizes rather than
+learns transferable winner-reading — the same venue-overfit failure
+mode the frame-CNN spike hit (TODO "pixel CNNs learn the venue").
+Supervision was VERIFIED correct before this run (exactly 10 answer
+tokens supervised), so the number is trustworthy, unlike the two
+invalid attempts before it (see incident log below). Semi-auto Phase 1
+GUI (operator enters winners) remains the production workflow. Future
+levers if ever revisited: many more venues/matches, pose features
+(venue-invariant, already written: pose_features.py), video-native
+models. Training infrastructure is DONE and reusable: driver
+(g0b_overnight.py), heartbeat dashboard, 5-step checkpoints +
+auto-resume, VRAM hard cap, StepSpeedGuard, letterboxed frames.
+
+Two invalid-training bugs found+fixed on the way (both would have
+poisoned any future fine-tune): (1) collator label masking counted the
+prompt on UNEXPANDED text — each image placeholder expands to ~40 real
+tokens, so 1282/1569 tokens (image pads + prompt) were supervised and
+the 10 answer tokens drowned; verified fix supervises exactly the
+answer. (2) val-split selection sorted slugs lexically and picked a
+May match as "newest"; now sorts by the trailing archive timestamp.
+
+## Previous pointer 2026-07-15 — G0b finish-the-training plan APPROVED; executing
+
+Everything up to the train is DONE and cached: corpus 15/15 labeled,
+dataset/g0b (train 837 / val 93 / eval 79 after the retro-label fix),
+zero-shot baseline **55.7%** on the 79-event held-out split (PASS bar
+80%). Three overnight train attempts died to ONE root disease: 9B
+QLoRA on a 16 GiB card shared with the Windows desktop; per-match ROI
+crops have different aspect ratios → per-step tensor shapes vary →
+allocator fragmentation → silent WDDM spill to system RAM (steps
+60 s → 450 s, no error raised). Fixes already in
+train_g0b_lora.py: bf16 recast of 2.04B frozen params (16→9 GiB
+load), StepSpeedGuard (3 steps >5 min → abort), shutdown-safe
+auto-resume, expandable_segments + per-step empty_cache +
+non-reentrant checkpointing (UNPROVEN — operator stopped the run
+before it could demonstrate). Operator post-mortem directives: no
+long run without a short measured proof first; live progress the
+operator can SEE; memory overflow must be a loud crash, never a
+silent crawl.
+
+**Approved plan (2026-07-15, operator: "chốt 5 steps lưu 1 lần"):**
+1. **Observability** — trainer writes heartbeat.json every step
+   (step/total, s/step, loss, VRAM, ETA); /api/training/status gains
+   a g0b section; 📊 Training dashboard shows progress bar + step
+   speed + ETA + 🟢/🟡/🔴 health (🔴 = heartbeat stale >2 min).
+   Checkpoints every **5 steps** (operator decision — ~1% overhead),
+   eval decoupled to every 50 steps, load_best dropped (phase gate
+   at epoch 1 replaces it).
+2. **Memory diagnostic** — 12-step instrumented run logging
+   allocated vs reserved per step; hard VRAM cap
+   (set_per_process_memory_fraction ≈0.9) converts spill into an
+   immediate loud OOM. Decision tree: reserved↑/allocated flat →
+   fragmentation (expandable_segments is the right drug, measure it);
+   allocated↑ → true leak, hunt before anything else.
+3. **30-step GO/NO-GO** — PASS: avg ≤90 s/step, no step >2× median,
+   VRAM flat after step 10, shared mem ≈0. FAIL ladder: pad frames
+   to one fixed size (re-measure baseline, 5 min) → smaller frames →
+   rent a 24 GiB cloud GPU for one session (only cropped frames
+   upload, ~hundreds of MB).
+4. **Real run, halved risk** — epoch 1 first (105 steps ≈ 2 h) →
+   eval_g0b on held-out (~6 min): ≥80% done early; 70–79% resume
+   epoch 2; below → stop. Wall-clock cap 3 h/epoch.
+5. **Verdict + cost report** — accuracy vs 55.7%/80%, per-match
+   table, GPU-hours; docs + memory update; Phase 2 GUI decision.
+
+Re-run entry point (any phase): `venv\Scripts\python.exe
+scripts\auto_score_spike\g0b_overnight.py`. Machine constraint
+unchanged: a concurrent render WILL retrigger the spill — pause first.
+
+## Same-day context 2026-07-14 (night) — G0b pipeline launches; corpus 15/15
+
+Corpus hit 15/15 labeled matches on 2026-07-14 evening; the overnight
+G0b QLoRA pipeline (corpus → dataset → zero-shot baseline → fine-tune
+→ held-out verdict, driver logs to temp/g0b_overnight.log) is running.
+Two launch aborts were root-caused and fixed the same night:
+(1) retro side-labels lived only in dataset/<slug>/project.json but
+build_corpus.py read groundtruth.json → eval split silently empty;
+(2) Qwen3.5 thinking-mode: default generation prompt opens <think> and
+32 new tokens never reach the JSON — eval now renders the prompt with
+enable_thinking=False, byte-matching the training collator's target
+region. Fallout of (1): a repo-wide fail-loud validation audit (three
+parallel reviewers + manual verification) — see "Fail-loud validation
+audit" entry below. Tests 289 → 293.
+
+## Previous resume pointer 2026-07-14 — production flywheel running; corpus 12/15
 
 All Auto Score work below is committed on `v3-dev` (`b516687` step 1
 corpus, `8f4d02c` steps 2+6, `10708ba` G0a + Phase 1 GUI + steps 3+5,
@@ -432,6 +529,50 @@ passes. Phase 0 step status:
   production render (match_001_20260714_212307, 48 auto trims / 0
   manual) went through the chain end-to-end; operator confirmed the
   flow is fine.
+
+- 🟢 **Fail-loud validation audit — repo-wide (2026-07-14 night,
+  operator directive "mọi đoạn code đều phải có rule validation")**:
+  triggered by the G0b empty-eval incident (a step produced empty
+  output, exited 0, and the exit-code-only driver sailed through).
+  Principle now enforced: every data-pipeline step validates its own
+  preconditions and exits non-zero on empty/degenerate data; UI paths
+  must toast, never swallow. Fixed (each verified against source before
+  changing): **backend** — confirm_roi quarantines a corrupt
+  groundtruth file to `<id>.corrupt.<ts>.json` instead of silently
+  wiping the label history (+ warning in response, toasted by the
+  modal); rally_detector raises when ffmpeg dies mid-stream instead of
+  treating a short read as EOF (detection could "succeed" over half a
+  match); retrain keep-the-winner rolls back on an INCONCLUSIVE
+  comparison too (no-SUMMARY output silently degraded the policy to
+  "always keep new"); groundtruth_summary reports corrupt_files;
+  training_corpus_stats surfaces a corrupt manifest as `error` +
+  ready:false (was: indistinguishable from an empty corpus) and
+  distinguishes `unreadable` snapshots from `unlabeled`;
+  apply_retro_labels returns manifest_synced:false + warning when the
+  manifest update fails; auto-trim cache replay discards the whole
+  cached entry on any malformed trim (was: silently dropped items).
+  **scripts** — compare_roi_models refuses a verdict when the new
+  model detects nothing (two broken models compared as all-nan fell
+  through to EQUIVALENT → keep-the-winner would promote broken
+  weights); eval_segmentation/eval_unseen exit 1 on empty corpus or
+  no-match filters; build_yolo_dataset hard-fails under 10 train
+  examples; test_roi_detector no longer fabricates a 60 s duration on
+  probe failure and exits 3 when entries were skipped ("All N OK" over
+  a reduced set is not a pass); rally_prob_cache / pose_features /
+  frame_dataset / train_frame_cls refuse to write empty caches or
+  train on empty splits. **frontend** — pollRender bails out + toasts
+  + re-enables Render after 8 consecutive failed polls (was: frozen
+  progress + Render disabled forever after a backend restart);
+  loadVideoList validates before wiping the dropdown and toasts;
+  auto_score SSE handlers toast on malformed done/error/close payloads
+  and never leave the spinner stuck; health line shows "Backend
+  degraded" instead of "OK · encoder: undefined" on non-200. Deferred
+  LOW findings (cosmetic, signal partly preserved): probe_video
+  fps/duration fallbacks, rescore_vlm empty-eval no-op,
+  analyze_detector_errors exit codes, scoreboard-preview stale-overlay
+  note, dry_run_render 0-duration print. Tests 289 → 293 (inconclusive
+  rollback, corrupt manifest, unreadable snapshot, manifest-sync
+  warning); ruff CI rules clean.
 
 - 🟡 **G0b fine-tune pipeline PREPPED (2026-07-14, operator-approved —
   awaiting the 15-match milestone to fire)**: everything between

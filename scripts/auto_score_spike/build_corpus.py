@@ -31,8 +31,10 @@ Doubles: excluded from auto-score train+eval (operator directive
 2026-07-08) but records stay in the corpus with train_eligible=false —
 filter on that flag downstream. Since 2026-07-10 each dataset record
 also carries the GUI-confirmed side/swap labels (p1_side_set1 /
-swap_sides_each_set / set5_mid_swap from ProjectInfo); None on
-pre-field groundtruths, which still need the side_truth.json backfill.
+swap_sides_each_set / set5_mid_swap from ProjectInfo). Info fields are
+read from project.json (falling back to the groundtruth.json snapshot)
+because retro labels applied via the Training dashboard land ONLY in
+project.json — groundtruth.json is frozen at render time.
 
 Handicap: records carry handicap_receiver (0|1|2) + handicap_pattern
 (digit per set, cycling). Handicap matches stay FULLY train-eligible
@@ -116,6 +118,16 @@ def dataset_records(entries: list[dict]) -> list[dict]:
         match_id = entry["source_video_name"]
         gt = json.loads((DATASET_DIR / slug / "groundtruth.json").read_text(encoding="utf-8"))
         info = gt["project"]["info"]
+        # Retro labels (Training dashboard -> apply_retro_labels) update
+        # ONLY dataset/<slug>/project.json; the groundtruth.json snapshot
+        # is frozen at render time. project.json wins when readable.
+        pj_path = DATASET_DIR / slug / "project.json"
+        try:
+            pj_info = json.loads(pj_path.read_text(encoding="utf-8"))["info"]
+            if isinstance(pj_info, dict):
+                info = pj_info
+        except (OSError, json.JSONDecodeError, KeyError):
+            pass
         duration = gt["source_video"]["duration_sec"]
         video = find_source_video(slug)
         split = "held_out" if match_id in HELD_OUT_MATCH_IDS else "train"
@@ -149,8 +161,8 @@ def dataset_records(entries: list[dict]) -> list[dict]:
                 # this instead of re-deriving from match_type.
                 "train_eligible": is_singles,
                 # GUI-confirmed side/swap labels (ProjectInfo fields,
-                # 2026-07-10). None/default on pre-field groundtruths —
-                # those still need the side_truth.json backfill.
+                # 2026-07-10), incl. retro labels via project.json —
+                # None only on entries the operator never labeled.
                 "p1_side_set1": info.get("p1_side_set1"),
                 "swap_sides_each_set": info.get("swap_sides_each_set", True),
                 "set5_mid_swap": info.get("set5_mid_swap"),
