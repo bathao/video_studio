@@ -93,6 +93,12 @@ def build_prob_timeline(slug: str, model) -> Path | None:
         proc.stdout.close()
         proc.wait(timeout=10)
 
+    if not probs:
+        # Writing an empty rally_prob.npz poisons every downstream
+        # consumer (mean over empty → nan) while looking like a cache.
+        raise SystemExit(
+            f"{slug}: decoded 0 frames (ffmpeg exit {proc.returncode}) — "
+            "refusing to write an empty prob cache")
     np.savez_compressed(out_npz, prob=np.asarray(probs, dtype=np.float32),
                         fps=PROB_FPS)
     print(f"{slug}: {len(probs)} prob samples @ {PROB_FPS} fps -> {out_npz.name}")

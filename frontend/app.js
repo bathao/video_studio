@@ -357,8 +357,13 @@ window.addEventListener('keydown', (e) => {
 (async function init() {
   try {
     const r = await fetch('/api/health');
-    const data = await r.json();
-    $('health-line').textContent = `OK · encoder: ${data.encoder} · preset: ${data.preset}`;
+    if (!r.ok) {
+      // Without this a 5xx JSON body rendered "OK · encoder: undefined".
+      $('health-line').textContent = `Backend degraded (HTTP ${r.status})`;
+    } else {
+      const data = await r.json();
+      $('health-line').textContent = `OK · encoder: ${data.encoder} · preset: ${data.preset}`;
+    }
   } catch {
     $('health-line').textContent = 'Backend offline';
   }

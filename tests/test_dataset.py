@@ -680,6 +680,29 @@ def test_corpus_stats_missing_project_json_is_unlabeled(tmp_path):
     assert s["labeled_matches"] == 0
 
 
+def test_corpus_stats_corrupt_manifest_surfaces_error(tmp_path):
+    """A corrupt manifest must NOT render as an empty corpus — the
+    dashboard needs "manifest broke", never a silent 0/15 reset."""
+    (tmp_path / "manifest.json").write_text("{not json", encoding="utf-8")
+    s = dataset.training_corpus_stats(tmp_path)
+    assert "manifest unreadable" in s["error"]
+    assert s["ready"] is False
+    assert s["labeled_matches"] == 0
+
+
+def test_corpus_stats_corrupt_project_json_is_unreadable(tmp_path):
+    """A labeled match whose snapshot file BROKE is 'unreadable', not
+    'unlabeled' — re-labeling instead of repairing risks a wrong label."""
+    entries = [_corpus_entry(tmp_path, "e1", "v.mp4", side="near")]
+    (tmp_path / "e1" / "project.json").write_text("{broken", encoding="utf-8")
+    _write_manifest(tmp_path, entries)
+    s = dataset.training_corpus_stats(tmp_path)
+    assert s["unreadable_matches"] == 1
+    assert s["labeled_matches"] == 0
+    assert s["unlabeled_matches"] == 0
+    assert s["matches"][0]["status"] == "unreadable"
+
+
 # ---------- retro-labeling ---------------------------------------------------
 
 
@@ -725,6 +748,23 @@ def test_apply_retro_labels_match_type_syncs_manifest(tmp_path):
     s = dataset.training_corpus_stats(tmp_path)
     assert s["doubles_matches"] == 1
     assert s["labeled_matches"] == 0
+
+
+def test_apply_retro_labels_warns_when_manifest_sync_fails(tmp_path):
+    """Label lands in project.json but the manifest entry is missing →
+    the result must carry a warning, not report clean success (corpus
+    filters read the MANIFEST flags)."""
+    _corpus_entry(tmp_path, "e1", "v.mp4")  # entry dir exists...
+    _write_manifest(tmp_path, [])           # ...but manifest lost it
+    applied = dataset.apply_retro_labels(
+        "e1", {"match_type": "double"}, tmp_path)
+    assert applied["manifest_synced"] is False
+    assert "manifest.json sync FAILED" in applied["warning"]
+    # And the clean path stays warning-free.
+    _write_manifest(tmp_path, [_corpus_entry(tmp_path, "e2", "w.mp4")])
+    applied = dataset.apply_retro_labels(
+        "e2", {"match_type": "double"}, tmp_path)
+    assert "warning" not in applied
 
 
 def test_apply_retro_labels_rejects_unknown_fields(tmp_path):

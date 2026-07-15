@@ -131,9 +131,16 @@ export async function onConfirmClick() {
     if (!r.ok) throw new Error(`confirm_roi ${r.status}: ${await r.text()}`);
     const j = await r.json();
     log(`saved → ${j.saved_to} (history: ${j.history_count})`);
-    toast(state.wasEdited
-      ? 'ROI corrected — saved as groundtruth'
-      : 'ROI confirmed as-detected');
+    if (j.warning) {
+      // Backend quarantined a corrupt groundtruth file — the operator
+      // should know this video's label history restarted.
+      log(`WARNING: ${j.warning}`);
+      toast(`ROI saved with warning: ${j.warning}`);
+    } else {
+      toast(state.wasEdited
+        ? 'ROI corrected — saved as groundtruth'
+        : 'ROI confirmed as-detected');
+    }
     const gtSt = await refreshGroundtruthCount();
     // Enough confirms piled up since the last YOLO train? Offer a
     // one-click retrain right where the data was just created.

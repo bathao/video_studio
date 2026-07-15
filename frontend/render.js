@@ -74,10 +74,27 @@ async function cancelRender(jobId) {
 
 function pollRender(jobId) {
   if (mut.pollTimer) clearInterval(mut.pollTimer);
+  // Consecutive failed polls (404 after a backend restart, network
+  // drop). Without a bail-out the interval spins forever with the
+  // Render button disabled and a frozen progress bar — the only
+  // recovery was a page reload.
+  let failures = 0;
+  const giveUp = (why) => {
+    clearInterval(mut.pollTimer);
+    $('rs-stage').textContent = 'status lost';
+    $('rs-msg').textContent = why;
+    $('rs-cancel').classList.add('hidden');
+    $('btn-render').disabled = false;
+    toast(`Render status lost: ${why} — the render may still be running; check the backend / output folder`);
+  };
   mut.pollTimer = setInterval(async () => {
     try {
       const r = await fetch(`/api/render/${jobId}`);
-      if (!r.ok) return;
+      if (!r.ok) {
+        if (++failures >= 8) giveUp(`backend answered ${r.status}`);
+        return;
+      }
+      failures = 0;
       const j = await r.json();
       const pct = Math.round((j.progress || 0) * 100);
       $('rs-stage').textContent = j.stage || j.status;
@@ -113,6 +130,7 @@ function pollRender(jobId) {
       }
     } catch (e) {
       console.error(e);
+      if (++failures >= 8) giveUp('backend unreachable');
     }
   }, 600);
 }

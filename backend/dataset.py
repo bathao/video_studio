@@ -37,6 +37,7 @@ whether the dataset archive succeeds.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -49,6 +50,8 @@ from .groundtruth import _append_msg
 
 if TYPE_CHECKING:
     from .renderer import RenderContext
+
+_log = logging.getLogger(__name__)
 
 DATASET_MANIFEST_VERSION = 1
 
@@ -592,6 +595,8 @@ def training_corpus_stats(dataset_root: Path | None = None) -> dict:
                   (p1_side_set1 present in the archived project snapshot)
       unlabeled   singles with score events but archived before the
                   side-info GUI existed — usable only after re-labeling
+      unreadable  the archived project.json failed to parse — repair the
+                  file, do NOT re-label (labels may still be inside it)
       doubles     excluded from auto-score training (operator directive)
       no_events   renders without score events (nothing to learn from)
 
@@ -607,12 +612,17 @@ def training_corpus_stats(dataset_root: Path | None = None) -> dict:
                     "ready": False, "matches": []}
     manifest_path = dataset_root / "manifest.json"
     entries: list[dict] = []
+    manifest_error = ""
     if manifest_path.exists():
         try:
             data = json.loads(manifest_path.read_text(encoding="utf-8"))
             entries = [e for e in data.get("entries", []) if isinstance(e, dict)]
-        except (OSError, json.JSONDecodeError):
-            pass
+        except (OSError, json.JSONDecodeError) as e:
+            # A corrupt manifest must NOT render as "empty corpus" — the
+            # dashboard needs to show "manifest broke" instead of
+            # quietly resetting the G0b readiness gate to 0/15.
+            manifest_error = f"manifest unreadable: {e}"
+            _log.warning("training_corpus_stats: %s", manifest_error)
 
     # Dedupe by source video, keeping the NEWEST entry (manifest is
     # append-ordered, so later wins).
@@ -623,7 +633,8 @@ def training_corpus_stats(dataset_root: Path | None = None) -> dict:
             by_video[key] = e
 
     matches: list[dict] = []
-    counts = {"labeled": 0, "unlabeled": 0, "doubles": 0, "no_events": 0}
+    counts = {"labeled": 0, "unlabeled": 0, "doubles": 0, "no_events": 0,
+              "unreadable": 0}
     for video, e in by_video.items():
         match_type = str(e.get("match_type") or "single").lower()
         rallies = int(e.get("real_rally_count") or 0)
@@ -632,6 +643,11 @@ def training_corpus_stats(dataset_root: Path | None = None) -> dict:
             status = "doubles"
         elif rallies <= 0:
             status = "no_events"
+        elif info.get("_unreadable"):
+            # Label file broke — NOT the same as "operator never
+            # labeled"; showing it as unlabeled invites a needless (and
+            # possibly wrong) re-label instead of a file repair.
+            status = "unreadable"
         elif info.get("p1_side_set1"):
             status = "labeled"
         else:
@@ -652,31 +668,45 @@ def training_corpus_stats(dataset_root: Path | None = None) -> dict:
         })
     matches.sort(key=lambda m: m["archived_at"], reverse=True)
 
-    return {
+    result = {
         "target_matches": G0B_TARGET_MATCHES,
         "labeled_matches": counts["labeled"],
         "unlabeled_matches": counts["unlabeled"],
         "doubles_matches": counts["doubles"],
         "no_event_matches": counts["no_events"],
+        "unreadable_matches": counts["unreadable"],
         "total_entries": len(entries),
         "ready": counts["labeled"] >= G0B_TARGET_MATCHES,
         "matches": matches,
     }
+    if manifest_error:
+        result["error"] = manifest_error
+        result["ready"] = False
+    return result
 
 
 def _entry_snapshot_info(dataset_root: Path, entry: dict) -> dict:
-    """The `info` block of the entry's archived project snapshot, or {}
-    when unreadable. The manifest predates the side-info fields, so
-    corpus stats read them from here — bounded, tiny files."""
+    """The `info` block of the entry's archived project snapshot. The
+    manifest predates the side-info fields, so corpus stats read them
+    from here — bounded, tiny files.
+
+    Returns {} only when the snapshot legitimately has no info block
+    (pre-field archives). A CORRUPT project.json instead returns
+    ``{"_unreadable": <reason>}`` so the caller can distinguish "never
+    labeled" from "label file broke" — folding the two together made a
+    labeled match silently downgrade to unlabeled."""
     slug = str(entry.get("slug") or "")
     if not slug:
         return {}
     pj = dataset_root / slug / "project.json"
+    if not pj.exists():
+        return {}
     try:
         info = json.loads(pj.read_text(encoding="utf-8")).get("info", {})
         return info if isinstance(info, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
+    except (OSError, json.JSONDecodeError) as e:
+        _log.warning("archived project.json unreadable for %s: %s", slug, e)
+        return {"_unreadable": str(e)}
 
 
 # ---------- retro-labeling of archived entries ------------------------------
@@ -774,16 +804,29 @@ def apply_retro_labels(slug: str, labels: dict,
         mt = str(labels["match_type"] or "single").lower()
         manifest_fields["match_type"] = mt
         manifest_fields["auto_score_train_eligible"] = mt != "double"
+    result = dict(labels)
     if manifest_fields:
-        _update_manifest_entry(
+        synced = _update_manifest_entry(
             dataset_root / "manifest.json", slug, manifest_fields)
-    return dict(labels)
+        if not synced:
+            # The label landed in project.json but downstream corpus /
+            # eval scripts filter on the MANIFEST flags — a silent
+            # divergence here lets e.g. a retro-labeled doubles match
+            # keep polluting auto-score training while the UI reported
+            # success. Surface it.
+            result["manifest_synced"] = False
+            result["warning"] = ("labels saved to project.json but "
+                                 "manifest.json sync FAILED — corpus "
+                                 "filters will not see these fields")
+    return result
 
 
 def _update_manifest_entry(manifest_path: Path, slug: str,
-                           fields: dict) -> None:
-    """Best-effort read-modify-write of one manifest entry (atomic via
-    .tmp rename, same idiom as _append_manifest)."""
+                           fields: dict) -> bool:
+    """Read-modify-write of one manifest entry (atomic via .tmp rename,
+    same idiom as _append_manifest). Returns True when the entry was
+    found and written; False on missing slug or unreadable manifest so
+    the caller can surface the divergence."""
     try:
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
         for e in data.get("entries", []):
@@ -791,11 +834,14 @@ def _update_manifest_entry(manifest_path: Path, slug: str,
                 e.update(fields)
                 break
         else:
-            return
+            _log.warning("manifest sync: slug %r not found", slug)
+            return False
         tmp = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
                        encoding="utf-8")
         tmp.replace(manifest_path)
-    except (OSError, json.JSONDecodeError):
-        pass
+        return True
+    except (OSError, json.JSONDecodeError) as e:
+        _log.warning("manifest sync failed for %r: %s", slug, e)
+        return False
 

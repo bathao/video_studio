@@ -22,8 +22,22 @@ function isAbsolutePath(p) {
 }
 
 export async function loadVideoList() {
-  const r = await fetch('/api/videos');
-  const data = await r.json();
+  // Validate BEFORE touching the DOM — the old code wiped the dropdown
+  // first, so a backend error left it empty (indistinguishable from an
+  // empty videos/ folder) with no message.
+  let data;
+  try {
+    const r = await fetch('/api/videos');
+    if (!r.ok) throw new Error(`backend answered ${r.status}`);
+    data = await r.json();
+  } catch (e) {
+    toast(`Cannot load video list: ${e.message || e}`);
+    throw e;
+  }
+  if (!Array.isArray(data.videos)) {
+    toast('Cannot load video list: unexpected response');
+    throw new Error('unexpected /api/videos payload');
+  }
   const sel = $('in-video');
   const current = sel.value;
   // Preserve any external (Browse-picked) options so refreshing the
@@ -136,7 +150,9 @@ export async function browseForVideo() {
     // dropdown. Refresh the list if the file was added since last load.
     const sel = $('in-video');
     if (!Array.from(sel.options).some((o) => o.value === data.name)) {
-      await loadVideoList();
+      // loadVideoList toasts its own failure; the picked file is still
+      // usable without a refreshed list, so keep going.
+      await loadVideoList().catch(() => {});
     }
     sel.value = data.name;
     await setVideoSource(data.name);
@@ -345,5 +361,7 @@ $('in-video').addEventListener('change', (e) => {
   snapshot();
   setVideoSource(e.target.value);
 });
-$('btn-refresh-videos').addEventListener('click', loadVideoList);
+$('btn-refresh-videos').addEventListener('click', () => {
+  loadVideoList().catch(() => {});  // failure already toasted inside
+});
 $('btn-browse-video').addEventListener('click', browseForVideo);

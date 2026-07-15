@@ -59,15 +59,16 @@ def _locate_video(
 
 
 def _probe_duration(video: Path) -> float:
-    try:
-        proc = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", str(video)],
-            capture_output=True, text=True, check=True,
-        )
-        return float(proc.stdout.strip())
-    except Exception:
-        return 60.0
+    # No fallback duration: fabricating one (the old code returned a
+    # fake 60 s) extracts frames at meaningless timestamps and scores
+    # the detector against the wrong pictures — a silently-wrong
+    # regression result is worse than a loud skip.
+    proc = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(video)],
+        capture_output=True, text=True, check=True,
+    )
+    return float(proc.stdout.strip())
 
 
 def _extract_multiframes(video: Path, video_id: str, max_w: int = 960) -> list[Path]:
@@ -151,6 +152,7 @@ def main() -> int:
     print("-" * 120)
 
     results = []
+    skipped: list[str] = []
     for i, json_path in enumerate(entries, 1):
         data = json.loads(json_path.read_text(encoding="utf-8"))
         vid = data["video_id"]
@@ -159,8 +161,14 @@ def main() -> int:
 
         video = _locate_video(name, extra_paths, aliases)
         if video is not None:
-            frames = _extract_multiframes(video, vid)
+            try:
+                frames = _extract_multiframes(video, vid)
+            except Exception as e:
+                frames = []
+                print(f"{i:>2}  {name[:22]:22s}  SKIPPED — probe/extract "
+                      f"failed: {e}")
             if not frames:
+                skipped.append(name)
                 continue
             det = roi_detector.detect_roi_multiframe(frames, exclude_video_id=vid)
             n_frames = len(frames)
@@ -212,6 +220,13 @@ def main() -> int:
         for r in bad:
             print(f"  {r['video']}  err={r['err']:.4f}  method={r['method']}")
         return 2
+
+    if skipped:
+        # "All OK" over a silently-reduced set is not a passing gate.
+        print(f"\n{len(results)} scored entries within err ≤ {threshold}, "
+              f"but {len(skipped)} entries could not be scored: "
+              f"{', '.join(skipped)}")
+        return 3
 
     print(f"\nAll {len(results)} entries within err ≤ {threshold}. OK")
     return 0

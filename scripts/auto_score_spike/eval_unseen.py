@@ -107,6 +107,13 @@ def main() -> int:
                   f"   coverage {cov}/{n} = {cov / n:5.1%}"
                   f"   proposals {len(intervals)}")
 
+    if not totals:
+        # No slug matched the filter (or the corpus has no singles):
+        # printing nothing and exiting 0 reads as "ran fine" to an
+        # exit-code-only orchestrator.
+        print(f"ERROR: no corpus match found for filter {wanted!r} — "
+              "nothing was evaluated", file=sys.stderr)
+        return 1
     print()
     for name, (hit, n, props, cov) in totals.items():
         print(f"TOTAL {name:12} assoc {hit}/{n} = {hit / n:5.1%}"

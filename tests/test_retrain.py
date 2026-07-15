@@ -196,8 +196,10 @@ def test_comparison_failure_is_not_fatal(monkeypatch, tmp_path):
 
 
 def test_is_regression_parsing():
-    """Rollback triggers only on a clean REGRESSED verdict — never on
-    improvements, equivalence, or a broken/skipped comparison."""
+    """_is_regression is True only for a clean REGRESSED verdict.
+    Broken/skipped comparisons return False here — the WORKER treats
+    those as inconclusive and still rolls back (see
+    test_inconclusive_comparison_rolls_back)."""
     assert retrain._is_regression(
         "SUMMARY: REGRESSED (consider restoring roi_seg.prev.pt) — "
         "within-2%: 55->50/58")
@@ -267,6 +269,19 @@ def test_improved_verdict_keeps_new_weights(monkeypatch, tmp_path):
     assert "model retrained + reloaded" in st["message"]
     assert "SUMMARY: IMPROVED" in st["message"]
     assert len(invalidated) == 1
+
+
+def test_inconclusive_comparison_rolls_back(monkeypatch, tmp_path):
+    """A comparison that produced no SUMMARY line is not evidence the
+    new weights are good — keep-the-winner restores the backup instead
+    of silently degrading into "always keep new"."""
+    model, backup, st, invalidated = _keep_winner_run(
+        monkeypatch, tmp_path, "everything printed but no verdict line")
+    assert st["status"] == "done"
+    assert model.read_bytes() == b"OLD-WEIGHTS"
+    assert "comparison inconclusive" in st["message"]
+    assert "previous weights kept" in st["message"]
+    assert len(invalidated) == 2  # after train + after rollback
 
 
 def test_failed_script_surfaces_error_and_skips_second(monkeypatch, tmp_path):

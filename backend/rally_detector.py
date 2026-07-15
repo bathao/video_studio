@@ -186,6 +186,22 @@ def _iter_frames(
             if len(buf) < frame_bytes:
                 break
             yield np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 3)
+
+        # A short read is either clean EOF or a mid-stream decoder
+        # abort (corrupt GOP, hwaccel fault) — stdout looks identical
+        # in both cases, only the exit code tells them apart. Treating
+        # an abort as EOF would let detection "succeed" over a prefix
+        # of the match and apply trims computed from half the video.
+        stderr_tail = b""
+        try:
+            stderr_tail = proc.stderr.read() or b""
+        except Exception:
+            pass
+        rc = proc.wait(timeout=5)
+        if rc != 0:
+            raise RuntimeError(
+                f"ffmpeg decode aborted mid-stream (exit {rc}): "
+                + stderr_tail.decode("utf-8", errors="replace")[-500:])
     finally:
         try:
             proc.stdout.close()

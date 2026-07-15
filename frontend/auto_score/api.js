@@ -76,7 +76,12 @@ function onSseDone(ev) {
       })),
     };
     state.cursor = 0;
-  } catch (_e) { /* ignore */ }
+  } catch (_e) {
+    // Swallowing this made a lost payload look like "detection found
+    // 0 rallies" — a false result, not a missing one.
+    state.status = 'error';
+    toast('Auto Score: result payload was unreadable — please re-run');
+  }
 }
 
 function onSseError(ev, src) {
@@ -87,6 +92,7 @@ function onSseError(ev, src) {
       toast(`Auto Score failed: ${d.msg || 'unknown error'}`);
     } catch (_e) {
       state.status = 'error';
+      toast('Auto Score failed (unreadable error from backend)');
     }
   } else if (state.status === 'running') {
     return; // transport blip — EventSource auto-reconnects
@@ -110,8 +116,17 @@ function onSseClose(ev, src, willCacheHit) {
       toast('Detection cancelled');
     } else if (d.status === 'error') {
       state.status = 'error';
+      toast('Auto Score failed — see backend log');
+    } else {
+      // Unknown terminal status: without this the state stayed
+      // 'running' forever after the stream closed (stuck spinner).
+      state.status = 'error';
+      toast(`Auto Score ended with unexpected status "${d.status}"`);
     }
-  } catch (_e) { /* ignore */ }
+  } catch (_e) {
+    state.status = 'error';
+    toast('Auto Score: close event was unreadable — please re-run');
+  }
   try { src.close(); } catch (_e) { /* ignore */ }
   state.eventSource = null;
   renderReviewList();

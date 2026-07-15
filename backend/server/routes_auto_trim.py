@@ -371,10 +371,26 @@ def auto_trim_confirm_roi(payload: dict = Body(...)) -> dict:
 
     gt_path = _ROI_GROUNDTRUTH_DIR / f"{video_id}.json"
     existing: dict = {}
+    corrupt_note = ""
     if gt_path.exists():
         try:
             existing = json.loads(gt_path.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as e:
+            # NEVER silently reset history — the prior confirms are
+            # one-of-a-kind labels YOLO trains on. Quarantine the bad
+            # file so it stays recoverable, and tell the operator.
+            quarantine = gt_path.with_name(
+                f"{video_id}.corrupt.{int(time.time())}.json")
+            try:
+                gt_path.rename(quarantine)
+                corrupt_note = (f"existing groundtruth was unreadable "
+                                f"({e}); moved to {quarantine.name} — "
+                                "history restarted from this confirm")
+            except OSError:
+                corrupt_note = (f"existing groundtruth unreadable ({e}) "
+                                "and quarantine failed — history "
+                                "restarted from this confirm")
+            _log.warning("confirm_roi %s: %s", video_id, corrupt_note)
             existing = {}
 
     # Track multiple confirmations per video over time — operator may
@@ -401,12 +417,15 @@ def auto_trim_confirm_roi(payload: dict = Body(...)) -> dict:
     }
     gt_path.write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    return {
+    result = {
         "ok": True,
         "video_id": video_id,
         "saved_to": str(gt_path.relative_to(ROOT_DIR)),
         "history_count": len(history),
     }
+    if corrupt_note:
+        result["warning"] = corrupt_note
+    return result
 
 
 @router.get("/api/auto_trim/groundtruth_count")
@@ -524,6 +543,25 @@ def _run_auto_trim_job_worker(
                 cached = json.loads(cache_path.read_text(encoding="utf-8"))
             except Exception:
                 cached = None
+            loaded: list[TrimSegment] = []
+            if cached is not None:
+                # Parse trims BEFORE replaying: one malformed trim means
+                # the entry is from a partial write or an old schema —
+                # dropping just that trim would report "done" with fewer
+                # trims than the detection actually found. Discard the
+                # whole entry and recompute instead.
+                try:
+                    loaded = [TrimSegment(**t)
+                              for t in cached.get("trims", [])]
+                except Exception as e:
+                    _log.warning(
+                        "auto-trim cache %s… malformed (%s) — recomputing",
+                        job.cache_key[:8], e)
+                    cached = None
+                    try:
+                        cache_path.unlink()
+                    except OSError:
+                        pass
             if cached is not None:
                 job.status = "running"
                 job.cache_hit = True
@@ -543,15 +581,9 @@ def _run_auto_trim_job_worker(
                     if et == "stage":
                         job.stage = str(data.get("name", job.stage))
                     job.event_queue.put((et, data))
-                # Build locally, publish atomically — the /job/{id} status
-                # endpoint iterates job.trims from another thread, and
-                # appending in place raced with that iteration.
-                loaded: list[TrimSegment] = []
-                for t in cached.get("trims", []):
-                    try:
-                        loaded.append(TrimSegment(**t))
-                    except Exception:
-                        continue
+                # Publish atomically — the /job/{id} status endpoint
+                # iterates job.trims from another thread, and appending
+                # in place raced with that iteration.
                 job.trims = loaded
                 job.progress = 1.0
                 job.status = "done"

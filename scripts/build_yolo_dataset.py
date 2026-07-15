@@ -335,11 +335,16 @@ def main() -> int:
     print(f"  skipped entries (no usable images at all): {skipped}")
     print(f"  data.yaml: {data_yaml}")
     print()
-    if counts["train"] < 10:
-        print("WARNING: training set is very small. YOLOv8 fine-tune typically")
-        print("needs 25+ examples for usable accuracy. Continue collecting confirms.")
     if counts["val"] == 0:
-        print("WARNING: validation set is empty. Cannot measure val metrics.")
+        print("ERROR: validation set is empty. Cannot measure val metrics.")
+        return 2
+    if counts["train"] < 10:
+        # Hard floor, not a warning: an exit-code-only orchestrator
+        # (GUI retrain) would otherwise happily fine-tune on a handful
+        # of examples produced by a bad glob and promote the result.
+        print("ERROR: training set is degenerate (<10 examples) — a bad")
+        print("groundtruth glob, not a real corpus. YOLOv8 fine-tune needs")
+        print("25+ examples for usable accuracy. Refusing to build.")
         return 2
     return 0
 

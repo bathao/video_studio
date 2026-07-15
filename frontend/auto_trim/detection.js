@@ -202,6 +202,8 @@ function onSseError(ev, src) {
     } catch (_e) {
       state.detection.status = 'error';
       state.detection.error = 'malformed error event';
+      log('ERROR: malformed error event from backend');
+      toast('Detection failed (unreadable error from backend)');
     }
   } else if (state.detection.status === 'running') {
     // Transport hiccup — let it auto-reconnect for a bit.

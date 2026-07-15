@@ -158,6 +158,12 @@ def build_pose_features(slug: str, model) -> Path | None:
         proc.stdout.close()
         proc.wait(timeout=10)
 
+    if not rows:
+        # An empty pose_features.npz feeds nan aggregates into every
+        # downstream spike while masquerading as a valid cache.
+        raise SystemExit(
+            f"{slug}: 0 pose rows (ffmpeg exit {proc.returncode}) — "
+            "refusing to write an empty feature cache")
     arr = np.asarray(rows, dtype=np.float32)
     np.savez_compressed(out_npz, features=arr, fps=STACK_FPS,
                         columns=json.dumps([

@@ -191,6 +191,18 @@ def main(argv: list[str] | None = None) -> int:
             fn = "miss" if n is None else f"{n:.2f}"
             print(f"  {e['id'][:48]:48s} {fo:>6} -> {fn:>6}")
 
+    # A new model that detects NOTHING must never reach verdict():
+    # against an equally-broken old model every nan comparison is False
+    # and the fall-through verdict is "EQUIVALENT" — which the retrain
+    # keep-the-winner would read as "keep the new (broken) weights".
+    # Exit non-zero instead; retrain treats that as inconclusive and
+    # restores the backup.
+    if sn["miss"] == sn["n"]:
+        print(f"\nERROR: new model produced no detection on any of "
+              f"{sn['n']} refframes — refusing to emit a verdict",
+              file=sys.stderr)
+        return 1
+
     v = verdict(so, sn)
     detected = sn["n"] - sn["miss"]
     print(f"\nSUMMARY: {v} — within-{WITHIN_PCT:.0f}%: "

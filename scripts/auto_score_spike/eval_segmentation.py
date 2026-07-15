@@ -713,6 +713,11 @@ def eval_corpus(seg_name: str) -> None:
         if r["label_source"] != "dataset":
             continue
         by_video.setdefault(r["video"], []).append(r["t_event"] - PRESS_LAG_S)
+    if not by_video:
+        # A 0/0 recall line looks like a measurement; it isn't.
+        raise SystemExit(
+            "eval_corpus: no dataset events in corpus.jsonl — rebuild "
+            "the corpus (build_corpus.py) before evaluating")
 
     totals = {"matched": 0, "truth": 0, "proposed": 0}
     for video_rel, ends_truth in sorted(by_video.items()):
@@ -726,9 +731,12 @@ def eval_corpus(seg_name: str) -> None:
         totals["truth"] += r["truth"]
         totals["proposed"] += r["proposed"]
 
+    if not totals["truth"]:
+        raise SystemExit("eval_corpus: 0 truth events across all videos "
+                         "— nothing was actually evaluated")
     print(
         f"  {'TOTAL':28} recall {totals['matched']}/{totals['truth']} "
-        f"= {totals['matched'] / max(1, totals['truth']):5.1%}"
+        f"= {totals['matched'] / totals['truth']:5.1%}"
         f"  precision {totals['matched']}/{totals['proposed']} "
         f"= {totals['matched'] / max(1, totals['proposed']):5.1%}"
     )

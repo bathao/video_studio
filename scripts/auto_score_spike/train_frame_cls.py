@@ -99,6 +99,13 @@ def main() -> int:
     if not (CLS_DIR / "train").is_dir() or not (CLS_DIR / "val").is_dir():
         print("missing train/val splits — run frame_dataset.py first")
         return 1
+    # Directory existence is not content: empty dirs pass the check
+    # above and YOLO then "trains" on nothing.
+    for split in ("train", "val"):
+        if not any(k.startswith(f"{split}/") and v for k, v in counts.items()):
+            print(f"ERROR: {split} split has 0 images — "
+                  "run frame_dataset.py first", file=sys.stderr)
+            return 1
 
     from ultralytics import YOLO
 
@@ -118,9 +125,13 @@ def main() -> int:
     model = YOLO(str(best))
     for split in ("val", "test"):
         d = CLS_DIR / split
-        if d.is_dir():
-            acc, per = evaluate(model, d)
-            print(f"{split}: overall {acc:.1%}  per-class {json.dumps({k: round(v, 3) for k, v in per.items()})}")
+        if not d.is_dir():
+            continue
+        acc, per = evaluate(model, d)
+        if not per:
+            print(f"{split}: EMPTY split — no images to evaluate")
+            continue
+        print(f"{split}: overall {acc:.1%}  per-class {json.dumps({k: round(v, 3) for k, v in per.items()})}")
     print(f"weights: {best}")
     return 0
 

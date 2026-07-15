@@ -312,6 +312,10 @@ def main() -> int:
         for k, v in m["counts"].items():
             total[k] += v
     print(f"TOTAL: {total}")
+    if not sum(total.values()):
+        print("ERROR: extracted 0 frames — build the motion caches "
+              "first (nothing was produced)", file=sys.stderr)
+        return 1
     return 0
 
 

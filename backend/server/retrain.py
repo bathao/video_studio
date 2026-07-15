@@ -203,9 +203,12 @@ def _compare_old_vs_new() -> str:
 def _is_regression(summary: str) -> bool:
     """True when the comparison verdict says the fresh weights are worse.
 
-    Only a clean ``SUMMARY: REGRESSED…`` line counts — "comparison
-    failed/skipped" strings return False so a rollback never happens on
-    missing evidence."""
+    Only a clean ``SUMMARY: REGRESSED…`` line counts. Non-``SUMMARY:``
+    strings ("comparison failed/skipped/no SUMMARY line") are handled
+    separately by the worker as INCONCLUSIVE — those also roll back,
+    because keep-the-winner needs positive evidence to keep the new
+    weights, and an unparseable comparison must not silently degrade
+    the policy into "always keep new"."""
     if not summary.startswith("SUMMARY:"):
         return False
     return summary.removeprefix("SUMMARY:").strip().startswith("REGRESSED")
@@ -302,15 +305,29 @@ def _worker() -> None:
         # the weights back to the pre-retrain backup automatically.
         summary = ""
         rolled_back = False
+        want_rollback = False
         if have_backup:
             _set_progress(0.92, "comparing old vs new model")
             summary = _compare_old_vs_new()
-            if _is_regression(summary):
+            # Roll back on REGRESSED *and* on an inconclusive comparison
+            # (crashed / no SUMMARY line): keeping unproven weights would
+            # silently turn keep-the-winner into "always keep new".
+            want_rollback = (_is_regression(summary)
+                             or not summary.startswith("SUMMARY:"))
+            if want_rollback:
                 rolled_back = _rollback_to_backup()
                 if rolled_back:
                     invalidate_model_cache()
-        msg = ("model retrained but REGRESSED — previous weights kept"
-               if rolled_back else "model retrained + reloaded")
+        if rolled_back:
+            msg = ("model retrained but REGRESSED — previous weights kept"
+                   if _is_regression(summary) else
+                   "model retrained but comparison inconclusive — "
+                   "previous weights kept")
+        elif want_rollback:
+            msg = ("model retrained, but rollback FAILED — unproven fresh "
+                   "weights left in place, check the model manually")
+        else:
+            msg = "model retrained + reloaded"
         if summary:
             msg += f" — {summary}"
         with _lock:
@@ -340,9 +357,11 @@ def groundtruth_summary() -> dict:
         return {"count": 0, "videos": [],
                 "yolo_model_exists": False, "confirms_since_yolo_train": 0}
     model_mtime = _MODEL_PATH.stat().st_mtime if _MODEL_PATH.exists() else None
-    files = sorted(_ROI_GROUNDTRUTH_DIR.glob("*.json"))
+    files = sorted(f for f in _ROI_GROUNDTRUTH_DIR.glob("*.json")
+                   if ".corrupt." not in f.name)  # quarantined by confirm_roi
     videos = []
     confirms_since_train = 0
+    corrupt_files = []
     for f in files:
         try:
             d = json.loads(f.read_text(encoding="utf-8"))
@@ -357,13 +376,20 @@ def groundtruth_summary() -> dict:
                 "history_count": len(hist),
             })
         except Exception:
-            continue
-    return {
+            # An unreadable label file means confirms are MISSING from
+            # the staleness count — surface it instead of undercounting
+            # in silence.
+            corrupt_files.append(f.name)
+            _logger.warning("groundtruth file unreadable: %s", f)
+    result = {
         "count": len(files),
         "videos": videos,
         "yolo_model_exists": model_mtime is not None,
         "confirms_since_yolo_train": confirms_since_train,
     }
+    if corrupt_files:
+        result["corrupt_files"] = corrupt_files
+    return result
 
 
 def _reset_for_tests() -> None:
